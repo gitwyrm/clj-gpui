@@ -234,19 +234,14 @@ fn render_node(node: &Node, path: &str, cx: &mut Context<RootView>) -> AnyElemen
         }
         "checkbox" => {
             let checked = node.checked.unwrap_or(false);
-            let callback = node.on_click.clone();
-            let mark = clickable(
-                div()
-                    .id(SharedString::from(format!("{path}-box")))
-                    .size(px(16.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(ACCENT))
-                    .cursor(gpui::CursorStyle::PointingHand)
-                    .when(checked, |el| el.bg(rgb(CHECK)).border_color(rgb(CHECK))),
-                callback.clone(),
-                cx,
-            );
+            // Visual only. A nested `.id()` / `on_click` takes the hit and, with
+            // a parent handler too, toggles twice — looking like a no-op.
+            let mark = div()
+                .size(px(18.))
+                .rounded_sm()
+                .border_1()
+                .border_color(if checked { rgb(CHECK) } else { rgb(ACCENT) })
+                .bg(if checked { rgb(CHECK) } else { rgb(0x1a1b26) });
             clickable(
                 apply_style(
                     div()
@@ -255,16 +250,16 @@ fn render_node(node: &Node, path: &str, cx: &mut Context<RootView>) -> AnyElemen
                         .flex_row()
                         .items_center()
                         .gap_2()
-                        .cursor(gpui::CursorStyle::PointingHand),
+                        .py_1()
+                        .cursor(gpui::CursorStyle::PointingHand)
+                        .block_mouse_except_scroll(),
                     node,
                 ),
                 node.on_click.clone(),
                 cx,
             )
             .child(mark)
-            .when_some(node.text.clone(), |el, text| {
-                el.child(div().text_color(rgb(TEXT)).child(text))
-            })
+            .when_some(node.text.clone(), |el, text| el.child(text))
             .into_any_element()
         }
         "scroll" => apply_style(

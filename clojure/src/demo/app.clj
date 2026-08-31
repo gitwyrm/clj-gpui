@@ -34,12 +34,12 @@
   "Nested component: a real Clojure function returning UI data."
   [idx {:keys [title done]}]
   (when (or (:show-done? @state) (not done))
-    (ui/hstack
-     {:gap 8}
-     (ui/checkbox done #(toggle-item! idx))
-     (ui/label (helpers/bullet title)
-               {:font-weight (if done :normal :semibold)
-                :color (if done "#7a8194" "#c0caf5")}))))
+    (ui/checkbox
+     done
+     #(toggle-item! idx)
+     (helpers/bullet title)
+     {:font-weight (if done :normal :semibold)
+      :color (if done "#7a8194" "#c0caf5")}))))
 
 (defn counter-controls
   []
