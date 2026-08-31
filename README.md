@@ -66,6 +66,8 @@ cd rust && cargo run --release -- --protocol-test
 
 On first `cargo` build, GPUI and its GPU stack take a while to compile.
 
+![ClojureGPUI native window](docs/screenshot.png)
+
 The window footer shows the nREPL port (7888 by default). Connect with CIDER, Calva, or:
 
 ```bash

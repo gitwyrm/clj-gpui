@@ -234,13 +234,19 @@ fn render_node(node: &Node, path: &str, cx: &mut Context<RootView>) -> AnyElemen
         }
         "checkbox" => {
             let checked = node.checked.unwrap_or(false);
-            let mark = div()
-                .id(SharedString::from(format!("{path}-box")))
-                .size(px(16.))
-                .rounded_sm()
-                .border_1()
-                .border_color(rgb(ACCENT))
-                .when(checked, |el| el.bg(rgb(CHECK)).border_color(rgb(CHECK)));
+            let callback = node.on_click.clone();
+            let mark = clickable(
+                div()
+                    .id(SharedString::from(format!("{path}-box")))
+                    .size(px(16.))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(ACCENT))
+                    .cursor(gpui::CursorStyle::PointingHand)
+                    .when(checked, |el| el.bg(rgb(CHECK)).border_color(rgb(CHECK))),
+                callback.clone(),
+                cx,
+            );
             clickable(
                 apply_style(
                     div()

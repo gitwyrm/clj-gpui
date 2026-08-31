@@ -56,7 +56,7 @@
     (ui/vstack
      {:gap 12 :padding 8}
      (ui/label "ClojureGPUI" {:font-size 22 :font-weight :bold})
-     (ui/label "Ordinary Clojure driving a native GPUI window."
+     (ui/label "Ordinary Clojure driving a native GPUI window. Edit this file to hot reload."
                {:color "#9aa3b5"})
 
      (ui/label (str "Count: " count)
