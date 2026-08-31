@@ -1,16 +1,16 @@
 (ns demo.app
   "Demo application written in ordinary Clojure, rendered by native GPUI."
   (:require [demo.helpers :as helpers]
-            [gpui.core :as ui]))
+            [gpui.core :as ui]
+            [gpui.ratom :as r]))
 
 (defonce state
-  (ui/watch!
-   (atom {:count 0
-          :show-done? true
-          :items [{:title "Write UI in real Clojure" :done true}
-                  {:title "Render it with native GPUI" :done true}
-                  {:title "Click a Clojure function from Rust" :done false}
-                  {:title "Reload without recompiling the host" :done false}]})))
+  (r/atom {:count 0
+           :show-done? true
+           :items [{:title "Write UI in real Clojure" :done true}
+                   {:title "Render it with native GPUI" :done true}
+                   {:title "Click a Clojure function from Rust" :done false}
+                   {:title "Reload without recompiling the host" :done false}]}))
 
 (defn increment!
   []

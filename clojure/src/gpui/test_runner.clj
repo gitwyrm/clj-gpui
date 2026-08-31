@@ -3,6 +3,6 @@
 
 (defn -main
   [& _]
-  (let [_ (require 'gpui.core-test)
-        summary (t/run-tests 'gpui.core-test)]
+  (let [_ (require 'gpui.core-test 'gpui.ratom-test)
+        summary (t/run-tests 'gpui.core-test 'gpui.ratom-test)]
     (System/exit (if (t/successful? summary) 0 1))))

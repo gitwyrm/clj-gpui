@@ -122,6 +122,7 @@
   (let [sym (app-symbol)
         nspace (symbol (namespace sym))]
     (require 'gpui.core :reload)
+    (require 'gpui.ratom :reload)
     (require nspace :reload)
     (load-app!)
     {:ok true :ns (str nspace)}))

@@ -13,12 +13,12 @@ The long-term inspiration is [ClojureDart](https://github.com/Tensegrity-Pro/Clo
 ```clojure
 (ns demo.app
   (:require [demo.helpers :as helpers]
-            [gpui.core :as ui]))
+            [gpui.core :as ui]
+            [gpui.ratom :as r]))
 
 (defonce state
-  (ui/watch!
-   (atom {:count 0
-          :items [{:title "Write UI in real Clojure" :done true}]})))
+  (r/atom {:count 0
+           :items [{:title "Write UI in real Clojure" :done true}]}))
 
 (defn increment! []
   (swap! state update :count inc))
@@ -186,9 +186,9 @@ The host sends `{"op":"render","id":1}`. Clojure calls the root var (`demo.app/a
 
 ### Rerendering
 
-`gpui.core/watch!` installs an `add-watch` that sends `{"op":"request-render"}`. The host fetches a fresh tree and calls `cx.notify()` on the root view. The whole window is redrawn. There is no fine-grained reactive graph yet, and there does not need to be.
+State uses a Reagent-style atom. `(r/atom ...)` returns a real `clojure.core/Atom`, so `@`, `swap!`, and `reset!` are unchanged. The only extra behavior is an `add-watch` that sends `{"op":"request-render"}`. The host fetches a fresh tree and calls `cx.notify()` on the root view. The whole window is redrawn. There is no fine-grained reactive graph yet, and there does not need to be.
 
-From a REPL you can also call `(gpui.core/request-render!)`.
+`ui/watch!` is still available if you already have a normal atom. From a REPL you can also call `(gpui.core/request-render!)`.
 
 ### Hot reload
 
@@ -212,7 +212,8 @@ nREPL is the real nREPL server (`nrepl/nrepl`). Editor tooling works. Evaluating
 ```text
 clojure/
   deps.edn
-  src/gpui/core.clj        ; UI constructors + watch!/request-render!
+  src/gpui/core.clj        ; UI constructors + ratom/watch!/request-render!
+  src/gpui/ratom.clj       ; Reagent-style (r/atom ...)
   src/gpui/runtime.clj     ; socket host, callbacks, nREPL, watcher
   src/demo/app.clj         ; demo application
   src/demo/helpers.clj     ; extra namespace, to prove require works

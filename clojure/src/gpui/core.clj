@@ -6,7 +6,7 @@
   in Clojure: atoms, functions, sequences, macros, and namespaces
   are the real Clojure runtime, not a reimplementation.")
 
-(defonce ^:private request-render-impl (atom nil))
+(defonce ^:private request-render-impl (clojure.core/atom nil))
 
 (defn set-request-render!
   "Used by the GPUI runtime to install the host notification hook.
@@ -18,20 +18,34 @@
 (defn request-render!
   "Ask the native GPUI window to rerender from the current Clojure UI tree.
 
-  Safe to call from a REPL after redefining functions. Atom watches
-  installed with `watch!` already call this automatically."
+  Safe to call from a REPL after redefining functions. Changes to
+  `gpui.ratom/atom` (and atoms passed through `watch!`) already call
+  this automatically."
   []
   (when-let [f @request-render-impl]
     (f)))
 
 (defn watch!
-  "Watch an atom and request a whole-window GPUI rerender whenever it
-  changes. Returns the atom so it can be used with `defonce`."
+  "Attach GPUI rerendering to an existing Clojure atom.
+
+  Prefer `gpui.ratom/atom` (typically required as `r/atom`) for new
+  state. Use this when you already have a `clojure.core/atom`."
   [a]
   (add-watch a ::gpui-render
              (fn [_ _ _ _]
                (request-render!)))
   a)
+
+(defn ratom
+  "Like `clojure.core/atom`, but GPUI rerenders when the value changes.
+
+  Prefer requiring `[gpui.ratom :as r]` and writing `(r/atom 0)`, the
+  same shape as Reagent. `swap!`, `reset!`, and `@` are unchanged
+  because the value is a real Clojure atom."
+  ([x]
+   (watch! (clojure.core/atom x)))
+  ([x & options]
+   (watch! (apply clojure.core/atom x options))))
 
 (defn ui-node?
   "True when `x` is a GPUI element map produced by this namespace."
