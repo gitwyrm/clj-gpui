@@ -39,7 +39,7 @@
      #(toggle-item! idx)
      (helpers/bullet title)
      {:font-weight (if done :normal :semibold)
-      :color (if done "#7a8194" "#c0caf5")}))))
+      :color (if done "#7a8194" "#c0caf5")})))
 
 (defn counter-controls
   []
