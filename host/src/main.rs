@@ -5,8 +5,8 @@ mod renderer;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|arg| arg == "--protocol-test") {
+    let protocol_test = std::env::args().any(|a| a == "--protocol-test");
+    if protocol_test {
         return bridge::protocol_test();
     }
 

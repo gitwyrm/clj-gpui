@@ -1,6 +1,6 @@
-/rust/target
-/clojure/.cpcache
-/clojure/.nrepl-port
+/host/target
+**/.cpcache
+**/.nrepl-port
 **/.DS_Store
 *.log
 /agent-tools

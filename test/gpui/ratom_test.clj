@@ -1,7 +1,7 @@
 (ns gpui.ratom-test
   (:require [clojure.test :refer [deftest is]]
-            [gpui.core :as ui]
-            [gpui.ratom :as r]))
+            [gpui.ratom :as r]
+            [gpui.ui :as ui]))
 
 (deftest ratom-is-a-real-clojure-atom
   (let [a (r/atom 0)]
@@ -22,3 +22,6 @@
     (is (not (r/atom? a)))
     (ui/watch! a)
     (is (r/atom? a))))
+
+(deftest watch-key-matches-ui
+  (is (= :gpui.ratom/watch ui/ratom-watch-key)))

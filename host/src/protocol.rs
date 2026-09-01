@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+pub const PROTOCOL_VERSION: u64 = 1;
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Node {
     #[serde(rename = "type")]

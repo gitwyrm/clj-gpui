@@ -1,15 +1,28 @@
-(ns gpui.core
-  "Clojure-facing GPUI primitives.
+(ns gpui.ui
+  "Public widget constructors for clj-gpui.
 
-  These functions return ordinary Clojure maps. The Rust GPUI host
-  translates that data into native elements. Application logic stays
+  These functions return ordinary Clojure maps. The native host
+  translates that data into GPUI elements. Application logic stays
   in Clojure: atoms, functions, sequences, macros, and namespaces
-  are the real Clojure runtime, not a reimplementation.")
+  are the real Clojure runtime."
+  (:refer-clojure :exclude []))
+
+(def protocol-version
+  "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
+  1)
+
+(def window-title
+  "Default native window title. The host currently uses this constant."
+  "ClojureGPUI")
+
+(def ^:const ratom-watch-key
+  "Watch key installed by `watch!` / `ratom`. Stable even if this ns is renamed."
+  :gpui.ratom/watch)
 
 (defonce ^:private request-render-impl (clojure.core/atom nil))
 
 (defn set-request-render!
-  "Used by the GPUI runtime to install the host notification hook.
+  "Used by the runtime to install the host notification hook.
   Application code should call `request-render!` instead."
   [f]
   (reset! request-render-impl f)
@@ -31,7 +44,7 @@
   Prefer `gpui.ratom/atom` (typically required as `r/atom`) for new
   state. Use this when you already have a `clojure.core/atom`."
   [a]
-  (add-watch a ::gpui-render
+  (add-watch a ratom-watch-key
              (fn [_ _ _ _]
                (request-render!)))
   a)
@@ -39,9 +52,7 @@
 (defn ratom
   "Like `clojure.core/atom`, but GPUI rerenders when the value changes.
 
-  Prefer requiring `[gpui.ratom :as r]` and writing `(r/atom 0)`, the
-  same shape as Reagent. `swap!`, `reset!`, and `@` are unchanged
-  because the value is a real Clojure atom."
+  Prefer requiring `[gpui.ratom :as r]` and writing `(r/atom 0)`."
   ([x]
    (watch! (clojure.core/atom x)))
   ([x & options]

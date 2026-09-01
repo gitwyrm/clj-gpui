@@ -1,11 +1,9 @@
-use crate::protocol::{Cmd, HostEvent, Node};
+use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -18,81 +16,12 @@ pub struct ClojureHost {
     pub app: String,
     pub cmd_tx: mpsc::Sender<Cmd>,
     pub event_rx: async_channel::Receiver<HostEvent>,
-    child: Option<Child>,
 }
 
 impl Drop for ClojureHost {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(Cmd::Shutdown);
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
     }
-}
-
-pub fn find_clojure_dir() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("CLOJUREGPUI_CLOJURE_DIR") {
-        let path = PathBuf::from(path);
-        if path.join("deps.edn").exists() {
-            return Ok(path.canonicalize().unwrap_or(path));
-        }
-        bail!("CLOJUREGPUI_CLOJURE_DIR does not contain deps.edn: {}", path.display());
-    }
-
-    let mut candidates = Vec::new();
-    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        candidates.push(PathBuf::from(manifest).join("..").join("clojure"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("clojure"));
-            candidates.push(dir.join("..").join("clojure"));
-            candidates.push(dir.join("..").join("..").join("clojure"));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("clojure"));
-        candidates.push(cwd.join("..").join("clojure"));
-    }
-
-    for candidate in candidates {
-        if candidate.join("deps.edn").exists() {
-            return Ok(candidate.canonicalize().unwrap_or(candidate));
-        }
-    }
-
-    bail!("Could not find clojure/deps.edn. Set CLOJUREGPUI_CLOJURE_DIR.")
-}
-
-fn detect_java_home() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("JAVA_HOME") {
-        let home = PathBuf::from(home);
-        if home.exists() {
-            return Some(home);
-        }
-    }
-    let known = PathBuf::from("/usr/lib/jvm/java-21-openjdk-amd64");
-    if known.exists() {
-        return Some(known);
-    }
-    None
-}
-
-fn spawn_clojure(clojure_dir: &Path, port: u16) -> Result<Child> {
-    let mut cmd = Command::new("clojure");
-    cmd.current_dir(clojure_dir)
-        .env("CLOJUREGPUI_PORT", port.to_string())
-        .env("CLOJUREGPUI_HOST", "127.0.0.1")
-        .env("CLOJUREGPUI_APP", std::env::var("CLOJUREGPUI_APP").unwrap_or_else(|_| "demo.app/app".into()))
-        .args(["-M", "-m", "gpui.runtime"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(home) = detect_java_home() {
-        cmd.env("JAVA_HOME", home);
-    }
-    cmd.spawn().context("failed to spawn `clojure`. Is the Clojure CLI on PATH?")
 }
 
 type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>;
@@ -104,7 +33,12 @@ fn write_json(stream: &Mutex<TcpStream>, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn rpc(stream: &Mutex<TcpStream>, pending: &Pending, next_id: &AtomicU64, mut request: Value) -> Result<Value> {
+fn rpc(
+    stream: &Mutex<TcpStream>,
+    pending: &Pending,
+    next_id: &AtomicU64,
+    mut request: Value,
+) -> Result<Value> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = mpsc::channel();
     pending.lock().unwrap().insert(id, tx);
@@ -126,23 +60,31 @@ fn parse_tree(value: &Value) -> Result<Node> {
     serde_json::from_value(tree.clone()).context("invalid UI tree from Clojure")
 }
 
-pub fn start() -> Result<ClojureHost> {
-    let clojure_dir = find_clojure_dir()?;
-    println!("[host] clojure dir {}", clojure_dir.display());
+fn connect_to_clojure() -> Result<TcpStream> {
+    let host = std::env::var("CLOJUREGPUI_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = std::env::var("CLOJUREGPUI_PORT")
+        .context("CLOJUREGPUI_PORT is not set. Start the app with `clj -M:dev my.app/app`.")?;
+    let addr = format!("{host}:{port}");
+    println!("[host] connecting to Clojure at {addr}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match TcpStream::connect(&addr) {
+            Ok(stream) => {
+                stream.set_nodelay(true)?;
+                println!("[host] connected");
+                return Ok(stream);
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(err).context(format!("could not connect to Clojure at {addr}"));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
 
-    let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind bridge socket")?;
-    let port = listener.local_addr()?.port();
-    listener.set_nonblocking(false)?;
-    println!("[host] waiting for Clojure on 127.0.0.1:{port}");
-
-    let child = spawn_clojure(&clojure_dir, port)?;
-
-    let (stream, _) = listener
-        .accept()
-        .context("Clojure runtime never connected. Check that `clojure` starts.")?;
-    stream.set_nodelay(true)?;
-    println!("[host] Clojure connected");
-
+fn attach(stream: TcpStream) -> Result<ClojureHost> {
     let reader_stream = stream.try_clone()?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
@@ -173,11 +115,23 @@ pub fn start() -> Result<ClojureHost> {
                     let op = value.get("op").and_then(Value::as_str).unwrap_or("");
                     match op {
                         "ready" => {
+                            let version = value
+                                .get("protocol-version")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            if version != PROTOCOL_VERSION {
+                                let msg = format!(
+                                    "protocol version mismatch: Clojure={version} host={PROTOCOL_VERSION}"
+                                );
+                                eprintln!("[host] {msg}");
+                                let _ = event_tx.send_blocking(HostEvent::Error(msg));
+                                continue;
+                            }
                             let nrepl = value.get("nrepl").and_then(Value::as_u64).unwrap_or(0) as u16;
                             let app = value
                                 .get("app")
                                 .and_then(Value::as_str)
-                                .unwrap_or("demo.app/app")
+                                .unwrap_or("unknown")
                                 .to_string();
                             let _ = ready_tx.send((nrepl, app.clone()));
                             let _ = event_tx.send_blocking(HostEvent::Ready {
@@ -205,9 +159,9 @@ pub fn start() -> Result<ClojureHost> {
         })?;
 
     let (nrepl_port, app) = ready_rx
-        .recv_timeout(Duration::from_secs(180))
-        .context("timed out waiting for Clojure :ready (first Maven download can be slow)")?;
-    println!("[host] Clojure ready app={app} nREPL=127.0.0.1:{nrepl_port}");
+        .recv_timeout(Duration::from_secs(30))
+        .context("timed out waiting for Clojure :ready")?;
+    println!("[host] Clojure ready app={app} protocol={PROTOCOL_VERSION} nREPL=127.0.0.1:{nrepl_port}");
 
     thread::Builder::new()
         .name("clojuregpui-worker".into())
@@ -253,8 +207,11 @@ pub fn start() -> Result<ClojureHost> {
         app,
         cmd_tx,
         event_rx,
-        child: Some(child),
     })
+}
+
+pub fn start() -> Result<ClojureHost> {
+    attach(connect_to_clojure()?)
 }
 
 pub fn protocol_test() -> Result<()> {
@@ -276,7 +233,7 @@ pub fn protocol_test() -> Result<()> {
         }
     }
     let tree = tree.context("did not receive a UI tree")?;
-    println!("[host] milestone 1/2: received Clojure UI tree");
+    println!("[host] received Clojure UI tree");
     if !tree.contains_text("ClojureGPUI") {
         bail!("tree did not contain label 'ClojureGPUI': {tree:?}");
     }
@@ -288,7 +245,7 @@ pub fn protocol_test() -> Result<()> {
         .find_button("+")
         .and_then(|node| node.on_click.clone())
         .context("no '+' button with a callback id")?;
-    println!("[host] milestone 3: invoking Clojure callback {plus}");
+    println!("[host] invoking Clojure callback {plus}");
     host.cmd_tx.send(Cmd::Callback(plus))?;
 
     let started = Instant::now();
@@ -308,7 +265,7 @@ pub fn protocol_test() -> Result<()> {
     if !updated.contains_text("Count: 1") {
         bail!("atom did not update after Clojure callback: {updated:?}");
     }
-    println!("[host] milestone 4/5: atom updated and tree rerendered (Count: 1)");
+    println!("[host] atom updated and tree rerendered (Count: 1)");
 
     host.cmd_tx.send(Cmd::Reload)?;
     let started = Instant::now();
@@ -329,7 +286,7 @@ pub fn protocol_test() -> Result<()> {
     if !reloaded {
         bail!("reload did not preserve defonce state");
     }
-    println!("[host] milestone 6: reload preserved defonce atom state");
+    println!("[host] reload preserved defonce atom state");
     println!("[host] protocol test passed");
     Ok(())
 }
