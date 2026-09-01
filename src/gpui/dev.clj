@@ -185,8 +185,16 @@
                               (and (.isFile f)
                                    (.endsWith ^String (.getName f) ".rs"))))
                     vec)
-               [])]
-    (into named rust)))
+               [])
+        themes-dir (io/file host-dir "themes")
+        themes (if (.isDirectory themes-dir)
+                 (->> (file-seq themes-dir)
+                      (filter (fn [^java.io.File f]
+                                (and (.isFile f)
+                                     (.endsWith ^String (.getName f) ".json"))))
+                      vec)
+                 [])]
+    (into named (concat rust themes))))
 
 (defn host-stale?
   "True when `binary` is older than a host source file under `host-dir`."

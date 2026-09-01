@@ -104,7 +104,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
 (defn app []
   (let [{:keys [count draft]} @!state]
     (ui/window
-     {:title "clj-gpui" :chrome :dev :theme :system}
+     {:title "clj-gpui" :chrome :dev :theme "Tokyo Night"}
      (ui/vstack
       {:gap 12 :padding 8}
       (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
@@ -190,6 +190,7 @@ src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
 src/gpui/dev.clj              ; Clojure-first launcher
 host/                         ; native GPUI + gpui-component host
+host/themes/                  ; bundled gpui-component palettes (Tokyo Night, Ayu, …)
 examples/counter/             ; plain counter
 examples/todomvc/             ; classic TodoMVC layout
 template/                     ; copyable app skeleton
@@ -203,7 +204,7 @@ docs/protocol.md
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
 (ui/button "+" on-click)
 (ui/button "Save" save! {:primary true})
-(ui/window {:title "Todos" :chrome :app :width 640 :height 820} ...)
+(ui/window {:title "Todos" :chrome :app :width 640 :height 820 :theme "Tokyo Night"} ...)
 (ui/vstack {:theme :light :gap 8 :padding 16} ...)
 (ui/hstack ...)
 (ui/spacer)
@@ -216,16 +217,24 @@ docs/protocol.md
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
 
-`:theme` is a style on any node: `:system` (follow the OS, the default), `:light`, or `:dark`. Put it on the window for the whole app (and the footer), or on a nested stack to theme just that subtree:
+`:theme` is a style on any node. Appearance is `:system` (follow the OS, the default), `:light`, or `:dark` — those pin gpui-component's Default Light / Default Dark. A **named palette** is a gpui-component theme: `"Tokyo Night"`, `:ayu-light`, `"Catppuccin Mocha"`. Names match case-insensitively; `-` and `_` are spaces. `ui/themes` lists every name the host ships.
 
 ```clojure
+(ui/window
+ {:title "Counter" :theme "Tokyo Night" :width 440 :height 400}
+ (ui/vstack {:gap 16 :padding 16}
+   (ui/label "Counter")
+   (ui/button "+" inc! {:primary true})))
+
 (ui/window
  {:title "Studio" :width 960 :height 640}
  (ui/hstack
   {:flex 1}
   (ui/vstack {:theme :dark :width 220 :padding 12} (ui/label "Nav"))
-  (ui/vstack {:theme :light :flex 1 :padding 16} (ui/label "Canvas"))))
+  (ui/vstack {:theme "Ayu Light" :flex 1 :padding 16} (ui/label "Canvas"))))
 ```
+
+Put extra theme-set JSON (same schema as [gpui-component themes](https://longbridge.github.io/gpui-component/docs/theme)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Hex `:bg` / `:color` still win on that node when you set them.
 
 `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
@@ -240,17 +249,18 @@ Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` onl
 | `CLJ_GPUI_APP` | Root var if not passed to `gpui.dev` |
 | `CLJ_GPUI_SRC` | Directory the watcher scans, default `src` |
 | `CLJ_GPUI_NREPL_PORT` | Preferred nREPL port, default `7888` |
+| `CLJ_GPUI_THEMES` | Extra gpui-component theme-set JSON directory (overrides bundled names) |
 | `VK_ICD_FILENAMES` | Linux software Vulkan ICD (lavapipe) |
 
 ## Known limitations
 
 * **Two processes, JSON copies.** Fine for this slice. A future JNI path can keep the same Clojure API.
 * **Whole-window rerender.** No incremental DOM-style diffing.
-* **gpui-component Theme is process-global.** Nested `:theme` restores the previous mode before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
+* **gpui-component Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
 * **Packaging** is not solved: you still need a JRE plus the GPUI binary. Git deps; no Clojars or host binary downloads yet.
 
 ## License
 
-MIT, unless a later commit says otherwise. GPUI is Apache-2.0.
+MIT, unless a later commit says otherwise. GPUI is Apache-2.0. Bundled palettes under `host/themes/` come from gpui-component (Apache-2.0).

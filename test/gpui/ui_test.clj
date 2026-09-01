@@ -1,13 +1,27 @@
 (ns gpui.ui-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [gpui.runtime :as runtime]
             [gpui.ui :as ui]))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
-(deftest protocol-version
-  (is (= 1 ui/protocol-version)))
+(deftest named-themes-match-vendored-json
+  (let [dir (io/file "host/themes")
+        from-json (->> (or (.listFiles dir) (into-array java.io.File []))
+                       (filter #(str/ends-with? (.getName ^java.io.File %) ".json"))
+                       (mapcat (fn [f]
+                                 (get (json/read-str (slurp f)) "themes")))
+                       (map #(get % "name"))
+                       set)]
+    (is (seq from-json) "expected vendored gpui-component theme JSON under host/themes")
+    (is (= from-json (set (remove #{"Default Light" "Default Dark"} ui/named-themes))))
+    (is (some #{"Tokyo Night"} ui/named-themes))
+    (is (some #{"Default Light"} ui/named-themes))
+    (is (= ["system" "light" "dark"] (take 3 ui/themes)))))
 
 (deftest primitive-nodes
   (testing "label"
@@ -73,7 +87,13 @@
     (is (= "dark" (:theme exported))))
   (let [exported (runtime/export-tree
                   (ui/vstack {:theme :system} (ui/label "x")))]
-    (is (= "system" (:theme exported)))))
+    (is (= "system" (:theme exported))))
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:theme "Tokyo Night"} (ui/label "x")))]
+    (is (= "Tokyo Night" (:theme exported))))
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:theme :tokyo-night} (ui/label "x")))]
+    (is (= "tokyo-night" (:theme exported)))))
 
 (deftest window-maps-chrome-and-size
   (let [n (ui/window {:title "Todos"

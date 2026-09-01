@@ -108,7 +108,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-family` | string | text (e.g. `.SystemUIFont`) |
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
-| `theme` | string | any node: `system` (default), `light`, `dark`. Nested nodes scope that subtree |
+| `theme` | string | any node: `system` (default), `light`, `dark`, or a gpui-component palette name such as `Tokyo Night` (kebab `tokyo-night` is the same). Nested nodes scope that subtree |
 | `title` | string | `window` (or any root): native window title (default `clj-gpui`) |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
@@ -121,13 +121,18 @@ Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
 
 Put `:theme` on **any** node. The host does not choose a theme on its own:
 
-* `:system` (default if omitted) follows the OS appearance, including later changes
-* `:light` pins gpui-component to light for that subtree
-* `:dark` pins gpui-component to dark for that subtree
+* `:system` (default if omitted) follows the OS appearance, including later changes, using gpui-component Default Light / Default Dark
+* `:light` pins Default Light for that subtree
+* `:dark` pins Default Dark for that subtree
+* a **named palette** such as `"Tokyo Night"` or `:ayu-light` calls gpui-component `Theme::apply_config` with that [theme](https://longbridge.github.io/gpui-component/docs/theme) (bundled JSON under `host/themes/`, plus `Default Light` / `Default Dark` from the crate)
+
+The host matches names case-insensitively and treats `-` / `_` as spaces, so `:tokyo-night`, `"tokyo night"`, and `"Tokyo Night"` are the same palette.
+
+Drop extra gpui-component theme-set JSON files in a `themes/` directory next to the process working directory, or in `CLJ_GPUI_THEMES`. Those override bundled names.
 
 A nested `:theme` wraps that subtree during layout and paint so siblings keep their own theme. The footer / waiting state follow the **root** node's `:theme` (usually the `window`).
 
-gpui-component's `Theme` is process-global. Nested scopes work because layout, prepaint, and paint of a subtree run synchronously and restore the previous mode before the sibling is drawn. A second window would share that global; clj-gpui is still one window. There is no headless GPUI fixture here that can paint two themed buttons without a real window, so sibling isolation is enforced in the host's `ThemeScope` and covered on the Clojure side by serialization tests.
+gpui-component's `Theme` is process-global. Nested scopes work because layout, prepaint, and paint of a subtree run synchronously and restore the previous theme before the sibling is drawn. A second window would share that global; clj-gpui is still one window. There is no headless GPUI fixture here that can paint two themed buttons without a real window, so sibling isolation is enforced in the host's `ThemeScope` and covered on the Clojure side by serialization tests.
 
 Window chrome is Clojure-owned on a `window` node (the host still reads these keys from whatever node is the tree root):
 

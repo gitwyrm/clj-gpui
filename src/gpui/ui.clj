@@ -15,6 +15,53 @@
   "Default native window title when `ui/window` omits `:title`."
   "clj-gpui")
 
+(def named-themes
+  "gpui-component palette names the host ships (plus Default Light/Dark).
+
+  Use the display string (`\"Tokyo Night\"`) or a kebab/underscore spelling
+  (`:tokyo-night`) as `:theme`. See https://longbridge.github.io/gpui-component/docs/theme"
+  ["Adventure"
+   "Adventure Time"
+   "Alduin"
+   "Ayu Dark"
+   "Ayu Light"
+   "Catppuccin Frappe"
+   "Catppuccin Latte"
+   "Catppuccin Macchiato"
+   "Catppuccin Mocha"
+   "Default Dark"
+   "Default Light"
+   "Everforest Dark"
+   "Everforest Light"
+   "Fahrenheit"
+   "Flexoki Dark"
+   "Flexoki Light"
+   "Gruvbox Dark"
+   "Gruvbox Light"
+   "Harper"
+   "Hybrid Dark"
+   "Hybrid Light"
+   "Jellybeans"
+   "Kibble"
+   "macOS Classic Dark"
+   "macOS Classic Light"
+   "Matrix"
+   "Mellifluous Dark"
+   "Mellifluous Light"
+   "Molokai Dark"
+   "Molokai Light"
+   "Solarized Dark"
+   "Solarized Light"
+   "Spaceduck"
+   "Tokyo Moon"
+   "Tokyo Night"
+   "Tokyo Storm"
+   "Twilight"])
+
+(def themes
+  "Values accepted by `:theme`: appearance (`system`/`light`/`dark`) and named palettes."
+  (into ["system" "light" "dark"] named-themes))
+
 (def ^:const ratom-watch-key
   "Watch key installed by `watch!` / `ratom`. Stable even if this ns is renamed."
   :gpui.ratom/watch)
@@ -126,10 +173,13 @@
 
   `:theme` may live here (default for the window and the footer) or on
   any nested node, so different parts of the app can use different themes.
+  Appearance is `:system` (follow the OS), `:light`, or `:dark`. A named
+  gpui-component palette is a string such as `\"Tokyo Night\"` (kebab
+  `:tokyo-night` is the same name). See `themes` / `named-themes`.
 
   (ui/window
-    {:title \"Todos\" :chrome :app :width 640 :height 820}
-    (ui/vstack {:theme :light :flex 1 :gap 8 :padding 16}
+    {:title \"Todos\" :chrome :app :width 640 :height 820 :theme \"Tokyo Night\"}
+    (ui/vstack {:gap 8 :padding 16}
       (ui/label \"Hello\")
       (map item-view items)))"
   [& args]
@@ -150,11 +200,12 @@
 (defn vstack
   "Vertical stack. An optional leading map is treated as layout/style.
 
-  `:theme :system`, `:light`, or `:dark` is a style, not window chrome.
-  It can sit on this stack, on `ui/window`, or on any other node.
+  `:theme :system`, `:light`, or `:dark` is appearance, not window chrome.
+  A named gpui-component palette (`\"Tokyo Night\"`, `:ayu-light`) is also
+  a style. It can sit on this stack, on `ui/window`, or on any other node.
   `:system` (the default when omitted) follows the OS appearance.
 
-  (ui/vstack {:theme :light :gap 8 :padding 16}
+  (ui/vstack {:theme \"Tokyo Night\" :gap 8 :padding 16}
     (ui/label \"Hello\")
     (map item-view items))"
   [& args]

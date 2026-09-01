@@ -7,7 +7,7 @@
 (defn app []
   (let [{:keys [n]} @!state]
     (ui/window
-     {:title "My App" :chrome :dev :theme :system}
+     {:title "My App" :chrome :dev :theme "Tokyo Night"}
      (ui/vstack
       {:gap 12 :padding 16}
       (ui/label "Hello from Clojure" {:font-size 20 :font-weight :semibold})

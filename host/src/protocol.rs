@@ -60,7 +60,8 @@ pub struct Node {
     pub font_family: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
-    /// Any node: `"system"` (default), `"light"`, or `"dark"`. Nested nodes scope that subtree.
+    /// Any node: `"system"` (default), `"light"`, `"dark"`, or a gpui-component
+    /// palette name such as `"Tokyo Night"`. Nested nodes scope that subtree.
     #[serde(default)]
     pub theme: Option<String>,
     /// Native window title. Omitted keeps `clj-gpui`.

@@ -13,7 +13,7 @@
       :chrome :dev
       :width 440
       :height 400
-      :theme :dark}
+      :theme "Tokyo Night"}
      (ui/vstack
       {:gap 16 :padding 16 :flex 1}
       (ui/label "Counter" {:font-size 22 :font-weight :semibold})

@@ -1,4 +1,5 @@
 mod bridge;
+mod catalog;
 mod protocol;
 mod renderer;
 

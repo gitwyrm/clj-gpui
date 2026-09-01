@@ -10,4 +10,5 @@
   (is (identical? ui/text-field core/text-field))
   (is (identical? ui/window core/window))
   (is (= ui/window-title core/window-title))
-  (is (= ui/protocol-version core/protocol-version)))
+  (is (= ui/protocol-version core/protocol-version))
+  (is (= ui/named-themes core/named-themes)))

@@ -1,3 +1,4 @@
+use crate::catalog;
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
     div, prelude::*, px, rgb, size, AnyElement, App, Bounds, ClickEvent, Context, Element,
@@ -10,10 +11,11 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement as _,
-    theme::{Theme, ThemeMode},
+    theme::{Theme, ThemeConfig, ThemeMode},
     v_flex, ActiveTheme as _, Root,
 };
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::mpsc;
 
 struct InputSlot {
@@ -122,25 +124,7 @@ impl RootView {
     }
 
     fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let current = Theme::global(cx).mode;
-        match self.requested_theme() {
-            "light" => {
-                if current != ThemeMode::Light {
-                    Theme::change(ThemeMode::Light, None, cx);
-                }
-            }
-            "dark" => {
-                if current != ThemeMode::Dark {
-                    Theme::change(ThemeMode::Dark, None, cx);
-                }
-            }
-            _ => {
-                let desired = ThemeMode::from(window.appearance());
-                if current != desired {
-                    Theme::change(desired, None, cx);
-                }
-            }
-        }
+        apply_theme_pref(self.requested_theme(), window, cx);
     }
 
     fn requested_chrome(&self) -> &str {
@@ -364,16 +348,11 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = widget_key(node, path);
-        let scope = node_theme_mode(node, window);
-        let restore = if let Some(mode) = scope {
-            let prev = Theme::global(cx).mode;
-            if prev != mode {
-                Theme::change(mode, None, cx);
-            }
-            Some(prev)
-        } else {
-            None
-        };
+        let scope = resolve_theme(node, window, cx);
+        let prev = scope.as_ref().map(|_| Theme::global(cx).clone());
+        if let Some(applied) = scope.as_ref() {
+            activate_theme(applied, cx);
+        }
 
         let element = match node.kind.as_str() {
             "window" => {
@@ -464,13 +443,11 @@ impl RootView {
                 .into_any_element(),
         };
 
-        if let Some(prev) = restore {
-            if Theme::global(cx).mode != prev {
-                Theme::change(prev, None, cx);
-            }
+        if let Some(prev) = prev {
+            *Theme::global_mut(cx) = prev;
         }
         match scope {
-            Some(mode) => ThemeScope::new(mode, element).into_any_element(),
+            Some(applied) => ThemeScope::new(applied, element).into_any_element(),
             None => element,
         }
     }
@@ -493,7 +470,8 @@ impl RootView {
     fn render_circle_checkbox(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let diameter = node.size.unwrap_or(30.0);
-        let ring = if checked { 0x5d_c2_af } else { 0xd9_d9_d9 };
+        let theme = cx.theme();
+        let ring = if checked { theme.primary } else { theme.border };
         let mut mark = div()
             .id(eid(&format!("{key}-mark")))
             .flex()
@@ -502,13 +480,13 @@ impl RootView {
             .size(px(diameter))
             .rounded_full()
             .border_1()
-            .border_color(rgb(ring))
+            .border_color(ring)
             .cursor_pointer();
         if checked {
             mark = mark.child(
                 div()
                     .text_size(px(16.))
-                    .text_color(rgb(0x5d_c2_af))
+                    .text_color(theme.primary)
                     .child("✓"),
             );
         }
@@ -687,43 +665,95 @@ fn node_theme_pref(node: &Node) -> Option<&str> {
     node.theme.as_deref().filter(|theme| !theme.is_empty())
 }
 
-fn node_theme_mode(node: &Node, window: &Window) -> Option<ThemeMode> {
-    node_theme_pref(node).map(|pref| match pref {
-        "light" => ThemeMode::Light,
-        "dark" => ThemeMode::Dark,
-        _ => ThemeMode::from(window.appearance()),
-    })
+#[derive(Clone)]
+enum ThemeApply {
+    Appearance(ThemeMode),
+    Named(Rc<ThemeConfig>),
+}
+
+fn resolve_theme(node: &Node, window: &Window, cx: &App) -> Option<ThemeApply> {
+    let pref = node_theme_pref(node)?;
+    if catalog::is_appearance(pref) {
+        let mode = match catalog::normalize(pref).as_str() {
+            "light" => ThemeMode::Light,
+            "dark" => ThemeMode::Dark,
+            _ => ThemeMode::from(window.appearance()),
+        };
+        Some(ThemeApply::Appearance(mode))
+    } else {
+        match catalog::lookup(pref, cx) {
+            Some(config) => Some(ThemeApply::Named(config)),
+            None => {
+                eprintln!("[host] unknown gpui-component theme {pref:?}; keeping current");
+                None
+            }
+        }
+    }
+}
+
+fn apply_theme_pref(pref: &str, window: &Window, cx: &mut App) {
+    if catalog::is_appearance(pref) {
+        catalog::reset_default_palettes(cx);
+        let mode = match catalog::normalize(pref).as_str() {
+            "light" => ThemeMode::Light,
+            "dark" => ThemeMode::Dark,
+            _ => ThemeMode::from(window.appearance()),
+        };
+        Theme::change(mode, None, cx);
+        return;
+    }
+    match catalog::lookup(pref, cx) {
+        Some(config) => {
+            let already =
+                catalog::names_equal(Theme::global(cx).theme_name(), config.name.as_ref());
+            if !already {
+                Theme::global_mut(cx).apply_config(&config);
+            }
+        }
+        None => {
+            eprintln!("[host] unknown gpui-component theme {pref:?}; keeping current");
+        }
+    }
+}
+
+fn activate_theme(applied: &ThemeApply, cx: &mut App) {
+    match applied {
+        ThemeApply::Appearance(mode) => {
+            catalog::reset_default_palettes(cx);
+            Theme::change(*mode, None, cx);
+        }
+        ThemeApply::Named(config) => {
+            Theme::global_mut(cx).apply_config(config);
+        }
+    }
 }
 
 /// Switches gpui-component's global theme around a subtree during layout/paint.
 /// Widgets such as Button read `cx.theme()` in `RenderOnce::render`, which runs
 /// in `request_layout`, not when Clojure builds the tree.
 ///
-/// Theme is process-global (`Theme::change` on `App`). Nested scopes work because
-/// layout/prepaint/paint of a subtree are synchronous: we restore `mode` before
-/// a sibling is laid out. A second window would share that global and is not
-/// supported today. Headless GPUI tests cannot exercise this without a real
-/// window and GPU; Clojure tests cover that `:theme` serializes per node.
+/// Theme is process-global (`Theme::change` / `apply_config` on `App`). Nested
+/// scopes work because layout/prepaint/paint of a subtree are synchronous: we
+/// restore the previous `Theme` before a sibling is laid out. A second window
+/// would share that global and is not supported today. Headless GPUI tests
+/// cannot exercise this without a real window and GPU; Clojure tests cover
+/// that `:theme` serializes per node.
 struct ThemeScope {
-    mode: ThemeMode,
+    applied: ThemeApply,
     child: AnyElement,
 }
 
 impl ThemeScope {
-    fn new(mode: ThemeMode, child: AnyElement) -> Self {
-        Self { mode, child }
+    fn new(applied: ThemeApply, child: AnyElement) -> Self {
+        Self { applied, child }
     }
 }
 
-fn with_theme_mode<R>(mode: ThemeMode, cx: &mut App, f: impl FnOnce(&mut App) -> R) -> R {
-    let prev = Theme::global(cx).mode;
-    if prev != mode {
-        Theme::change(mode, None, cx);
-    }
+fn with_theme_apply<R>(applied: &ThemeApply, cx: &mut App, f: impl FnOnce(&mut App) -> R) -> R {
+    let prev = Theme::global(cx).clone();
+    activate_theme(applied, cx);
     let result = f(cx);
-    if prev != mode {
-        Theme::change(prev, None, cx);
-    }
+    *Theme::global_mut(cx) = prev;
     result
 }
 
@@ -754,7 +784,7 @@ impl Element for ThemeScope {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        with_theme_mode(self.mode, cx, |cx| {
+        with_theme_apply(&self.applied, cx, |cx| {
             (self.child.request_layout(window, cx), ())
         })
     }
@@ -768,7 +798,7 @@ impl Element for ThemeScope {
         window: &mut Window,
         cx: &mut App,
     ) {
-        with_theme_mode(self.mode, cx, |cx| {
+        with_theme_apply(&self.applied, cx, |cx| {
             let _ = self.child.prepaint(window, cx);
         });
     }
@@ -783,7 +813,7 @@ impl Element for ThemeScope {
         window: &mut Window,
         cx: &mut App,
     ) {
-        with_theme_mode(self.mode, cx, |cx| {
+        with_theme_apply(&self.applied, cx, |cx| {
             self.child.paint(window, cx);
         });
     }
