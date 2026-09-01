@@ -27,7 +27,7 @@ clojure -M:protocol-test
 # Example native window (plain counter)
 cd examples/counter && clj -M:dev
 
-# TodoMVC with a real text field
+# Classic TodoMVC (light card, Enter to add)
 cd examples/todomvc && clj -M:dev
 ```
 

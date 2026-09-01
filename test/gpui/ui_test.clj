@@ -35,7 +35,10 @@
       (is (= :text-field (:type n)))
       (is (= "Todo" (:placeholder n)))
       (is (= "new-todo" (:id n))))
-    (is (fn? (:on-change (ui/text-field "" (fn [s] s)))))))
+    (is (fn? (:on-change (ui/text-field "" (fn [s] s))))))
+  (testing "style keys pass through"
+    (is (true? (:strikethrough (ui/label "x" {:strikethrough true}))))
+    (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))))
 
 (deftest sequences-flatten-inside-stacks
   (let [tree (ui/vstack

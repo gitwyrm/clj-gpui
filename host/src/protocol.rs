@@ -25,6 +25,24 @@ pub struct Node {
     #[serde(default)]
     pub primary: bool,
     #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub compact: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
+    pub shadow: bool,
+    #[serde(default)]
+    pub bg: Option<String>,
+    #[serde(default)]
+    pub border: Option<String>,
+    #[serde(default, rename = "border-bottom")]
+    pub border_bottom: Option<String>,
+    #[serde(default)]
+    pub align: Option<String>,
+    #[serde(default)]
+    pub justify: Option<String>,
+    #[serde(default)]
     pub gap: Option<f32>,
     #[serde(default)]
     pub padding: Option<f32>,

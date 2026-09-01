@@ -17,7 +17,7 @@ fn main() -> Result<()> {
 
     gpui::Application::new().run(move |cx| {
         gpui_component::init(cx);
-        gpui_component::theme::Theme::change(gpui_component::theme::ThemeMode::Dark, None, cx);
+        gpui_component::theme::Theme::change(gpui_component::theme::ThemeMode::Light, None, cx);
         renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
     });
 

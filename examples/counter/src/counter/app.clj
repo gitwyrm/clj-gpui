@@ -11,7 +11,7 @@
      {:gap 16 :padding 8}
      (ui/label "Counter" {:font-size 22 :font-weight :semibold})
      (ui/label "Real JVM Clojure. Native GPUI window. No webview."
-               {:font-size 13 :color "#9aa4b2"})
+               {:font-size 13 :color "#6b7280"})
      (ui/hstack
       {:gap 12}
       (ui/button "−" #(swap! !state update :count dec))

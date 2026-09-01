@@ -189,8 +189,9 @@ impl RootView {
             "button" => {
                 let label = node.text.clone().unwrap_or_default();
                 let mut button = Button::new(eid(&key)).label(label);
-                if node.primary {
-                    button = button.primary();
+                button = apply_button_variant(button, node);
+                if node.compact {
+                    button = button.compact();
                 }
                 if let Some(callback_id) = node.on_click.clone() {
                     button = button.on_click(self.click(callback_id));
@@ -288,19 +289,7 @@ impl Render for RootView {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(
-                v_flex().flex_1().p_4().child(
-                    v_flex()
-                        .flex_1()
-                        .p_4()
-                        .gap_3()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().secondary)
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .child(body),
-                ),
-            )
+            .child(v_flex().flex_1().child(body))
             .child(
                 div()
                     .px_4()
@@ -324,6 +313,18 @@ fn widget_key(node: &Node, path: &str) -> String {
 fn parse_color(value: &str) -> Option<u32> {
     let value = value.trim().trim_start_matches('#');
     u32::from_str_radix(value, 16).ok()
+}
+
+fn apply_button_variant(button: Button, node: &Node) -> Button {
+    match node.variant.as_deref() {
+        Some("primary") => button.primary(),
+        Some("ghost") => button.ghost(),
+        Some("text") => button.text(),
+        Some("danger") => button.danger(),
+        Some("outline") => button.outline(),
+        _ if node.primary => button.primary(),
+        _ => button,
+    }
 }
 
 fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
@@ -350,6 +351,10 @@ fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
     }
     if let Some(weight) = &node.font_weight {
         el = match weight.as_str() {
+            "thin" => el.font_weight(gpui::FontWeight::THIN),
+            "extralight" | "extra-light" | "ultralight" => {
+                el.font_weight(gpui::FontWeight::EXTRA_LIGHT)
+            }
             "bold" => el.font_weight(gpui::FontWeight::BOLD),
             "semibold" | "semi-bold" => el.font_weight(gpui::FontWeight::SEMIBOLD),
             "medium" => el.font_weight(gpui::FontWeight::MEDIUM),
@@ -359,6 +364,33 @@ fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
     }
     if let Some(color) = node.color.as_deref().and_then(parse_color) {
         el = el.text_color(rgb(color));
+    }
+    if let Some(bg) = node.bg.as_deref().and_then(parse_color) {
+        el = el.bg(rgb(bg));
+    }
+    if let Some(border) = node.border.as_deref().and_then(parse_color) {
+        el = el.border_1().border_color(rgb(border));
+    }
+    if let Some(border) = node.border_bottom.as_deref().and_then(parse_color) {
+        el = el.border_b_1().border_color(rgb(border));
+    }
+    if node.strikethrough {
+        el = el.line_through();
+    }
+    if node.shadow {
+        el = el.shadow_lg();
+    }
+    match node.align.as_deref() {
+        Some("center") => el = el.items_center(),
+        Some("end") => el = el.items_end(),
+        Some("start") => el = el.items_start(),
+        _ => {}
+    }
+    match node.justify.as_deref() {
+        Some("center") => el = el.justify_center(),
+        Some("end") | Some("right") => el = el.justify_end(),
+        Some("between") => el = el.justify_between(),
+        _ => {}
     }
     el
 }
@@ -394,7 +426,7 @@ pub fn open_window(
     })
     .detach();
 
-    let bounds = Bounds::centered(None, size(px(640.), px(760.)), cx);
+    let bounds = Bounds::centered(None, size(px(580.), px(820.)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

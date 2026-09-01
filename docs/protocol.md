@@ -90,11 +90,18 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-change` | string callback id | `text-field` (called with the field string) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `checked` | bool | `checkbox` |
-| `primary` | bool | `button` (gpui-component primary variant) |
+| `primary` | bool | `button` (alias for `variant: primary`) |
+| `variant` | string | `button` (`primary`, `ghost`, `text`, `outline`, `danger`) |
+| `compact` | bool | `button` |
+| `strikethrough` | bool | text |
+| `shadow` | bool | layouts |
+| `bg`, `border`, `border-bottom` | hex string | layouts / text |
+| `align` | string | `center`, `start`, `end` |
+| `justify` | string | `center`, `end`, `between` |
 | `gap`, `padding`, `width`, `height`, `size`, `flex` | number | layout / spacer |
 | `font-size` | number | text |
-| `font-weight` | string (`bold`, `semibold`, `medium`, `light`, …) | text |
-| `color` | hex string (`#c0caf5`) | text |
+| `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
+| `color` | hex string (`#b83f45`) | text |
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` with ids such as `"cb-2"`. The registry is rebuilt on every export.
 
