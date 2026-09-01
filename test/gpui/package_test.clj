@@ -59,6 +59,17 @@
     (is (not (str/includes? script "nrepl")))
     (is (not (str/includes? script "cargo")))))
 
+(deftest launcher-script-is-valid-posix-sh
+  (let [script (pkg/launcher-script {:name "cljdu" :main "cljdu.app/app"})]
+        f (io/file (System/getProperty "java.io.tmpdir")
+                   (str "clj-gpui-launch-" (random-uuid) ".sh"))]
+    (try
+      (spit f script)
+      (let [proc (.start (ProcessBuilder. ["sh" "-n" (.getPath f)]))]
+        (is (zero? (.waitFor proc)) script))
+      (finally
+        (.delete f)))))
+
 (deftest debian-control-names-package
   (let [control (pkg/debian-control {:name "cljdu"
                                      :version "0.1.0"
