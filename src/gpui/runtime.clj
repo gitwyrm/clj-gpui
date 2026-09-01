@@ -268,7 +268,9 @@
         (= nspace 'gpui.dev)
         (= nspace 'gpui.host)
         (= nspace 'gpui.prod)
-        (= nspace 'gpui.package)
+        ;; Fragments loaded into `gpui.package` (`package_build.clj`, …)
+        ;; are not namespaces of their own; requiring them hangs/fails reload.
+        (str/starts-with? s "gpui.package")
         (str/starts-with? s "clojure.")
         (str/starts-with? s "nrepl."))))
 
