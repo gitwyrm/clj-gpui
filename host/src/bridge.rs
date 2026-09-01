@@ -147,6 +147,35 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         "request-render" => {
                             let _ = worker_cmds.send(Cmd::Render);
                         }
+                        "pick-directory" => {
+                            let request_id = value
+                                .get("request-id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let title = value
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            let _ = event_tx.send_blocking(HostEvent::PickDirectory {
+                                request_id,
+                                title,
+                            });
+                        }
+                        "reveal-path" => {
+                            if let Some(path) = value.get("path").and_then(Value::as_str) {
+                                let _ = event_tx.send_blocking(HostEvent::RevealPath {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
+                        "open-path" => {
+                            if let Some(path) = value.get("path").and_then(Value::as_str) {
+                                let _ = event_tx.send_blocking(HostEvent::OpenPath {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
                         "response" | "" => {
                             if let Some(id) = value.get("id").and_then(Value::as_u64) {
                                 if let Some(tx) = pending.lock().unwrap().remove(&id) {
@@ -179,38 +208,74 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
             let event_tx = event_tx.clone();
             move || {
                 while let Ok(cmd) = cmd_rx.recv() {
-                    let result = match cmd {
+                    match cmd {
                         Cmd::Shutdown => break,
-                        Cmd::Render => rpc(&writer, &pending, &next_id, json!({"op": "render"}))
-                            .and_then(|value| parse_tree(&value))
-                            .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
-                        Cmd::Callback { id, value, seq } => {
-                            let mut request = json!({"op": "callback", "callback-id": id});
-                            if let Some(value) = value {
-                                request["value"] = json!(value);
+                        Cmd::DirectoryPicked {
+                            request_id,
+                            path,
+                            error,
+                            cancelled,
+                        } => {
+                            let mut request = json!({
+                                "op": "directory-picked",
+                                "request-id": request_id,
+                                "cancelled": cancelled,
+                            });
+                            if let Some(path) = path {
+                                request["path"] = json!(path);
                             }
-                            // Always fetch a tree here: text-field submit attaches
-                            // `seq` to this response, and handlers that do not
-                            // touch an r/atom still need a paint. Clojure suppresses
-                            // the r/atom watch's request-render for the duration of
-                            // the callback so this is not a duplicate of that path.
-                            rpc(&writer, &pending, &next_id, request)
-                                .and_then(|_| {
+                            if let Some(error) = error {
+                                request["error"] = json!(error);
+                            }
+                            if let Err(err) = rpc(&writer, &pending, &next_id, request) {
+                                let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+                            }
+                        }
+                        other => {
+                            let result = match other {
+                                Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
+                                Cmd::Render => {
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
-                                })
-                                .and_then(|value| parse_tree(&value))
-                                .map(|(node, themes)| HostEvent::Tree(node, seq, themes))
-                        }
-                        Cmd::Reload => rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
-                            .and_then(|value| parse_tree(&value))
-                            .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
-                    };
-                    match result {
-                        Ok(event) => {
-                            let _ = event_tx.send_blocking(event);
-                        }
-                        Err(err) => {
-                            let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+                                        .and_then(|value| parse_tree(&value))
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes))
+                                }
+                                Cmd::Callback { id, value, seq } => {
+                                    let mut request = json!({"op": "callback", "callback-id": id});
+                                    if let Some(value) = value {
+                                        request["value"] = json!(value);
+                                    }
+                                    // Always fetch a tree here: text-field submit attaches
+                                    // `seq` to this response, and handlers that do not
+                                    // touch an r/atom still need a paint. Clojure suppresses
+                                    // the r/atom watch's request-render for the duration of
+                                    // the callback so this is not a duplicate of that path.
+                                    rpc(&writer, &pending, &next_id, request)
+                                        .and_then(|_| {
+                                            rpc(
+                                                &writer,
+                                                &pending,
+                                                &next_id,
+                                                json!({"op": "render"}),
+                                            )
+                                        })
+                                        .and_then(|value| parse_tree(&value))
+                                        .map(|(node, themes)| HostEvent::Tree(node, seq, themes))
+                                }
+                                Cmd::Reload => {
+                                    rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
+                                        .and_then(|value| parse_tree(&value))
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes))
+                                }
+                            };
+                            match result {
+                                Ok(event) => {
+                                    let _ = event_tx.send_blocking(event);
+                                }
+                                Err(err) => {
+                                    let _ =
+                                        event_tx.send_blocking(HostEvent::Error(err.to_string()));
+                                }
+                            }
                         }
                     }
                 }
@@ -243,6 +308,11 @@ pub fn protocol_test() -> Result<()> {
                 break;
             }
             Ok(HostEvent::Ready { .. }) => continue,
+            Ok(
+                HostEvent::PickDirectory { .. }
+                | HostEvent::RevealPath { .. }
+                | HostEvent::OpenPath { .. },
+            ) => continue,
             Ok(HostEvent::Error(err)) => bail!("Clojure error: {err}"),
             Err(err) => bail!("bridge closed: {err}"),
         }

@@ -2,8 +2,8 @@ use crate::catalog;
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
     div, prelude::*, px, rgb, size, AnyElement, App, Bounds, ClickEvent, Context, Element,
-    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, LayoutId, Pixels,
-    SharedString, Styled, Subscription, Window,
+    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, LayoutId, PathPromptOptions,
+    Pixels, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
@@ -15,6 +15,8 @@ use gpui_component::{
     v_flex, ActiveTheme as _, Root,
 };
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -28,6 +30,82 @@ struct InputSlot {
     wait_for_seq: Option<u64>,
     /// Submitted string; a late `Change` echoing it must not restore the draft.
     submitted: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ZenityPick {
+    Picked(String),
+    Cancelled,
+    Unavailable,
+    Failed(String),
+}
+
+fn zenity_from_output(
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> ZenityPick {
+    if status.success() {
+        let path = String::from_utf8_lossy(stdout).trim().to_string();
+        if path.is_empty() {
+            ZenityPick::Cancelled
+        } else {
+            ZenityPick::Picked(path)
+        }
+    } else if status.code() == Some(1) {
+        // zenity: 1 means the user clicked Cancel.
+        ZenityPick::Cancelled
+    } else {
+        let err = String::from_utf8_lossy(stderr).trim().to_string();
+        let detail = if err.is_empty() {
+            format!("zenity exited {status}")
+        } else {
+            err
+        };
+        ZenityPick::Failed(detail)
+    }
+}
+
+fn zenity_pick_directory(title: &str) -> ZenityPick {
+    match Command::new("zenity")
+        .args(["--file-selection", "--directory", "--title", title])
+        .output()
+    {
+        Ok(output) => zenity_from_output(output.status, &output.stdout, &output.stderr),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ZenityPick::Unavailable,
+        Err(err) => ZenityPick::Failed(err.to_string()),
+    }
+}
+
+fn zenity_to_cmd(request_id: String, pick: ZenityPick, portal_err: &str) -> Cmd {
+    match pick {
+        ZenityPick::Picked(path) => Cmd::DirectoryPicked {
+            request_id,
+            path: Some(path),
+            error: None,
+            cancelled: false,
+        },
+        ZenityPick::Cancelled => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: None,
+            cancelled: true,
+        },
+        ZenityPick::Unavailable => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: Some(format!(
+                "native folder picker failed ({portal_err}). Install xdg-desktop-portal or zenity."
+            )),
+            cancelled: false,
+        },
+        ZenityPick::Failed(detail) => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: Some(format!("zenity failed: {detail}")),
+            cancelled: false,
+        },
+    }
 }
 
 pub struct RootView {
@@ -91,6 +169,15 @@ impl RootView {
                                 slot.submitted = None;
                             }
                             view.error = Some(err);
+                        }
+                        HostEvent::PickDirectory { request_id, title } => {
+                            view.start_pick_directory(request_id, title, cx);
+                        }
+                        HostEvent::RevealPath { path } => {
+                            cx.reveal_path(Path::new(&path));
+                        }
+                        HostEvent::OpenPath { path } => {
+                            cx.open_with_system(Path::new(&path));
                         }
                     }
                     cx.notify();
@@ -182,6 +269,63 @@ impl RootView {
                 break;
             }
         }
+    }
+
+    fn start_pick_directory(
+        &self,
+        request_id: String,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = title.unwrap_or_else(|| "Choose a folder".to_string());
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(SharedString::from(prompt.clone())),
+        });
+        let cmd_tx = self.cmd_tx.clone();
+        cx.spawn(async move |_this, cx| {
+            let cmd = match receiver.await {
+                Ok(Ok(Some(paths))) => {
+                    let path = paths
+                        .into_iter()
+                        .next()
+                        .map(|p| p.to_string_lossy().into_owned());
+                    Cmd::DirectoryPicked {
+                        request_id,
+                        cancelled: path.is_none(),
+                        path,
+                        error: None,
+                    }
+                }
+                Ok(Ok(None)) => Cmd::DirectoryPicked {
+                    request_id,
+                    path: None,
+                    error: None,
+                    cancelled: true,
+                },
+                Ok(Err(err)) => {
+                    // zenity `.output()` waits for the user. Do that on the
+                    // background executor so the GPUI foreground runtime
+                    // can keep painting while the dialog is open.
+                    let prompt = prompt.clone();
+                    let pick = cx
+                        .background_executor()
+                        .spawn(async move { zenity_pick_directory(&prompt) })
+                        .await;
+                    zenity_to_cmd(request_id, pick, &err.to_string())
+                }
+                Err(_) => Cmd::DirectoryPicked {
+                    request_id,
+                    path: None,
+                    error: Some("folder picker was cancelled internally".into()),
+                    cancelled: false,
+                },
+            };
+            let _ = cmd_tx.send(cmd);
+        })
+        .detach();
     }
 
     fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -367,12 +511,24 @@ impl RootView {
             "label" => {
                 let mut el = apply_style(div().id(eid(&key)), node, cx)
                     .child(node.text.clone().unwrap_or_default());
-                if let Some(callback_id) = node.on_double_click.clone() {
+                let on_click = node.on_click.clone();
+                let on_double = node.on_double_click.clone();
+                if on_click.is_some() || on_double.is_some() {
                     let cmd_tx = self.cmd_tx.clone();
                     el = el.cursor_pointer().on_click(move |event, _, _| {
                         if event.click_count() >= 2 {
+                            if let Some(id) = on_double.clone() {
+                                let _ = cmd_tx.send(Cmd::Callback {
+                                    id,
+                                    value: None,
+                                    seq: None,
+                                });
+                                return;
+                            }
+                        }
+                        if let Some(id) = on_click.clone() {
                             let _ = cmd_tx.send(Cmd::Callback {
-                                id: callback_id.clone(),
+                                id,
                                 value: None,
                                 seq: None,
                             });
@@ -393,12 +549,22 @@ impl RootView {
                 }
                 apply_style(button, node, cx).into_any_element()
             }
-            "vstack" => apply_style(v_flex().id(eid(&key)), node, cx)
-                .children(self.render_children(node, path, window, cx))
-                .into_any_element(),
-            "hstack" => apply_style(h_flex().id(eid(&key)), node, cx)
-                .children(self.render_children(node, path, window, cx))
-                .into_any_element(),
+            "vstack" => {
+                let mut el = apply_style(v_flex().id(eid(&key)), node, cx)
+                    .children(self.render_children(node, path, window, cx));
+                if let Some(callback_id) = node.on_click.clone() {
+                    el = el.cursor_pointer().on_click(self.click(callback_id));
+                }
+                el.into_any_element()
+            }
+            "hstack" => {
+                let mut el = apply_style(h_flex().id(eid(&key)), node, cx)
+                    .children(self.render_children(node, path, window, cx));
+                if let Some(callback_id) = node.on_click.clone() {
+                    el = el.cursor_pointer().on_click(self.click(callback_id));
+                }
+                el.into_any_element()
+            }
             "spacer" => {
                 let el = apply_style(div().id(eid(&key)), node, cx);
                 if node.size.is_some() || node.flex.is_some() {
@@ -873,4 +1039,44 @@ pub fn open_window(
     )
     .unwrap();
     cx.activate(true);
+}
+
+#[cfg(test)]
+mod zenity_tests {
+    use super::{zenity_from_output, ZenityPick};
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    fn exit(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[test]
+    fn success_with_path_is_picked() {
+        assert_eq!(
+            zenity_from_output(exit(0), b"/tmp/docs\n", b""),
+            ZenityPick::Picked("/tmp/docs".into())
+        );
+    }
+
+    #[test]
+    fn success_with_empty_stdout_is_cancelled() {
+        assert_eq!(
+            zenity_from_output(exit(0), b"  \n", b""),
+            ZenityPick::Cancelled
+        );
+    }
+
+    #[test]
+    fn exit_1_is_user_cancel() {
+        assert_eq!(zenity_from_output(exit(1), b"", b""), ZenityPick::Cancelled);
+    }
+
+    #[test]
+    fn other_nonzero_is_failure() {
+        assert_eq!(
+            zenity_from_output(exit(255), b"", b"display is not set\n"),
+            ZenityPick::Failed("display is not set".into())
+        );
+    }
 }

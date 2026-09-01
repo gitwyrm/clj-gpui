@@ -1,7 +1,7 @@
 use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 
-pub const PROTOCOL_VERSION: u64 = 2;
+pub const PROTOCOL_VERSION: u64 = 3;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Node {
@@ -126,6 +126,12 @@ pub enum Cmd {
         seq: Option<u64>,
     },
     Reload,
+    DirectoryPicked {
+        request_id: String,
+        path: Option<String>,
+        error: Option<String>,
+        cancelled: bool,
+    },
     Shutdown,
 }
 
@@ -140,4 +146,14 @@ pub enum HostEvent {
     /// `themes` is Clojure-registered ThemeSets from the render response.
     Tree(Node, Option<u64>, Vec<ThemeSet>),
     Error(String),
+    PickDirectory {
+        request_id: String,
+        title: Option<String>,
+    },
+    RevealPath {
+        path: String,
+    },
+    OpenPath {
+        path: String,
+    },
 }

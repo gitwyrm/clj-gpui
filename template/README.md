@@ -26,3 +26,7 @@ When you are not sitting next to this checkout, replace the local root in `deps.
 Use the git URL of the library you actually cloned. There is no Clojars release yet.
 
 You can also point at a built host binary with `CLJ_GPUI_BIN`, or at a library checkout with `CLJ_GPUI_ROOT`.
+
+## Package
+
+Write `gpui.edn` (see the library README) and run `clj -X:build package` on the OS you are shipping for. That uses `gpui.prod`: no nREPL, no source watcher, no Cargo at runtime. Use `-X` so clj-gpui stays on the classpath.

@@ -208,6 +208,6 @@
     (finally
       (theme/clear!))))
 
-(deftest protocol-version-is-two
-  (is (= 2 ui/protocol-version))
-  (is (= 2 runtime/protocol-version)))
+(deftest protocol-version-is-three
+  (is (= 3 ui/protocol-version))
+  (is (= 3 runtime/protocol-version)))

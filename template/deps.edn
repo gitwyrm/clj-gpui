@@ -1,4 +1,7 @@
 {:paths ["src"]
  :deps {clj-gpui/clj-gpui {:local/root "../.."}}
  :aliases
- {:dev {:main-opts ["-m" "gpui.dev" "my.app/app"]}}}
+ {:dev {:main-opts ["-m" "gpui.dev" "my.app/app"]}
+  :build {:extra-deps {io.github.clojure/tools.build {:mvn/version "0.10.10"}}
+          :ns-default gpui.package
+          :exec-fn gpui.package/package}}}
