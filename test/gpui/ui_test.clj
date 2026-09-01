@@ -55,6 +55,8 @@
     (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))
     (is (= :circle (:shape (ui/checkbox false (fn []) {:shape :circle}))))
     (is (fn? (:on-double-click (ui/label "x" {:on-double-click (fn [])}))))
+    (is (fn? (:on-click (ui/label "row" {:on-click (fn [])}))))
+    (is (fn? (:on-click (ui/hstack {:on-click (fn [])}))))
     (is (true? (:focus (ui/text-field "" {:focus true}))))))
 
 (deftest sequences-flatten-inside-stacks
