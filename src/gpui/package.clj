@@ -208,6 +208,10 @@
              :main 'gpui.prod})
     (assoc cfg :jar (io/file jar-file))))
 
+(defn- loaded-config?
+  [opts]
+  (and (map? opts) (string? (:name opts)) (string? (:main opts))))
+
 (defn host
   "Build the native GPUI host (`cargo build --release`) and return its path.
 
@@ -215,7 +219,7 @@
   an existing binary. Development `ensure-dev-host` may otherwise reuse a
   debug build that happens to be newer than sources."
   [opts]
-  (let [cfg (if (map? opts) (try (load-config opts) (catch Exception _ {})) {})
+  (let [cfg (if (loaded-config? opts) opts (load-config (if (map? opts) opts {})))
         exe (if (seq (host/env "CLJ_GPUI_BIN"))
               (host/ensure-dev-host)
               (do
@@ -232,7 +236,7 @@
 (defn jre
   "Build a reduced JRE with jlink into `target/runtime`."
   [opts]
-  (let [cfg (load-config opts)
+  (let [cfg (if (loaded-config? opts) opts (load-config opts))
         dest (io/file (:target cfg) "runtime")
         jlink (io/file (java-home) "bin" "jlink")
         modules (or (:modules opts) default-jlink-modules)]
