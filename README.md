@@ -64,7 +64,7 @@ Atom watches already request a rerender. Redefining `app` without changing an at
 
 ### Hot reload
 
-Edit `examples/counter/src/counter/app.clj` and save. The runtime reloads the namespace with `(require ns :reload)` and asks GPUI to paint again. `defonce` / `r/atom` state survives because the namespace is not unloaded.
+Edit `examples/counter/src/counter/widgets.clj` or `app.clj` and save. The watcher reloads the changed namespaces (helpers first), then the root app, and asks GPUI to paint again. `defonce` / `r/atom` state survives because namespaces are not unloaded. A compile error is shown in the window until the file is fixed.
 
 ## Use it in your project
 
@@ -158,13 +158,15 @@ The UI boundary is ordinary persistent Clojure maps. Functions cannot go on the 
 
 `(r/atom ...)` returns a real `clojure.core/Atom`. The only extra behavior is an `add-watch` (`:gpui.ratom/watch`) that sends `request-render`. The host fetches a fresh tree and paints the whole window.
 
+The host also fetches a tree after every callback (text-field submit sequencing, and handlers that do not touch an atom). During that callback Clojure does not send a second `request-render` from the watch, so a typical `swap!` click is one paint.
+
 `ui/watch!` attaches the same watch to an existing atom.
 
 ### Hot reload
 
-A polling watcher on the **application** `src/**/*.clj` (not library `runtime.clj` / `dev.clj`) does `(require ns :reload)`. `clojure.tools.namespace` `refresh` is not used, because unloading namespaces would reset `defonce`.
+Edit any application `src/**/*.clj` and save. The watcher reloads the namespaces for those files (so a helper like `my.widgets` is picked up), then the root app namespace, with `(require ns :reload)`. `(require root :reload)` alone does **not** reload already-loaded dependencies. `clojure.tools.namespace` `refresh` is not used, because unloading namespaces would reset `defonce`.
 
-If `app` throws, Clojure returns an error UI tree (`ok: true`) so the native window still paints.
+If `app` throws, or if reload itself fails (syntax error, unmatched delimiter, unresolved symbol), Clojure returns an error UI tree (`ok: true`) so the native window still paints. Fix the file and save again; the app returns and `defonce` / `r/atom` state is kept.
 
 ## Formatting
 
@@ -244,6 +246,7 @@ Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` onl
 
 * **Two processes, JSON copies.** Fine for this slice. A future JNI path can keep the same Clojure API.
 * **Whole-window rerender.** No incremental DOM-style diffing.
+* **gpui-component Theme is process-global.** Nested `:theme` restores the previous mode before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
 * **Packaging** is not solved: you still need a JRE plus the GPUI binary. Git deps; no Clojars or host binary downloads yet.

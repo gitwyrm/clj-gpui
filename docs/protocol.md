@@ -57,7 +57,7 @@ On an application exception Clojure still returns `ok: true` with an error UI tr
 {"op":"callback","id":2,"callback-id":"cb-2"}
 ```
 
-Invokes the real Clojure IFn that was registered when the current tree was exported, then the host typically issues another `render`.
+Invokes the real Clojure IFn that was registered when the current tree was exported, then the host **always** issues another `render`. That second fetch carries text-field submit `seq` and covers handlers that do not touch an atom. While the callback runs, Clojure does not send `request-render` from `r/atom` watches, so a typical `swap!` click is one paint, not two. nREPL updates, hot reload, and `ui/request-render!` still use `request-render`.
 
 Optional `value` is included for text-field events:
 
@@ -73,7 +73,7 @@ Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments
 {"op":"reload","id":3}
 ```
 
-`(require ns :reload)` of `gpui.ui`, `gpui.core`, `gpui.ratom`, and the app namespace. `defonce` / `r/atom` bindings are kept. Response includes a fresh `tree`.
+`(require ns :reload)` of `gpui.ui`, `gpui.core`, `gpui.ratom`, every watched application `.clj` namespace, and the root app namespace. Helper namespaces are reloaded before the root; `(require app :reload)` alone does not reload already-loaded deps. `defonce` / `r/atom` bindings are kept. Response includes a fresh `tree`. A compile/syntax error still returns `ok: true` with an error UI tree so the window stays up.
 
 ## Node schema (version 1)
 
@@ -126,6 +126,8 @@ Put `:theme` on **any** node. The host does not choose a theme on its own:
 * `:dark` pins gpui-component to dark for that subtree
 
 A nested `:theme` wraps that subtree during layout and paint so siblings keep their own theme. The footer / waiting state follow the **root** node's `:theme` (usually the `window`).
+
+gpui-component's `Theme` is process-global. Nested scopes work because layout, prepaint, and paint of a subtree run synchronously and restore the previous mode before the sibling is drawn. A second window would share that global; clj-gpui is still one window. There is no headless GPUI fixture here that can paint two themed buttons without a real window, so sibling isolation is enforced in the host's `ThemeScope` and covered on the Clojure side by serialization tests.
 
 Window chrome is Clojure-owned on a `window` node (the host still reads these keys from whatever node is the tree root):
 

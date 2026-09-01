@@ -3,6 +3,7 @@
             [gpui.core-test]
             [gpui.dev-test]
             [gpui.ratom-test]
+            [gpui.runtime-test]
             [gpui.ui-test]))
 
 (defn -main [& _]

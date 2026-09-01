@@ -24,6 +24,46 @@
         (.delete (.getParentFile (.getParentFile bin)))
         (.delete root)))))
 
+(deftest prefers-native-triple-over-foreign
+  (let [root (doto (io/file (System/getProperty "java.io.tmpdir")
+                            (str "clj-gpui-triples-" (random-uuid)))
+               (.mkdirs))
+        foreign (touch-exe (io/file root "aarch64-apple-darwin" "release" "clj-gpui"))
+        native (touch-exe (io/file root "x86_64-unknown-linux-gnu" "release" "clj-gpui"))]
+    (try
+      (is (= (.getCanonicalFile native)
+             (.getCanonicalFile
+              (dev/locate-host-binary
+               root
+               {:host-triple "x86_64-unknown-linux-gnu"}))))
+      (is (= (.getCanonicalFile foreign)
+             (.getCanonicalFile
+              (dev/locate-host-binary
+               root
+               {:host-triple "aarch64-apple-darwin"}))))
+      (finally
+        (.delete foreign)
+        (.delete native)
+        (.delete (.getParentFile foreign))
+        (.delete (.getParentFile native))
+        (.delete (.getParentFile (.getParentFile foreign)))
+        (.delete (.getParentFile (.getParentFile native)))
+        (.delete root)))))
+
+(deftest cargo-build-target-reads-config-toml
+  (let [host (doto (io/file (System/getProperty "java.io.tmpdir")
+                            (str "clj-gpui-cargo-cfg-" (random-uuid)))
+               (.mkdirs))
+        cfg (io/file host ".cargo" "config.toml")]
+    (try
+      (.mkdirs (.getParentFile cfg))
+      (spit cfg "[build]\ntarget = \"wasm32-unknown-unknown\"\n")
+      (is (= "wasm32-unknown-unknown" (dev/cargo-build-target host)))
+      (finally
+        (.delete cfg)
+        (.delete (.getParentFile cfg))
+        (.delete host)))))
+
 (deftest prefers-default-release-over-debug
   (let [root (doto (io/file (System/getProperty "java.io.tmpdir")
                             (str "clj-gpui-target-" (random-uuid)))

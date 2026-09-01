@@ -186,6 +186,11 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                             if let Some(value) = value {
                                 request["value"] = json!(value);
                             }
+                            // Always fetch a tree here: text-field submit attaches
+                            // `seq` to this response, and handlers that do not
+                            // touch an r/atom still need a paint. Clojure suppresses
+                            // the r/atom watch's request-render for the duration of
+                            // the callback so this is not a duplicate of that path.
                             rpc(&writer, &pending, &next_id, request)
                                 .and_then(|_| {
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))

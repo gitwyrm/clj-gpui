@@ -10,6 +10,7 @@
   binary is missing or a host source file is newer than the binary."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [gpui.runtime :as runtime])
   (:import [java.io BufferedReader InputStreamReader OutputStreamWriter]
            [java.lang ProcessBuilder$Redirect]
@@ -71,33 +72,104 @@
              (io/file dir "debug" name)])
           host-bin-names))
 
+(defn- rustc-host-triple
+  "The rustc host target triple, or nil if rustc is unavailable."
+  []
+  (try
+    (let [args (doto (ArrayList.)
+                 (.add "rustc")
+                 (.add "-vV"))
+          pb (doto (ProcessBuilder. args)
+               (.redirectError ProcessBuilder$Redirect/DISCARD))
+          ^Process proc (.start pb)
+          out (slurp (.getInputStream proc))]
+      (when (zero? (.waitFor proc))
+        (some (fn [line]
+                (when (str/starts-with? line "host: ")
+                  (subs line 6)))
+              (str/split-lines out))))
+    (catch Exception _
+      nil)))
+
+(defn- parse-cargo-build-target
+  [^java.io.File f]
+  (when (and f (.isFile f))
+    (try
+      (let [in-build? (atom false)]
+        (some (fn [line]
+                (let [t (str/trim line)]
+                  (cond
+                    (re-matches #"\[build\]" t)
+                    (do (reset! in-build? true) nil)
+                    (re-find #"^\[" t)
+                    (do (reset! in-build? false) nil)
+                    (and @in-build? (re-find #"^target\s*=" t))
+                    (or (second (re-find #"target\s*=\s*\"([^\"]+)\"" t))
+                        (second (re-find #"target\s*=\s*'([^']+)'" t))))))
+              (str/split-lines (slurp f))))
+      (catch Exception _
+        nil))))
+
+(defn cargo-build-target
+  "Configured Cargo `--target`, from `CARGO_BUILD_TARGET` or `.cargo/config.toml`."
+  [^java.io.File host-dir]
+  (or (env "CARGO_BUILD_TARGET")
+      (when host-dir
+        (some parse-cargo-build-target
+              [(io/file host-dir ".cargo" "config.toml")
+               (io/file host-dir ".cargo" "config")
+               (when-let [parent (.getParentFile host-dir)]
+                 (io/file parent ".cargo" "config.toml"))
+               (when-let [parent (.getParentFile host-dir)]
+                 (io/file parent ".cargo" "config"))]))))
+
+(defn- target-subdirs
+  [^java.io.File target-dir]
+  (when (and target-dir (.isDirectory target-dir))
+    (->> (or (.listFiles target-dir) (into-array java.io.File []))
+         (filterv #(.isDirectory ^java.io.File %))
+         (sort-by #(.getName ^java.io.File %)))))
+
 (defn host-binary-candidates
   "Possible Cargo output paths for the clj-gpui host.
 
   Includes `target/release`, `target/debug`, and `target/<triple>/{release,debug}`
   so a `[build] target` in `.cargo/config.toml` or `CARGO_BUILD_TARGET` still
-  resolves after `cargo build --release`."
-  [^java.io.File target-dir]
-  (let [triple (env "CARGO_BUILD_TARGET")
-        children (when (and target-dir (.isDirectory target-dir))
-                   (filterv #(.isDirectory ^java.io.File %)
-                            (or (.listFiles target-dir) (into-array java.io.File []))))]
-    (->> (concat
-          (when (seq triple)
-            (profile-bins (io/file target-dir triple)))
-          (profile-bins target-dir)
-          (mapcat profile-bins children))
-         (filter some?)
-         distinct
-         vec)))
+  resolves after `cargo build --release`.
+
+  When several triples are present and `target/release` is missing, prefer the
+  rustc host triple over directory-iteration order so a leftover cross-compile
+  is not chosen first."
+  ([target-dir]
+   (host-binary-candidates target-dir nil))
+  ([target-dir {:keys [configured-target host-triple]}]
+   (let [configured (or configured-target (env "CARGO_BUILD_TARGET"))
+         host (or host-triple (rustc-host-triple))
+         children (or (target-subdirs target-dir) [])
+         preferred (set (filter seq [configured host]))
+         rest-children (remove (fn [^java.io.File d]
+                                 (contains? preferred (.getName d)))
+                               children)]
+     (->> (concat
+           (when (seq configured)
+             (profile-bins (io/file target-dir configured)))
+           (profile-bins target-dir)
+           (when (seq host)
+             (profile-bins (io/file target-dir host)))
+           (mapcat profile-bins rest-children))
+          (filter some?)
+          distinct
+          vec))))
 
 (defn locate-host-binary
   "Return the first executable clj-gpui host under a Cargo target directory."
-  ^java.io.File [^java.io.File target-dir]
-  (when target-dir
-    (first (filter (fn [^java.io.File f]
-                     (and (.isFile f) (.canExecute f)))
-                   (host-binary-candidates target-dir)))))
+  (^java.io.File [^java.io.File target-dir]
+   (locate-host-binary target-dir nil))
+  (^java.io.File [^java.io.File target-dir prefs]
+   (when target-dir
+     (first (filter (fn [^java.io.File f]
+                      (and (.isFile f) (.canExecute f)))
+                    (host-binary-candidates target-dir prefs))))))
 
 (defn host-input-files
   "Cargo manifest and Rust sources that should trigger a host rebuild."
@@ -156,7 +228,9 @@
                                  (throw (ex-info "Could not locate clj-gpui. Set CLJ_GPUI_ROOT or CLJ_GPUI_BIN." {})))
           host-dir (io/file root "host")
           target-dir (or (cargo-target-dir host-dir) (io/file host-dir "target"))
-          bin (locate-host-binary target-dir)]
+          prefs {:configured-target (cargo-build-target host-dir)
+                 :host-triple (rustc-host-triple)}
+          bin (locate-host-binary target-dir prefs)]
       (if (and bin (not (host-stale? host-dir bin)))
         bin
         (do
@@ -165,13 +239,13 @@
                      "[clj-gpui] native host missing, building with cargo"))
           (build-host! root)
           (let [target-dir (or (cargo-target-dir host-dir) target-dir)]
-            (or (locate-host-binary target-dir)
+            (or (locate-host-binary target-dir prefs)
                 (throw (ex-info (str "Host build succeeded but clj-gpui binary was not found under "
                                      (.getPath target-dir)
                                      ". Cargo may have written a different name; set CLJ_GPUI_BIN.")
                                 {:target-dir (.getPath target-dir)
                                  :candidates (mapv #(.getPath ^java.io.File %)
-                                                   (host-binary-candidates target-dir))})))))))))
+                                                   (host-binary-candidates target-dir prefs))})))))))))
 
 (defn- spawn-host!
   [^java.io.File exe port protocol-test?]

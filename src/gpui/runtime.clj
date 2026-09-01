@@ -10,7 +10,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [gpui.ui :as ui])
-  (:import [java.io BufferedReader OutputStreamWriter]
+  (:import [java.io BufferedReader PushbackReader]
            [java.nio.charset StandardCharsets]))
 
 (set! *warn-on-reflection* true)
@@ -21,11 +21,13 @@
 (defonce ^:private callbacks (atom {}))
 (defonce ^:private callback-counter (atom 0))
 (defonce ^:private render-scheduled? (atom false))
+(defonce ^:private callback-depth (atom 0))
 (defonce ^:private app-var* (atom nil))
 (defonce ^:private app-sym* (atom nil))
 (defonce ^:private nrepl-port* (atom nil))
 (defonce ^:private file-mtimes (atom {}))
 (defonce ^:private load-error* (atom nil))
+(defonce ^:private file-ns (atom {}))
 
 (defn- env
   ([k]
@@ -52,16 +54,33 @@
   []
   (io/file (env "CLJ_GPUI_SRC" "src")))
 
+(defn- clj-files
+  [^java.io.File root]
+  (if-not (.exists root)
+    []
+    (->> (file-seq root)
+         (filter #(.isFile ^java.io.File %))
+         (filter #(str/ends-with? (.getName ^java.io.File %) ".clj"))
+         (remove (fn [^java.io.File f]
+                   (re-find #"(^|/)(runtime|dev)\.clj$" (.getPath f)))))))
+
 (defn send!
   [message]
-  (when-let [{:keys [^OutputStreamWriter out]} @conn]
-    (locking out
-      (.write out ^String (str (json/write-str message) "\n"))
-      (.flush out))))
+  (when-let [{:keys [out]} @conn]
+    (let [^java.io.Writer out out]
+      (locking out
+        (.write out ^String (str (json/write-str message) "\n"))
+        (.flush out)))))
 
 (defn- schedule-render!
   []
-  (when (compare-and-set! render-scheduled? false true)
+  ;; The host always fetches a tree after a callback RPC (needed for
+  ;; text-field submit sequencing and for handlers that do not touch an
+  ;; atom). Skip the r/atom watch's request-render while that RPC is
+  ;; running so one click is not two paints. nREPL / watcher / explicit
+  ;; ui/request-render! still go through this path with depth 0.
+  (when (and (zero? @callback-depth)
+             (compare-and-set! render-scheduled? false true))
     (future
       (try
         (Thread/sleep 16)
@@ -131,16 +150,38 @@
 
     :else node))
 
+(defn- error-chain
+  [^Throwable e]
+  (take-while some? (iterate #(.getCause ^Throwable %) e)))
+
+(defn- error-location
+  "File:line:column from a CompilerException / ex-data chain, if present."
+  [^Throwable e]
+  (some (fn [^Throwable t]
+          (let [data (ex-data t)
+                src (or (get data :clojure.error/source)
+                        (get data :clojure.error/file))
+                line (get data :clojure.error/line)
+                column (get data :clojure.error/column)]
+            (when (or src line)
+              (str (or src "unknown")
+                   (when line (str ":" line))
+                   (when (and line column) (str ":" column))))))
+        (error-chain e)))
+
 (defn- error-tree
   [^Throwable e]
   (let [sw (java.io.StringWriter.)
-        pw (java.io.PrintWriter. sw)]
+        pw (java.io.PrintWriter. sw)
+        loc (error-location e)]
     (.printStackTrace e pw)
     (.flush pw)
     (ui/vstack
      {:gap 8 :padding 12}
      (ui/label "Clojure error" {:font-size 18 :font-weight :bold :color "#f7768e"})
      (ui/label (str (.getClass e) ": " (.getMessage e)) {:color "#c0caf5"})
+     (when loc
+       (ui/label loc {:font-size 13 :color "#9aa3b5"}))
      (ui/scroll
       {:height 280}
       (ui/label (str sw) {:color "#9aa3b5"})))))
@@ -162,17 +203,111 @@
       (reset! app-var* v)
       v)))
 
-(defn reload-app!
-  "Reload application namespaces in place. `defonce` / ratom state is preserved."
+(defn- app-ns
   []
-  (let [sym (app-symbol)
-        nspace (symbol (namespace sym))]
-    (require 'gpui.ui :reload)
-    (require 'gpui.core :reload)
-    (require 'gpui.ratom :reload)
-    (require nspace :reload)
-    (load-app!)
-    {:ok true :ns (str nspace)}))
+  (when-let [sym (app-symbol)]
+    (when (namespace sym)
+      (symbol (namespace sym)))))
+
+(defn- read-ns-name
+  [^java.io.File f]
+  (try
+    (with-open [rdr (io/reader f)]
+      (let [form (binding [*read-eval* false]
+                   (read (PushbackReader. rdr) false nil))]
+        (when (and (seq? form) (= 'ns (first form)))
+          (let [n (second form)]
+            (cond
+              (symbol? n) n
+              (string? n) (symbol n))))))
+    (catch Exception _
+      nil)))
+
+(defn- ns-from-relative-path
+  [^java.io.File src ^java.io.File f]
+  (let [root (.getCanonicalPath src)
+        path (.getCanonicalPath f)
+        prefix (str root (System/getProperty "file.separator"))]
+    (when (str/starts-with? path prefix)
+      (let [rel (subs path (count prefix))
+            rel (-> rel
+                    (str/replace #"\.clj\z" "")
+                    (str/replace #"/" ".")
+                    (str/replace #"\\" "."))]
+        (when (and (seq rel) (not (str/includes? rel " ")))
+          (symbol rel))))))
+
+(defn ns-from-file
+  "Namespace symbol for a `.clj` file: `ns` form, then path relative to `src`,
+  then the last mapping we successfully used for this path (so a syntax error
+  can still `(require ns :reload)`)."
+  [^java.io.File src ^java.io.File f]
+  (let [path (.getCanonicalPath f)
+        n (or (read-ns-name f)
+              (ns-from-relative-path src f)
+              (get @file-ns path))]
+    (when n
+      (swap! file-ns assoc path n)
+      n)))
+
+(defn changed-clj-files
+  "Files in `now` whose mtime is new or different from `prev`.
+  `prev`/`now` are maps of canonical path → lastModified."
+  [prev now]
+  (->> now
+       (keep (fn [[path mtime]]
+               (when (not= mtime (get prev path))
+                 (io/file path))))
+       vec))
+
+(defn- skip-reload-ns?
+  [nspace]
+  (let [s (str nspace)]
+    (or (= nspace 'gpui.runtime)
+        (= nspace 'gpui.dev)
+        (str/starts-with? s "clojure.")
+        (str/starts-with? s "nrepl."))))
+
+(defn- require-reload!
+  [nspace]
+  (println "[clj-gpui] reloading" nspace)
+  (require nspace :reload))
+
+(defn reload-app!
+  "Reload application namespaces in place. `defonce` / ratom state is preserved.
+
+  With no argument (host `reload` RPC), reloads every watched `.clj` file then
+  the root app namespace. With a seq of files (the watcher), reloads those
+  namespaces first so a helper like `my.widgets` is picked up before the root
+  `(require app :reload)`, which does not reload already-loaded deps.
+
+  Does not `remove-ns` / tools.namespace refresh."
+  ([]
+   (reload-app! nil))
+  ([changed-files]
+   (try
+     (let [src (src-root)
+           app (or (app-ns)
+                   (throw (ex-info "No application var. Pass my.app/app to gpui.dev." {})))
+           files (mapv io/file (if (nil? changed-files)
+                                 (clj-files src)
+                                 changed-files))
+           nses (->> files
+                     (keep #(ns-from-file src %))
+                     distinct
+                     (remove skip-reload-ns?)
+                     (remove #{app}))]
+       (doseq [n nses]
+         (require-reload! n))
+       (require-reload! 'gpui.ui)
+       (require-reload! 'gpui.core)
+       (require-reload! 'gpui.ratom)
+       (require-reload! app)
+       (load-app!)
+       {:ok true :ns (str app)})
+     (catch Exception e
+       (reset! load-error* e)
+       (throw e)))))
 
 (defn reset-callbacks!
   []
@@ -191,25 +326,27 @@
   "Build a UI tree, registering callbacks as string ids.
 
   Zero-arity calls the application var. One-arity sanitizes an already
-  built tree (or invokes a 0-arg function that returns one)."
+  built tree (or invokes a 0-arg function that returns one). A failed
+  `(require … :reload)` sticks until the next successful reload so the
+  native window can show the compile error instead of the previous UI."
   ([]
    (reset-callbacks!)
-   (try
-     (when-not @app-var*
-       (load-app!))
-     (let [app-fn (var-get @app-var*)
-           tree (app-fn)]
-       (export-node tree))
-     (catch Exception e
-       (reset! load-error* e)
-       (.printStackTrace e)
-       (export-node (error-tree e)))))
+   (if-let [e @load-error*]
+     (export-node (error-tree e))
+     (try
+       (when-not @app-var*
+         (load-app!))
+       (let [app-fn (var-get @app-var*)
+             tree (app-fn)]
+         (export-node tree))
+       (catch Exception e
+         (.printStackTrace e)
+         (export-node (error-tree e))))))
   ([tree]
    (reset-callbacks!)
    (try
      (export-node (if (fn? tree) (tree) tree))
      (catch Exception e
-       (reset! load-error* e)
        (export-node (error-tree e))))))
 
 (defn invoke-callback!
@@ -223,10 +360,14 @@
   ([callback-id value]
    (if-let [f (get @callbacks callback-id)]
      (do
-       (if (some? value)
-         (f value)
-         (f))
-       {:ok true :id callback-id})
+       (swap! callback-depth inc)
+       (try
+         (if (some? value)
+           (f value)
+           (f))
+         {:ok true :id callback-id}
+         (finally
+           (swap! callback-depth dec))))
      {:ok false :error (str "unknown callback " callback-id)})))
 
 (defn handle
@@ -239,8 +380,8 @@
                    "callback" (invoke-callback! (:callback-id msg) (:value msg))
                    "reload" (try
                               (assoc (reload-app!) :ok true :tree (export-tree))
-                              (catch Exception e
-                                {:ok true :tree (json-tree (sanitize (error-tree e)))}))
+                              (catch Exception _
+                                {:ok true :tree (export-tree)}))
                    {:ok false :error (str "unknown op: " op)})]
       (send! (cond-> result
                id (assoc :id id)
@@ -251,16 +392,6 @@
               :id (:id msg)
               :ok false
               :error (str (.getClass e) ": " (.getMessage e))}))))
-
-(defn- clj-files
-  [^java.io.File root]
-  (if-not (.exists root)
-    []
-    (->> (file-seq root)
-         (filter #(.isFile ^java.io.File %))
-         (filter #(str/ends-with? (.getName ^java.io.File %) ".clj"))
-         (remove (fn [^java.io.File f]
-                   (re-find #"(^|/)(runtime|dev)\.clj$" (.getPath f)))))))
 
 (defn- snapshot-mtimes
   []
@@ -280,7 +411,7 @@
           (when (and (seq prev) (not= prev now))
             (println "[clj-gpui] source change detected, reloading")
             (try
-              (reload-app!)
+              (reload-app! (changed-clj-files prev now))
               (schedule-render!)
               (catch Exception e
                 (binding [*out* *err*]

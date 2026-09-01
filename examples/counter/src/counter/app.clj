@@ -1,6 +1,7 @@
 (ns counter.app
   "Example application: a plain counter in real JVM Clojure."
-  (:require [gpui.ratom :as r]
+  (:require [counter.widgets :as widgets]
+            [gpui.ratom :as r]
             [gpui.ui :as ui]))
 
 (defonce !state (r/atom {:count 0}))
@@ -16,8 +17,7 @@
      (ui/vstack
       {:gap 16 :padding 16 :flex 1}
       (ui/label "Counter" {:font-size 22 :font-weight :semibold})
-      (ui/label "Real JVM Clojure. Native GPUI window. No webview."
-                {:font-size 13 :color "#9aa4b2"})
+      (widgets/subtitle)
       (ui/hstack
        {:gap 12}
        (ui/button "−" #(swap! !state update :count dec))

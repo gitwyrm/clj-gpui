@@ -671,7 +671,11 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         if node.color.is_none() {
             el = el.text_color(cx.theme().foreground);
         }
-        if node.bg.is_none() && matches!(node.kind.as_str(), "window" | "vstack" | "hstack" | "scroll")
+        if node.bg.is_none()
+            && matches!(
+                node.kind.as_str(),
+                "window" | "vstack" | "hstack" | "scroll"
+            )
         {
             el = el.bg(cx.theme().background);
         }
@@ -680,9 +684,7 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
 }
 
 fn node_theme_pref(node: &Node) -> Option<&str> {
-    node.theme
-        .as_deref()
-        .filter(|theme| !theme.is_empty())
+    node.theme.as_deref().filter(|theme| !theme.is_empty())
 }
 
 fn node_theme_mode(node: &Node, window: &Window) -> Option<ThemeMode> {
@@ -696,6 +698,12 @@ fn node_theme_mode(node: &Node, window: &Window) -> Option<ThemeMode> {
 /// Switches gpui-component's global theme around a subtree during layout/paint.
 /// Widgets such as Button read `cx.theme()` in `RenderOnce::render`, which runs
 /// in `request_layout`, not when Clojure builds the tree.
+///
+/// Theme is process-global (`Theme::change` on `App`). Nested scopes work because
+/// layout/prepaint/paint of a subtree are synchronous: we restore `mode` before
+/// a sibling is laid out. A second window would share that global and is not
+/// supported today. Headless GPUI tests cannot exercise this without a real
+/// window and GPU; Clojure tests cover that `:theme` serializes per node.
 struct ThemeScope {
     mode: ThemeMode,
     child: AnyElement,
@@ -746,7 +754,9 @@ impl Element for ThemeScope {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        with_theme_mode(self.mode, cx, |cx| (self.child.request_layout(window, cx), ()))
+        with_theme_mode(self.mode, cx, |cx| {
+            (self.child.request_layout(window, cx), ())
+        })
     }
 
     fn prepaint(
