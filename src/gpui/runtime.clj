@@ -337,7 +337,7 @@
   native window can show the compile error instead of the previous UI."
   ([]
    (reset-callbacks!)
-  (if-let [e @load-error*]
+   (if-let [e @load-error*]
      (export-node (error-tree e))
      (try
        (when-not @app-var*
