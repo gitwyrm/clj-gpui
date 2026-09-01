@@ -1,5 +1,5 @@
 (ns gpui.package-launch
-  "POSIX launcher script for packaged clj-gpui apps." )
+  "POSIX launcher script for packaged clj-gpui apps.")
 
 (defn launcher-script
   "POSIX launcher that starts the bundled JVM, which then starts the host."

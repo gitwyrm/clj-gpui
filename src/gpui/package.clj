@@ -17,7 +17,10 @@
     clj -X:build package
 
   That command is native-only: macOS produces a `.app`, Linux produces
-  an AppImage and a `.deb`. It never cross-compiles."
+  an AppImage and a `.deb`. It never cross-compiles.
+
+  LICENSE and NOTICE at the application repo root are copied into the
+  package. Extra files can be listed as `:license-files` in `gpui.edn`."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
