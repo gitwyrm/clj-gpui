@@ -20,6 +20,16 @@
       (finally
         (.delete f)))))
 
+(deftest load-config-keeps-pipeline-keys
+  (let [jar (io/file "/tmp/app.jar")
+        cfg (pkg/load-config {:name "demo"
+                              :version "1.0.0"
+                              :main "demo.app/app"
+                              :jar jar
+                              :host (io/file "/tmp/host")})]
+    (is (= jar (:jar cfg)))
+    (is (= "demo" (:name cfg)))))
+
 (deftest info-plist-contains-identity
   (let [plist (pkg/info-plist {:name "cljdu"
                                :title "cljdu"

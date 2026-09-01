@@ -104,16 +104,18 @@
          maintainer (or (as-str (or (:maintainer raw) (:app/maintainer raw)))
                         "clj-gpui packager <nobody@example.com>")
          target (io/file (or (:target-dir raw) (:target-dir opts) "target"))]
-     {:name name
-      :version version
-      :main main
-      :id id
-      :icon icon
-      :title title
-      :description description
-      :maintainer maintainer
-      :target target
-      :raw raw})))
+     (merge
+      (dissoc raw :app/name :app/version :app/main :app/id :app/icon
+              :app/title :app/description :app/maintainer)
+      {:name name
+       :version version
+       :main main
+       :id id
+       :icon icon
+       :title title
+       :description description
+       :maintainer maintainer
+       :target target}))))
 
 (defn- sh!
   [args {:keys [dir env]}]
@@ -273,7 +275,7 @@
        "elif [ -f \"$here/" name ".jar\" ]; then jar=\"$here/" name ".jar\"\n"
        "else echo \"$0: bundled application jar not found\" >&2; exit 1; fi\n"
        "export CLJ_GPUI_BIN=\"$host\"\n"
-       "export CLJ_GPUI_APP_HOME=\"$(CDPATH= cd -- \"$(dirname -- \"$host\")\" && pwd)\"\n"
+       "export CLJ_GPUI_APP_HOME=\"$(CDPATH= cd -- \"$(dirname -- \"$host\")\" && pwd)\n"
        "export JAVA_HOME=\"$java_home\"\n"
        "exec \"$java_home/bin/java\" -Djava.awt.headless=true -cp \"$jar\" gpui.prod " main "\n"))
 
