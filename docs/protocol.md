@@ -41,7 +41,7 @@ Ask the host to show a native folder picker. Does not block Clojure. The host la
 {"op":"pick-directory","request-id":"pick-1","title":"Choose a folder"}
 ```
 
-On Linux the host uses the xdg desktop portal, then `zenity --file-selection --directory` if the portal is missing.
+On Linux the host uses the xdg desktop portal, then `zenity --file-selection --directory` if the portal is missing. Zenity runs on a background thread so the dialog cannot stall GPUI. User cancel is `cancelled`; a missing zenity binary or a non-cancel zenity failure is `error`.
 
 ### `reveal-path` / `open-path` (Clojure → host)
 
