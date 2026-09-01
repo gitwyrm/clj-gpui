@@ -1,7 +1,10 @@
 # Catppuccin Violet (custom ThemeSet)
 
-This example registers a **gpui-component ThemeSet from Clojure maps**, then
-selects a member with `:theme` — a string, same as `"Tokyo Night"`.
+This example registers a **gpui-component ThemeSet from Clojure maps** at
+namespace load (`theme/register!` in `theme.clj`), then selects a member
+with `:theme` — a string, same as `"Tokyo Night"`. `app` does not
+re-register on each render; editing `theme.clj` and hot-reloading that
+namespace updates the palette.
 
 The palette is adapted from
 [`utility_belt_gpui` `src/theme.rs`](https://github.com/gitwyrm/utility_belt_gpui/blob/main/src/theme.rs)

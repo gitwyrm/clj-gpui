@@ -9,7 +9,7 @@
 
 (deftest theme-set-requires-name-and-variants
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                        #"ThemeSet :name"
+                        #":name is required"
                         (theme/theme-set {:themes [{:name "X" :mode :dark :colors {}}]})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #":themes must contain"
@@ -24,10 +24,102 @@
                                           :themes [{:name "X Dark"
                                                     :mode :dark
                                                     :colors {:background "red"}}]})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"cannot be :system"
+                        (theme/theme-set {:name "Light"
+                                          :themes [{:name "X Dark" :mode :dark :colors {}}]})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"cannot be :system"
+                        (theme/theme-set {:name "Mine"
+                                          :themes [{:name "dark" :mode :dark :colors {}}]})))
   (let [ex (try
              (theme/theme-set {:name "X" :themes []})
              (catch clojure.lang.ExceptionInfo e e))]
     (is (= :themes (:gpui.theme/invalid (ex-data ex))))))
+
+(deftest name-normalization-matches-host
+  (doseq [n ["My Theme" "my-theme" "my_theme" "  My   Theme  " :my-theme]]
+    (is (= "my theme" (theme/normalize-name n)) n))
+  (is (= "catppuccin violet" (theme/normalize-name "Catppuccin Violet")))
+  (is (= "catppuccin violet" (theme/normalize-name :catppuccin-violet)))
+  (is (= "tokyo night" (theme/normalize-name "Tokyo_Night")))
+  (is (= "system" (theme/normalize-name :system)))
+  (is (= "light" (theme/normalize-name "Light"))))
+
+(deftest equivalent-names-share-a-registry-slot
+  (theme/clear!)
+  (try
+    (theme/register! {:name "My Theme"
+                      :themes [{:name "My Theme Dark"
+                                :mode :dark
+                                :colors {:background "#aa0000"}}]})
+    (theme/register! {:name "my-theme"
+                      :themes [{:name "My Theme Dark"
+                                :mode :dark
+                                :colors {:background "#00aa00"}}]})
+    (is (= 1 (count (theme/registered))))
+    (is (= "my-theme" (:name (first (theme/registered))))
+        "replacement keeps the slot and uses the new display name")
+    (is (= "#00aa00"
+           (get-in (theme/registered) [0 :themes 0 :colors "background"])))
+    (is (= "my-theme" (:name (theme/unregister! :my_theme))))
+    (is (empty? (theme/registered)))
+    (finally
+      (theme/clear!))))
+
+(deftest json-str-resolves-normalized-names
+  (theme/clear!)
+  (try
+    (theme/register! palette/catppuccin-violet)
+    (doseq [n ["Catppuccin Violet" "catppuccin-violet" :catppuccin_violet
+               "  Catppuccin   Violet  "]]
+      (let [parsed (json/read-str (theme/json-str n))]
+        (is (= "Catppuccin Violet" (get parsed "name")) n)
+        (is (= "#cba6f7"
+               (get-in parsed ["themes" 1 "colors" "primary.background"]))
+            n)))
+    (finally
+      (theme/clear!))))
+
+(deftest extra-theme-config-fields-are-kept
+  (let [s (theme/theme-set
+           {:name "Syntaxy"
+            :themes [{:name "Syntaxy Dark"
+                      :mode :dark
+                      :font-size 15
+                      :highlight {:editor.foreground "#cdd6f4"
+                                  :syntax {:comment {:color "#6c7086"}}}
+                      :colors {:background "#1e1e2e"}}]})
+        variant (first (:themes s))
+        parsed (json/read-str (theme/json-str s))]
+    (is (= 15 (:font.size variant)))
+    (is (= "#cdd6f4" (get-in variant [:highlight :editor.foreground])))
+    (is (= 15 (get-in parsed ["themes" 0 "font.size"])))
+    (is (= "#cdd6f4"
+           (get-in parsed ["themes" 0 "highlight" "editor.foreground"])))
+    (is (= "#6c7086"
+           (get-in parsed ["themes" 0 "highlight" "syntax" "comment" "color"])))))
+
+(deftest catppuccin-registers-on-theme-namespace-load
+  (theme/clear!)
+  (try
+    (require 'catppuccin-violet.theme :reload)
+    (is (= ["Catppuccin Violet"] (mapv :name (theme/registered))))
+    (is (= "Catppuccin Violet"
+           (get (json/read-str (theme/json-str :catppuccin-violet)) "name")))
+    (finally
+      (theme/clear!))))
+
+(deftest app-render-does-not-register
+  (require 'catppuccin-violet.app)
+  (theme/clear!)
+  (try
+    (let [tree ((requiring-resolve 'catppuccin-violet.app/app))]
+      (is (= :window (:type tree)))
+      (is (empty? (theme/registered))
+          "app [] must not register; catppuccin-violet.theme does at load"))
+    (finally
+      (theme/clear!))))
 
 (deftest register-order-is-wire-order
   (theme/clear!)

@@ -243,7 +243,7 @@ Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` onl
   (ui/vstack {:theme "Ayu Light" :flex 1 :padding 16} (ui/label "Canvas"))))
 ```
 
-Define a custom palette as JVM Clojure data (gpui-component ThemeSet keys such as `:primary.background`):
+Define a custom palette as JVM Clojure data (gpui-component color tokens such as `:primary.background`). `theme-set` validates `:name`, `:mode`, and hex `:colors`; other ThemeConfig keys (`:highlight`, `:font.family`, `:radius`, `:shadow`) are kept and sent with gpui-component's JSON names. Register once from a theme namespace (not from `app` on every render). Names match the host: `"My Theme"`, `"my-theme"`, and `:my_theme` are the same set.
 
 ```clojure
 (ns my.themes

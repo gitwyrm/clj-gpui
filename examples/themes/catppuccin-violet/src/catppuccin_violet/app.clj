@@ -1,8 +1,7 @@
 (ns catppuccin-violet.app
   "Custom gpui-component theme defined in Clojure, selected by :theme name."
-  (:require [catppuccin-violet.theme :as palette]
+  (:require [catppuccin-violet.theme]
             [gpui.ratom :as r]
-            [gpui.theme :as theme]
             [gpui.ui :as ui]))
 
 (def family "Catppuccin Violet")
@@ -19,7 +18,6 @@
   #(swap! !state assoc :choice name))
 
 (defn app []
-  (theme/register! palette/catppuccin-violet)
   (let [{:keys [choice draft done?]} @!state]
     (ui/window
      {:title "Catppuccin Violet"

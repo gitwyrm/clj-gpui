@@ -1,16 +1,19 @@
 (ns gpui.theme
   "Register gpui-component ThemeSets from ordinary Clojure data.
 
-  A ThemeSet is the same JSON object gpui-component uses on disk: `:name`,
-  optional `:author` / `:url`, and `:themes` (each with `:name`, `:mode`,
-  and `:colors`). Color keys are gpui-component tokens such as
-  `:primary.background` and `:sidebar.foreground`.
+  Required on each variant: `:name`, `:mode` (`:light` / `:dark`), and
+  `:colors` (gpui-component tokens such as `:primary.background` → hex).
+  Other ThemeConfig keys (`:highlight`, `:font.family`, `:font.size`,
+  `:radius`, `:shadow`, `:is_default`, …) are kept and serialized with
+  the same JSON field names gpui-component uses on disk.
 
   `(register!)` keeps sets in this process. The runtime sends them on each
   render; UI nodes still refer to a palette by `:theme` name (a string).
 
-  `(ui/themes)` remains the palettes *shipped* with clj-gpui. Use
-  `registered` / `available-names` for sets registered here."
+  Names are identified the same way as the host: trim, lowercase, treat
+  `-` / `_` as spaces, collapse whitespace. `(ui/themes)` remains the
+  palettes *shipped* with clj-gpui. Use `registered` / `available-names`
+  for sets registered here."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.java.io :as io]))
@@ -28,6 +31,27 @@
     (symbol? x) (name x)
     (nil? x) nil
     :else (str x)))
+
+(defn normalize-name
+  "Identity key for a theme name. Matches host `catalog::normalize`:
+  trim, lowercase, `-`/`_` → space, collapse whitespace.
+
+  Does not change the display `:name` stored on a ThemeSet."
+  [name]
+  (let [s (-> (or (as-str name) "")
+              str/trim
+              str/lower-case
+              (str/replace #"[_-]" " ")
+              str/trim)]
+    (->> (str/split s #"\s+")
+         (remove str/blank?)
+         (str/join " "))))
+
+(defn- name-key
+  [theme-set-or-name]
+  (normalize-name (if (map? theme-set-or-name)
+                    (:name theme-set-or-name)
+                    theme-set-or-name)))
 
 (defn- invalid!
   [k value hint]
@@ -48,6 +72,27 @@
       (invalid! :color x (str "theme color must be a hex string, got " (pr-str x))))
     (if (str/starts-with? s "#") s (str "#" s))))
 
+(defn- assert-usable-name
+  [n origin]
+  (when (str/blank? n)
+    (invalid! :name origin "theme :name is required"))
+  (when (#{"system" "light" "dark"} (normalize-name n))
+    (invalid! :name origin "theme :name cannot be :system, :light, or :dark")))
+
+(def ^:private config-field-aliases
+  "Kebab aliases → gpui-component ThemeConfig JSON field names."
+  {"font-size" "font.size"
+   "font-family" "font.family"
+   "mono-font-family" "mono_font.family"
+   "mono-font-size" "mono_font.size"
+   "radius-lg" "radius.lg"
+   "is-default" "is_default"})
+
+(defn- config-field-key
+  [k]
+  (let [s (as-str k)]
+    (get config-field-aliases s s)))
+
 (defn- normalize-colors
   [colors]
   (when-not (or (nil? colors) (map? colors))
@@ -56,31 +101,39 @@
         (for [[k v] colors]
           [(as-str k) (as-hex v)])))
 
+(defn- extra-config
+  [theme]
+  (into {}
+        (for [[k v] theme
+              :let [jk (config-field-key k)]
+              :when (and (some? v) (not (#{"name" "mode" "colors"} jk)))]
+          [(keyword jk) (if (= jk "is_default") (boolean v) v)])))
+
 (defn- normalize-theme
   [theme]
   (when-not (map? theme)
     (invalid! :theme theme "each ThemeSet :themes entry must be a map"))
   (let [n (as-str (:name theme))
         mode (as-mode (:mode theme))]
-    (when (str/blank? n)
-      (invalid! :name (:name theme) "theme :name is required"))
-    (cond-> {:name n
-             :mode mode
-             :colors (normalize-colors (or (:colors theme) {}))}
-      (contains? theme :is_default) (assoc :is_default (boolean (:is_default theme)))
-      (some? (:font-size theme)) (assoc :font.size (:font-size theme))
-      (some? (:font.size theme)) (assoc :font.size (:font.size theme)))))
+    (assert-usable-name n (:name theme))
+    (merge (extra-config theme)
+           {:name n
+            :mode mode
+            :colors (normalize-colors (or (:colors theme) {}))})))
 
 (defn theme-set
   "Return a gpui-component ThemeSet map. Throws `ex-info` with
-  `:gpui.theme/invalid` when required fields are missing."
+  `:gpui.theme/invalid` when required fields are missing.
+
+  Validates `:name`, `:mode`, and color hex values. Other ThemeConfig
+  fields are preserved under gpui-component's JSON names (`:font.size`,
+  `:highlight`, …)."
   [m]
   (when-not (map? m)
     (invalid! :theme-set m "theme-set must be a map"))
   (let [n (as-str (:name m))
         themes (mapv normalize-theme (:themes m))]
-    (when (str/blank? n)
-      (invalid! :name (:name m) "ThemeSet :name is required"))
+    (assert-usable-name n (:name m))
     (when (empty? themes)
       (invalid! :themes (:themes m) "ThemeSet :themes must contain at least one palette"))
     (cond-> {:name n
@@ -88,33 +141,30 @@
       (some? (:author m)) (assoc :author (as-str (:author m)))
       (some? (:url m)) (assoc :url (as-str (:url m))))))
 
-(defn- set-key
-  [theme-set]
-  (str/lower-case (as-str (:name theme-set))))
-
 (defn register!
-  "Remember a ThemeSet for the native host. Replaces a previous set with
-  the same `:name` (same slot). Does not request a render; the next
-  export includes it.
+  "Remember a ThemeSet for the native host. Replaces a previous set whose
+  `:name` normalizes to the same key (same slot). Does not request a
+  render; the next export includes it.
 
-  Call this from application code (often at the top of a theme namespace
-  so `:reload` picks up edits)."
+  Call this from a theme namespace so `:reload` of that namespace picks
+  up palette edits. Do not call it from `app` on every render."
   [m]
   (let [s (theme-set m)
-        k (set-key s)]
+        k (name-key s)]
     (swap! registry*
            (fn [xs]
-             (if (some #(= k (set-key %)) xs)
-               (mapv #(if (= k (set-key %)) s %) xs)
+             (if (some #(= k (name-key %)) xs)
+               (mapv #(if (= k (name-key %)) s %) xs)
                (conj xs s))))
     s))
 
 (defn unregister!
-  "Drop a previously registered ThemeSet by its `:name`."
+  "Drop a previously registered ThemeSet by its `:name` (any spelling
+  the host would treat as the same name)."
   [name]
-  (let [k (str/lower-case (as-str name))
-        dropped (some #(when (= k (set-key %)) %) @registry*)]
-    (swap! registry* (fn [xs] (filterv #(not= k (set-key %)) xs)))
+  (let [k (name-key name)
+        dropped (some #(when (= k (name-key %)) %) @registry*)]
+    (swap! registry* (fn [xs] (filterv #(not= k (name-key %)) xs)))
     dropped))
 
 (defn clear!
@@ -149,8 +199,8 @@
   [theme-set-or-name]
   (if (map? theme-set-or-name)
     (theme-set theme-set-or-name)
-    (or (some #(when (= (str/lower-case (as-str theme-set-or-name))
-                        (set-key %))
+    (or (some #(when (= (name-key theme-set-or-name)
+                        (name-key %))
                  %)
               @registry*)
         (invalid! :name theme-set-or-name "unknown registered ThemeSet"))))

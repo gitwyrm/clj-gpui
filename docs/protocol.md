@@ -49,7 +49,7 @@ Response:
 {"op":"response","id":1,"ok":true,"tree":{…},"themes":[]}
 ```
 
-`themes` is always an array of gpui-component ThemeSet objects registered in the Clojure process (`gpui.theme/register!`). `[]` means the host should drop previously installed Clojure ThemeSets. UI nodes still name a palette with the string `theme` field; they do not embed the color map.
+`themes` is always an array of ThemeSet objects registered in the Clojure process (`gpui.theme/register!`). Each set is gpui-component JSON: required `name` / `mode` / `colors`, plus any other ThemeConfig fields Clojure preserved (`highlight`, `font.size`, …). `[]` means the host should drop previously installed Clojure ThemeSets. UI nodes still name a palette with the string `theme` field; they do not embed the color map.
 
 On an application exception Clojure still returns `ok: true` with an error UI tree so the window can paint.
 
@@ -129,7 +129,7 @@ Put `:theme` on **any** node. The host does not choose a theme on its own:
 * a **named palette** such as `"Tokyo Night"` or `:ayu-light` calls gpui-component `Theme::apply_config` with that [theme](https://longbridge.github.io/gpui-component/docs/theme)
 * a **custom ThemeSet** registered from Clojure (or loaded from JSON) is also a name: the variant (`"Catppuccin Violet Dark"`) pins that config; the family (`"Catppuccin Violet"`) picks the light or dark member from OS appearance
 
-The host matches names case-insensitively and treats `-` / `_` as spaces, so `:tokyo-night`, `"tokyo night"`, and `"Tokyo Night"` are the same palette.
+The host matches names case-insensitively and treats `-` / `_` as spaces, so `:tokyo-night`, `"tokyo night"`, and `"Tokyo Night"` are the same palette. Clojure `gpui.theme` uses that same identity for `register!` / `unregister!` / `json-str`.
 
 Lookup order (first match wins): Clojure `:themes` on the render response, then `CLJ_GPUI_THEMES`, then `./themes`, then bundled JSON, then ThemeRegistry (`Default Light` / `Default Dark`). JSON directories are cached by file mtime; a change on disk is picked up on the next lookup. Duplicate variant names are deterministic: first ThemeSet in the Clojure array, then JSON files in sorted path order.
 

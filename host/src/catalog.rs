@@ -393,6 +393,20 @@ mod tests {
     }
 
     #[test]
+    fn name_normalization_collapses_hyphens_underscores_and_space() {
+        assert_eq!(normalize("My Theme"), "my theme");
+        assert_eq!(normalize("my-theme"), "my theme");
+        assert_eq!(normalize("my_theme"), "my theme");
+        assert_eq!(normalize("  My   Theme  "), "my theme");
+        assert_eq!(normalize("Tokyo_Night"), "tokyo night");
+        assert_eq!(normalize("Catppuccin Violet"), "catppuccin violet");
+        assert_eq!(normalize("catppuccin-violet"), "catppuccin violet");
+        assert_eq!(is_appearance("Light"), true);
+        assert_eq!(is_appearance("  SYSTEM  "), true);
+        assert_eq!(is_appearance("my-theme"), false);
+    }
+
+    #[test]
     fn kebab_and_underscores_match_display_names() {
         let catalog = Catalog::bundled();
         assert_eq!(
