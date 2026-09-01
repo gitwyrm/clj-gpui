@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **2**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **3**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **2**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":2,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":3,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -32,6 +32,25 @@ Sent when an `r/atom` changes, a file watcher reloads, or `gpui.ui/request-rende
 ```json
 {"op":"request-render"}
 ```
+
+### `pick-directory` (Clojure → host)
+
+Ask the host to show a native folder picker. Does not block Clojure. The host later issues `directory-picked`.
+
+```json
+{"op":"pick-directory","request-id":"pick-1","title":"Choose a folder"}
+```
+
+On Linux the host uses the xdg desktop portal, then `zenity --file-selection --directory` if the portal is missing.
+
+### `reveal-path` / `open-path` (Clojure → host)
+
+```json
+{"op":"reveal-path","path":"/Users/me/Documents"}
+{"op":"open-path","path":"/Users/me/Documents"}
+```
+
+`reveal-path` shows the path in Finder / the file manager. `open-path` opens it with the system handler. No reply.
 
 ## Host → Clojure ops
 
@@ -77,19 +96,29 @@ Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments
 
 `(require ns :reload)` of `gpui.ui`, `gpui.core`, `gpui.ratom`, `gpui.theme`, every watched application `.clj` namespace, and the root app namespace. Helper namespaces are reloaded before the root; `(require app :reload)` alone does not reload already-loaded deps. `defonce` / `r/atom` bindings are kept. Response includes a fresh `tree` and the current `:themes` array. A compile/syntax error still returns `ok: true` with an error UI tree so the window stays up.
 
-## Node schema (version 2)
+### `directory-picked`
+
+Result of `pick-directory`. `path` is set when the user chose a folder. `cancelled` is true if they dismissed the dialog. `error` is a string when the dialog could not be shown.
+
+```json
+{"op":"directory-picked","id":4,"request-id":"pick-1","path":"/tmp","cancelled":false}
+```
+
+Clojure invokes the `gpui.platform/pick-directory` callback. It does not automatically re-export the tree; a typical handler `swap!`s an `r/atom`.
+
+## Node schema (version 3)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
-|---|---|---|
+|---|---|
 | `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`) |
 | `id` | string | optional stable identity, especially `text-field` |
 | `text` | string | `label`, `button`, `checkbox`, `text-field` (current value) |
 | `placeholder` | string | `text-field` |
 | `children` | array of nodes | layouts, `scroll` |
-| `on-click` | string callback id | `button`, `checkbox` |
-| `on-double-click` | string callback id | `label` (0-arg) |
+| `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack` |
+| `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
 | `on-change` | string callback id | `text-field` (called with the field string) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `on-blur` | string callback id | `text-field` (called with the field string) |

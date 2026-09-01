@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  2)
+  3)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -145,7 +145,7 @@
   (ui/label \"Hello\")
   (ui/label \"Hello\" {:font-size 20 :font-weight :bold})
   (ui/label \"todos\" {:font-family \".SystemUIFont\" :font-weight :light})
-  (ui/label title {:on-double-click #(start-edit item)})"
+  (ui/label title {:on-click #(enter item) :on-double-click #(start-edit item)})"
   ([text]
    {:type :label :text (str text)})
   ([text style]
