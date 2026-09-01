@@ -1,0 +1,6 @@
+Catppuccin Violet in this example is adapted from
+
+    https://github.com/gitwyrm/utility_belt_gpui  (src/theme.rs)
+
+which is dual-licensed MIT OR Apache-2.0. clj-gpui does not depend on that
+crate at runtime; the palette is ordinary Clojure data in `theme.clj`.

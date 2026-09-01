@@ -1,3 +1,4 @@
+use crate::catalog;
 use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
@@ -48,7 +49,7 @@ fn rpc(
         .context("timed out waiting for Clojure to answer")
 }
 
-fn parse_tree(value: &Value) -> Result<Node> {
+fn parse_tree(value: &Value) -> Result<(Node, Vec<gpui_component::theme::ThemeSet>)> {
     if !value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         let err = value
             .get("error")
@@ -59,7 +60,9 @@ fn parse_tree(value: &Value) -> Result<Node> {
     let tree = value
         .get("tree")
         .context("Clojure response missing :tree")?;
-    serde_json::from_value(tree.clone()).context("invalid UI tree from Clojure")
+    let node = serde_json::from_value(tree.clone()).context("invalid UI tree from Clojure")?;
+    let themes = catalog::theme_sets_from_value(value.get("themes"));
+    Ok((node, themes))
 }
 
 fn connect_to_clojure() -> Result<TcpStream> {
@@ -180,7 +183,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         Cmd::Shutdown => break,
                         Cmd::Render => rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                             .and_then(|value| parse_tree(&value))
-                            .map(|node| HostEvent::Tree(node, None)),
+                            .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
                         Cmd::Callback { id, value, seq } => {
                             let mut request = json!({"op": "callback", "callback-id": id});
                             if let Some(value) = value {
@@ -196,11 +199,11 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                                 })
                                 .and_then(|value| parse_tree(&value))
-                                .map(|node| HostEvent::Tree(node, seq))
+                                .map(|(node, themes)| HostEvent::Tree(node, seq, themes))
                         }
                         Cmd::Reload => rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
                             .and_then(|value| parse_tree(&value))
-                            .map(|node| HostEvent::Tree(node, None)),
+                            .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
                     };
                     match result {
                         Ok(event) => {
@@ -235,7 +238,7 @@ pub fn protocol_test() -> Result<()> {
     let mut tree = None;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t, _)) => {
+            Ok(HostEvent::Tree(t, _, _)) => {
                 tree = Some(t);
                 break;
             }
@@ -268,7 +271,7 @@ pub fn protocol_test() -> Result<()> {
     let mut updated = None;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t, _)) => {
+            Ok(HostEvent::Tree(t, _, _)) => {
                 updated = Some(t);
                 break;
             }
@@ -288,7 +291,7 @@ pub fn protocol_test() -> Result<()> {
     let mut reloaded = false;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t, _)) => {
+            Ok(HostEvent::Tree(t, _, _)) => {
                 if t.contains_text("Count: 1") {
                     reloaded = true;
                     break;

@@ -9,6 +9,7 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [gpui.theme :as theme]
             [gpui.ui :as ui])
   (:import [java.io BufferedReader PushbackReader]
            [java.nio.charset StandardCharsets]))
@@ -302,6 +303,7 @@
        (require-reload! 'gpui.ui)
        (require-reload! 'gpui.core)
        (require-reload! 'gpui.ratom)
+       (require-reload! 'gpui.theme)
        (require-reload! app)
        (load-app!)
        {:ok true :ns (str app)})
@@ -376,12 +378,19 @@
     (let [id (:id msg)
           op (:op msg)
           result (case op
-                   "render" {:ok true :tree (export-tree)}
+                   "render" {:ok true
+                             :tree (export-tree)
+                             :themes (theme/wire-sets)}
                    "callback" (invoke-callback! (:callback-id msg) (:value msg))
                    "reload" (try
-                              (assoc (reload-app!) :ok true :tree (export-tree))
+                              (assoc (reload-app!)
+                                     :ok true
+                                     :tree (export-tree)
+                                     :themes (theme/wire-sets))
                               (catch Exception _
-                                {:ok true :tree (export-tree)}))
+                                {:ok true
+                                 :tree (export-tree)
+                                 :themes (theme/wire-sets)}))
                    {:ok false :error (str "unknown op: " op)})]
       (send! (cond-> result
                id (assoc :id id)

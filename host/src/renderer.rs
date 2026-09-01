@@ -75,7 +75,8 @@ impl RootView {
                             view.nrepl_port = nrepl_port;
                             view.status = format!("nREPL 127.0.0.1:{nrepl_port} · connected");
                         }
-                        HostEvent::Tree(tree, seq) => {
+                        HostEvent::Tree(tree, seq, themes) => {
+                            catalog::install_clojure_sets(themes);
                             view.tree = Some(tree);
                             view.tree_seq = seq;
                             view.error = None;
@@ -681,7 +682,7 @@ fn resolve_theme(node: &Node, window: &Window, cx: &App) -> Option<ThemeApply> {
         };
         Some(ThemeApply::Appearance(mode))
     } else {
-        match catalog::lookup(pref, cx) {
+        match catalog::lookup(pref, ThemeMode::from(window.appearance()), cx) {
             Some(config) => Some(ThemeApply::Named(config)),
             None => {
                 eprintln!("[host] unknown gpui-component theme {pref:?}; keeping current");
@@ -702,7 +703,7 @@ fn apply_theme_pref(pref: &str, window: &Window, cx: &mut App) {
         Theme::change(mode, None, cx);
         return;
     }
-    match catalog::lookup(pref, cx) {
+    match catalog::lookup(pref, ThemeMode::from(window.appearance()), cx) {
         Some(config) => {
             let already =
                 catalog::names_equal(Theme::global(cx).theme_name(), config.name.as_ref());

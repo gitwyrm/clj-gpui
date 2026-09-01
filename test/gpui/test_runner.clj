@@ -4,6 +4,7 @@
             [gpui.dev-test]
             [gpui.ratom-test]
             [gpui.runtime-test]
+            [gpui.theme-test]
             [gpui.ui-test]))
 
 (defn -main [& _]

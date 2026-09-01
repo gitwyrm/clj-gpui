@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  1)
+  2)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -59,7 +59,10 @@
    "Twilight"])
 
 (def themes
-  "Values accepted by `:theme`: appearance (`system`/`light`/`dark`) and named palettes."
+  "Appearance keywords plus palettes *shipped* with clj-gpui.
+
+  Custom ThemeSets from `(gpui.theme/register!)` or JSON directories are
+  selected by the same `:theme` string, but they are not listed here."
   (into ["system" "light" "dark"] named-themes))
 
 (def ^:const ratom-watch-key
@@ -175,7 +178,8 @@
   any nested node, so different parts of the app can use different themes.
   Appearance is `:system` (follow the OS), `:light`, or `:dark`. A named
   gpui-component palette is a string such as `\"Tokyo Night\"` (kebab
-  `:tokyo-night` is the same name). See `themes` / `named-themes`.
+  `:tokyo-night` is the same name). Custom ThemeSets registered with
+  `gpui.theme/register!` are also names. See `themes` / `named-themes`.
 
   (ui/window
     {:title \"Todos\" :chrome :app :width 640 :height 820 :theme \"Tokyo Night\"}
@@ -202,7 +206,8 @@
 
   `:theme :system`, `:light`, or `:dark` is appearance, not window chrome.
   A named gpui-component palette (`\"Tokyo Night\"`, `:ayu-light`) is also
-  a style. It can sit on this stack, on `ui/window`, or on any other node.
+  a style, as is a custom ThemeSet registered with `gpui.theme/register!`.
+  It can sit on this stack, on `ui/window`, or on any other node.
   `:system` (the default when omitted) follows the OS appearance.
 
   (ui/vstack {:theme \"Tokyo Night\" :gap 8 :padding 16}

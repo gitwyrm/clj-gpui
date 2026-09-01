@@ -1,6 +1,7 @@
+use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 
-pub const PROTOCOL_VERSION: u64 = 1;
+pub const PROTOCOL_VERSION: u64 = 2;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Node {
@@ -60,8 +61,8 @@ pub struct Node {
     pub font_family: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
-    /// Any node: `"system"` (default), `"light"`, `"dark"`, or a gpui-component
-    /// palette name such as `"Tokyo Night"`. Nested nodes scope that subtree.
+    /// Any node: `"system"` (default), `"light"`, `"dark"`, a gpui-component
+    /// palette name such as `"Tokyo Night"`, or a custom ThemeSet / variant name.
     #[serde(default)]
     pub theme: Option<String>,
     /// Native window title. Omitted keeps `clj-gpui`.
@@ -136,6 +137,7 @@ pub enum HostEvent {
         app: String,
     },
     /// `callback_seq` is `Some` when this tree was fetched right after that submit.
-    Tree(Node, Option<u64>),
+    /// `themes` is Clojure-registered ThemeSets from the render response.
+    Tree(Node, Option<u64>, Vec<ThemeSet>),
     Error(String),
 }

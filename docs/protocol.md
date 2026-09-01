@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **1**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **2**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **1**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":1,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":2,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -46,8 +46,10 @@ Each request includes a unique numeric `id`. Clojure echoes it on the response.
 Response:
 
 ```json
-{"op":"response","id":1,"ok":true,"tree":{…}}
+{"op":"response","id":1,"ok":true,"tree":{…},"themes":[]}
 ```
+
+`themes` is always an array of gpui-component ThemeSet objects registered in the Clojure process (`gpui.theme/register!`). `[]` means the host should drop previously installed Clojure ThemeSets. UI nodes still name a palette with the string `theme` field; they do not embed the color map.
 
 On an application exception Clojure still returns `ok: true` with an error UI tree so the window can paint.
 
@@ -73,9 +75,9 @@ Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments
 {"op":"reload","id":3}
 ```
 
-`(require ns :reload)` of `gpui.ui`, `gpui.core`, `gpui.ratom`, every watched application `.clj` namespace, and the root app namespace. Helper namespaces are reloaded before the root; `(require app :reload)` alone does not reload already-loaded deps. `defonce` / `r/atom` bindings are kept. Response includes a fresh `tree`. A compile/syntax error still returns `ok: true` with an error UI tree so the window stays up.
+`(require ns :reload)` of `gpui.ui`, `gpui.core`, `gpui.ratom`, `gpui.theme`, every watched application `.clj` namespace, and the root app namespace. Helper namespaces are reloaded before the root; `(require app :reload)` alone does not reload already-loaded deps. `defonce` / `r/atom` bindings are kept. Response includes a fresh `tree` and the current `:themes` array. A compile/syntax error still returns `ok: true` with an error UI tree so the window stays up.
 
-## Node schema (version 1)
+## Node schema (version 2)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
@@ -108,7 +110,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-family` | string | text (e.g. `.SystemUIFont`) |
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
-| `theme` | string | any node: `system` (default), `light`, `dark`, or a gpui-component palette name such as `Tokyo Night` (kebab `tokyo-night` is the same). Nested nodes scope that subtree |
+| `theme` | string | any node: `system` (default), `light`, `dark`, a shipped gpui-component palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
 | `title` | string | `window` (or any root): native window title (default `clj-gpui`) |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
@@ -124,11 +126,14 @@ Put `:theme` on **any** node. The host does not choose a theme on its own:
 * `:system` (default if omitted) follows the OS appearance, including later changes, using gpui-component Default Light / Default Dark
 * `:light` pins Default Light for that subtree
 * `:dark` pins Default Dark for that subtree
-* a **named palette** such as `"Tokyo Night"` or `:ayu-light` calls gpui-component `Theme::apply_config` with that [theme](https://longbridge.github.io/gpui-component/docs/theme) (bundled JSON under `host/themes/`, plus `Default Light` / `Default Dark` from the crate)
+* a **named palette** such as `"Tokyo Night"` or `:ayu-light` calls gpui-component `Theme::apply_config` with that [theme](https://longbridge.github.io/gpui-component/docs/theme)
+* a **custom ThemeSet** registered from Clojure (or loaded from JSON) is also a name: the variant (`"Catppuccin Violet Dark"`) pins that config; the family (`"Catppuccin Violet"`) picks the light or dark member from OS appearance
 
 The host matches names case-insensitively and treats `-` / `_` as spaces, so `:tokyo-night`, `"tokyo night"`, and `"Tokyo Night"` are the same palette.
 
-Drop extra gpui-component theme-set JSON files in a `themes/` directory next to the process working directory, or in `CLJ_GPUI_THEMES`. Those override bundled names.
+Lookup order (first match wins): Clojure `:themes` on the render response, then `CLJ_GPUI_THEMES`, then `./themes`, then bundled JSON, then ThemeRegistry (`Default Light` / `Default Dark`). JSON directories are cached by file mtime; a change on disk is picked up on the next lookup. Duplicate variant names are deterministic: first ThemeSet in the Clojure array, then JSON files in sorted path order.
+
+Drop extra gpui-component theme-set JSON files in a `themes/` directory next to the process working directory, or in `CLJ_GPUI_THEMES`. Those override bundled names. Clojure-registered sets override JSON.
 
 A nested `:theme` wraps that subtree during layout and paint so siblings keep their own theme. The footer / waiting state follow the **root** node's `:theme` (usually the `window`).
 

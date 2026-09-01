@@ -33,6 +33,9 @@ cd examples/counter && clj -M:dev
 
 # Classic TodoMVC (light card, Enter to add)
 cd examples/todomvc && clj -M:dev
+
+# Custom ThemeSet defined in Clojure (Catppuccin Violet)
+cd examples/themes/catppuccin-violet && clj -M:dev
 ```
 
 Or from the repo root:
@@ -185,6 +188,7 @@ The native host is ordinary Rust: `cargo fmt` in `host/` if you touch it.
 deps.edn                      ; git-dep library entry
 .cljfmt.edn                   ; cljfmt paths and community indentation
 src/gpui/ui.clj               ; public widgets
+src/gpui/theme.clj            ; register custom gpui-component ThemeSets
 src/gpui/ratom.clj            ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
@@ -193,6 +197,7 @@ host/                         ; native GPUI + gpui-component host
 host/themes/                  ; bundled gpui-component palettes (Tokyo Night, Ayu, …)
 examples/counter/             ; plain counter
 examples/todomvc/             ; classic TodoMVC layout
+examples/themes/              ; custom ThemeSet (Catppuccin Violet)
 template/                     ; copyable app skeleton
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
@@ -217,7 +222,11 @@ docs/protocol.md
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
 
-`:theme` is a style on any node. Appearance is `:system` (follow the OS, the default), `:light`, or `:dark` — those pin gpui-component's Default Light / Default Dark. A **named palette** is a gpui-component theme: `"Tokyo Night"`, `:ayu-light`, `"Catppuccin Mocha"`. Names match case-insensitively; `-` and `_` are spaces. `ui/themes` lists every name the host ships.
+`:theme` is a style on any node. Three kinds of value:
+
+* **Appearance** — `:system` (follow the OS, the default), `:light`, or `:dark`. Those pin gpui-component's Default Light / Default Dark.
+* **Named palettes** — a gpui-component theme the host ships: `"Tokyo Night"`, `:ayu-light`, `"Catppuccin Mocha"`. Names match case-insensitively; `-` and `_` are spaces. `ui/themes` is that shipped list plus appearance keywords. It does not include custom themes.
+* **Custom ThemeSets** — ordinary Clojure maps registered with `gpui.theme/register!`, then referenced by name. A **family** name (`"Catppuccin Violet"`) picks the light or dark member from OS appearance. A **variant** name (`"Catppuccin Violet Dark"`) pins that config.
 
 ```clojure
 (ui/window
@@ -234,7 +243,30 @@ Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` onl
   (ui/vstack {:theme "Ayu Light" :flex 1 :padding 16} (ui/label "Canvas"))))
 ```
 
-Put extra theme-set JSON (same schema as [gpui-component themes](https://longbridge.github.io/gpui-component/docs/theme)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Hex `:bg` / `:color` still win on that node when you set them.
+Define a custom palette as JVM Clojure data (gpui-component ThemeSet keys such as `:primary.background`):
+
+```clojure
+(ns my.themes
+  (:require [gpui.theme :as theme]))
+
+(def mine
+  (theme/theme-set
+   {:name "Mine"
+    :themes [{:name "Mine Light" :mode :light :colors {:background "#eff1f5"
+                                                       :primary.background "#7c3aed"}}
+             {:name "Mine Dark" :mode :dark :colors {:background "#1e1e2e"
+                                                     :primary.background "#cba6f7"}}]}))
+
+(theme/register! mine)
+
+;; in app:
+(ui/window {:theme "Mine Dark"} ...)
+;; or {:theme "Mine"} to follow OS light/dark within this pair
+```
+
+See `examples/themes/catppuccin-violet` for a full pair ported from [utility_belt_gpui](https://github.com/gitwyrm/utility_belt_gpui) `src/theme.rs` (MIT OR Apache-2.0). That crate is not a runtime dependency.
+
+JSON still works: put extra theme-set files (same schema as [gpui-component themes](https://longbridge.github.io/gpui-component/docs/theme)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Clojure-registered sets override JSON. Hex `:bg` / `:color` still win on that node when you set them.
 
 `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
@@ -263,4 +295,4 @@ Put extra theme-set JSON (same schema as [gpui-component themes](https://longbri
 
 ## License
 
-MIT, unless a later commit says otherwise. GPUI is Apache-2.0. Bundled palettes under `host/themes/` come from gpui-component (Apache-2.0).
+MIT, unless a later commit says otherwise. GPUI is Apache-2.0. Bundled palettes under `host/themes/` come from gpui-component (Apache-2.0). The Catppuccin Violet example is adapted from utility_belt_gpui (MIT OR Apache-2.0).
