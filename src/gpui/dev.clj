@@ -8,14 +8,19 @@
 
   The host is built with Cargo on first use when `host/` is present
   (this repo, a git dep checkout, or CLJ_GPUI_ROOT)."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [gpui.runtime :as runtime])
   (:import [java.io BufferedReader InputStreamReader OutputStreamWriter]
+           [java.lang ProcessBuilder$Redirect]
            [java.net ServerSocket]
            [java.nio.charset StandardCharsets]
            [java.util ArrayList]))
 
 (set! *warn-on-reflection* true)
+
+(def ^:private host-bin-names
+  ["clj-gpui" "clj-gpui.exe"])
 
 (defn- env
   ([k] (env k nil))
@@ -37,10 +42,62 @@
         (catch Exception _
           nil)))))
 
-(defn- host-candidates
-  [^java.io.File root]
-  [(io/file root "host" "target" "release" "clj-gpui")
-   (io/file root "host" "target" "debug" "clj-gpui")])
+(defn- cargo-target-dir
+  "Ask Cargo where artifacts go (honours CARGO_TARGET_DIR and config)."
+  ^java.io.File [^java.io.File host-dir]
+  (try
+    (let [args (doto (ArrayList.)
+                 (.add "cargo")
+                 (.add "metadata")
+                 (.add "--format-version")
+                 (.add "1")
+                 (.add "--no-deps"))
+          pb (doto (ProcessBuilder. args)
+               (.directory host-dir)
+               (.redirectError ProcessBuilder$Redirect/DISCARD))
+          ^Process proc (.start pb)
+          out (slurp (.getInputStream proc))
+          code (.waitFor proc)]
+      (when (zero? code)
+        (when-let [dir (get (json/read-str out) "target_directory")]
+          (io/file dir))))
+    (catch Exception _
+      nil)))
+
+(defn- profile-bins
+  [^java.io.File dir]
+  (mapcat (fn [name]
+            [(io/file dir "release" name)
+             (io/file dir "debug" name)])
+          host-bin-names))
+
+(defn host-binary-candidates
+  "Possible Cargo output paths for the clj-gpui host.
+
+  Includes `target/release`, `target/debug`, and `target/<triple>/{release,debug}`
+  so a `[build] target` in `.cargo/config.toml` or `CARGO_BUILD_TARGET` still
+  resolves after `cargo build --release`."
+  [^java.io.File target-dir]
+  (let [triple (env "CARGO_BUILD_TARGET")
+        children (when (and target-dir (.isDirectory target-dir))
+                   (filterv #(.isDirectory ^java.io.File %)
+                            (or (.listFiles target-dir) (into-array java.io.File []))))]
+    (->> (concat
+          (when (seq triple)
+            (profile-bins (io/file target-dir triple)))
+          (profile-bins target-dir)
+          (mapcat profile-bins children))
+         (filter some?)
+         distinct
+         vec)))
+
+(defn locate-host-binary
+  "Return the first executable clj-gpui host under a Cargo target directory."
+  ^java.io.File [^java.io.File target-dir]
+  (when target-dir
+    (first (filter (fn [^java.io.File f]
+                     (and (.isFile f) (.canExecute f)))
+                   (host-binary-candidates target-dir)))))
 
 (defn- build-host!
   [^java.io.File root]
@@ -71,12 +128,19 @@
         (throw (ex-info (str "CLJ_GPUI_BIN is not executable: " explicit) {})))
       f)
     (let [^java.io.File root (or (library-root)
-                                 (throw (ex-info "Could not locate clj-gpui. Set CLJ_GPUI_ROOT or CLJ_GPUI_BIN." {})))]
-      (or (first (filter #(.canExecute ^java.io.File %) (host-candidates root)))
+                                 (throw (ex-info "Could not locate clj-gpui. Set CLJ_GPUI_ROOT or CLJ_GPUI_BIN." {})))
+          host-dir (io/file root "host")
+          target-dir (or (cargo-target-dir host-dir) (io/file host-dir "target"))]
+      (or (locate-host-binary target-dir)
           (do (build-host! root)
-              (or (first (filter #(.canExecute ^java.io.File %) (host-candidates root)))
-                  (throw (ex-info "Host build succeeded but clj-gpui binary was not found."
-                                  {:root (.getPath root)}))))))))
+              (let [target-dir (or (cargo-target-dir host-dir) target-dir)]
+                (or (locate-host-binary target-dir)
+                    (throw (ex-info (str "Host build succeeded but clj-gpui binary was not found under "
+                                         (.getPath target-dir)
+                                         ". Cargo may have written a different name; set CLJ_GPUI_BIN.")
+                                    {:target-dir (.getPath target-dir)
+                                     :candidates (mapv #(.getPath ^java.io.File %)
+                                                       (host-binary-candidates target-dir))})))))))))
 
 (defn- spawn-host!
   [^java.io.File exe port protocol-test?]
@@ -90,7 +154,7 @@
     (.put env-map "CLJ_GPUI_HOST" "127.0.0.1")
     (when-let [icd (env "VK_ICD_FILENAMES")]
       (.put env-map "VK_ICD_FILENAMES" icd))
-    (println (str "[clj-gpui] starting host " (.getName exe)))
+    (println (str "[clj-gpui] starting host " (.getPath exe)))
     (.start pb)))
 
 (defn- parse-args

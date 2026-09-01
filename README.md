@@ -34,7 +34,7 @@ Or from the repo root:
 ./scripts/run.sh
 ```
 
-On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. GPUI and its GPU stack take a while to compile once.
+On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. GPUI and its GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`.
 
 ![clj-gpui native window](docs/screenshot.png)
 

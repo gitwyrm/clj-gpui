@@ -1,6 +1,7 @@
 (ns gpui.test-runner
   (:require [clojure.test :as t]
             [gpui.core-test]
+            [gpui.dev-test]
             [gpui.ratom-test]
             [gpui.ui-test]))
 
