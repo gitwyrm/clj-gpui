@@ -192,7 +192,11 @@ src/gpui/theme.clj            ; register custom gpui-component ThemeSets
 src/gpui/ratom.clj            ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
-src/gpui/dev.clj              ; Clojure-first launcher
+src/gpui/host.clj             ; locate/build/spawn the native host
+src/gpui/dev.clj              ; development launcher (nREPL, watcher, Cargo)
+src/gpui/prod.clj             ; production launcher (no nREPL/watcher/Cargo)
+src/gpui/platform.clj         ; folder picker, reveal/open path
+src/gpui/package.clj          ; `clj -X:build package`
 host/                         ; native GPUI + gpui-component host
 host/themes/                  ; bundled gpui-component palettes (Tokyo Night, Ayu, …)
 examples/counter/             ; plain counter
@@ -221,6 +225,22 @@ docs/protocol.md
 ```
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+
+Native platform actions (folder picker, reveal in Finder / the file manager) live in `[gpui.platform :as platform]`:
+
+```clojure
+(platform/pick-directory
+ {:title "Choose a folder"}
+ (fn [{:keys [path cancelled error]}]
+   (when path (swap! !state assoc :root path))))
+
+(platform/reveal-path! "/tmp")
+(platform/open-path! "/tmp")
+```
+
+`pick-directory` is asynchronous: it returns immediately and later calls `on-result`. On Linux the host uses the desktop portal, then `zenity` if the portal is unavailable.
+
+Labels, `vstack`, and `hstack` accept `:on-click` (0-arg), so a list row can be a clickable stack.
 
 `:theme` is a style on any node. Three kinds of value:
 
@@ -276,7 +296,8 @@ JSON still works: put extra theme-set files (same schema as [gpui-component them
 |---|---|
 | `CLJ_GPUI_BIN` | Path to a `clj-gpui` executable, skipping Cargo |
 | `CLJ_GPUI_ROOT` | Library checkout containing `host/` |
-| `CLJ_GPUI_PORT` | Set by `gpui.dev` for the host (do not set yourself) |
+| `CLJ_GPUI_APP_HOME` | Directory of the bundled host (set by packaged launchers) |
+| `CLJ_GPUI_PORT` | Set by `gpui.dev` / `gpui.prod` for the host (do not set yourself) |
 | `CLJ_GPUI_HOST` | TCP host for the host process, default `127.0.0.1` |
 | `CLJ_GPUI_APP` | Root var if not passed to `gpui.dev` |
 | `CLJ_GPUI_SRC` | Directory the watcher scans, default `src` |
@@ -291,7 +312,60 @@ JSON still works: put extra theme-set files (same schema as [gpui-component them
 * **gpui-component Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
-* **Packaging** is not solved: you still need a JRE plus the GPUI binary. Git deps; no Clojars or host binary downloads yet.
+* **Packaging** is native-only (macOS `.app` on macOS, AppImage/deb on Linux). See [Packaging](#packaging).
+
+## Packaging
+
+A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo.
+
+In the application repo, add `gpui.edn`:
+
+```clojure
+{:name "my-app"
+ :version "0.1.0"
+ :main my.app/app
+ :id "com.example.my-app"
+ :icon "resources/icon.png"
+ :title "My App"
+ :description "A native GPUI application"}
+```
+
+and a `:build` alias that puts tools.build on the classpath **without** replacing project deps (`:extra-deps`, used with `-X`):
+
+```clojure
+:aliases
+{:dev {:main-opts ["-m" "gpui.dev" "my.app/app"]}
+ :build {:extra-deps {io.github.clojure/tools.build {:mvn/version "0.10.10"}}
+         :ns-default gpui.package
+         :exec-fn gpui.package/package}}
+```
+
+Then, on the target OS:
+
+```bash
+clj -X:build package
+```
+
+Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the project deps must stay on the classpath. `-T` would replace them. `clj -X:build` with `:exec-fn gpui.package/package` is the same default.
+
+| Host OS | Output under `target/package/` |
+|---|---|
+| macOS | `Name.app` |
+| Linux | `name-version-<arch>.AppImage` and `name_version_<arch>.deb` |
+
+The `.app` / AppImage / `.deb` include a jlink JRE, the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+
+Other tasks: `clj -X:build uberjar`, `clj -X:build host`, `clj -X:build jre`.
+
+macOS codesigning / notarization is not done by `package`. After a local `.app` exists:
+
+```bash
+codesign --deep --force --sign - MyApp.app          # ad-hoc, local
+# later, with a Developer ID:
+codesign --deep --force --options runtime --sign "Developer ID Application: …" MyApp.app
+xcrun notarytool submit MyApp.app --wait --keychain-profile "notary"
+xcrun stapler staple MyApp.app
+```
 
 ## License
 
