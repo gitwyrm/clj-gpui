@@ -15,7 +15,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -42,8 +41,6 @@ const BUNDLED_JSON: &[&str] = &[
     include_str!("../themes/twilight.json"),
 ];
 
-static JSON_PARSE_COUNT: AtomicUsize = AtomicUsize::new(0);
-
 pub fn normalize(name: &str) -> String {
     name.trim()
         .to_lowercase()
@@ -59,20 +56,6 @@ pub fn names_equal(a: impl AsRef<str>, b: impl AsRef<str>) -> bool {
 
 pub fn is_appearance(pref: &str) -> bool {
     matches!(normalize(pref).as_str(), "" | "system" | "light" | "dark")
-}
-
-fn parse_count_add(n: usize) {
-    JSON_PARSE_COUNT.fetch_add(n, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-pub fn json_parse_count() -> usize {
-    JSON_PARSE_COUNT.load(Ordering::SeqCst)
-}
-
-#[cfg(test)]
-pub fn reset_json_parse_count() {
-    JSON_PARSE_COUNT.store(0, Ordering::SeqCst);
 }
 
 pub fn pick_from_set(set: &ThemeSet, mode: ThemeMode) -> Option<&ThemeConfig> {
@@ -214,6 +197,7 @@ fn file_mtime(path: &Path) -> u64 {
 struct DirSnapshot {
     fingerprint: Vec<(PathBuf, u64)>,
     sets: Vec<ThemeSet>,
+    loads: usize,
 }
 
 fn json_files(dir: &Path) -> Vec<PathBuf> {
@@ -239,7 +223,6 @@ fn fingerprint(files: &[PathBuf]) -> Vec<(PathBuf, u64)> {
 fn load_sets_from_files(files: &[PathBuf]) -> Vec<ThemeSet> {
     let mut sets = Vec::new();
     for path in files {
-        parse_count_add(1);
         match std::fs::read_to_string(path) {
             Ok(json) => match serde_json::from_str::<ThemeSet>(&json) {
                 Ok(set) if set.themes.is_empty() => {
@@ -278,11 +261,13 @@ fn cached_dir_sets(dir: &Path) -> Vec<ThemeSet> {
     }
     let sets = load_sets_from_files(&files);
     if let Ok(mut cache) = dir_cache().lock() {
+        let loads = cache.get(dir).map(|snap| snap.loads).unwrap_or(0) + 1;
         cache.insert(
             dir.to_path_buf(),
             DirSnapshot {
                 fingerprint: fp,
                 sets: sets.clone(),
+                loads,
             },
         );
     }
@@ -290,10 +275,12 @@ fn cached_dir_sets(dir: &Path) -> Vec<ThemeSet> {
 }
 
 #[cfg(test)]
-pub fn clear_dir_cache() {
-    if let Ok(mut cache) = dir_cache().lock() {
-        cache.clear();
-    }
+pub fn dir_load_count(dir: &Path) -> usize {
+    dir_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(dir).map(|snap| snap.loads))
+        .unwrap_or(0)
 }
 
 fn from_registry(name: &str, cx: &App) -> Option<Rc<ThemeConfig>> {
@@ -374,17 +361,17 @@ pub fn bundled_names() -> Vec<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
     use std::time::Duration;
+
+    static UNIQUE_DIR: AtomicU64 = AtomicU64::new(0);
 
     fn unique_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "clj-gpui-themes-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            UNIQUE_DIR.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -520,26 +507,19 @@ mod tests {
             r##"{"name":"Cache","themes":[{"name":"Cache Dark","mode":"dark","colors":{"background":"#010101"}}]}"##,
         )
         .unwrap();
-        clear_dir_cache();
-        reset_json_parse_count();
         let _ = cached_dir_sets(&dir);
-        let first = json_parse_count();
-        assert!(first >= 1);
+        assert_eq!(dir_load_count(&dir), 1);
         let _ = cached_dir_sets(&dir);
         let _ = cached_dir_sets(&dir);
-        assert_eq!(
-            json_parse_count(),
-            first,
-            "unchanged files must not reparse"
-        );
-        thread::sleep(Duration::from_millis(20));
+        assert_eq!(dir_load_count(&dir), 1, "unchanged files must not reparse");
+        thread::sleep(Duration::from_millis(50));
         fs::write(
             &file,
             r##"{"name":"Cache","themes":[{"name":"Cache Dark","mode":"dark","colors":{"background":"#020202"}}]}"##,
         )
         .unwrap();
         let _ = cached_dir_sets(&dir);
-        assert!(json_parse_count() > first, "mtime change must reload");
+        assert!(dir_load_count(&dir) > 1, "mtime change must reload");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -556,7 +536,6 @@ mod tests {
             r##"{"name":"A","themes":[{"name":"Dup","mode":"dark","colors":{"background":"#0000aa"}}]}"##,
         )
         .unwrap();
-        clear_dir_cache();
         let sets = cached_dir_sets(&dir);
         let theme = lookup_in_sets(&sets, "Dup", ThemeMode::Dark).unwrap();
         assert_eq!(
@@ -576,7 +555,6 @@ mod tests {
             r##"{"name":"Ok","themes":[{"name":"Ok Dark","mode":"dark","colors":{"background":"#111111"}}]}"##,
         )
         .unwrap();
-        clear_dir_cache();
         let sets = cached_dir_sets(&dir);
         assert_eq!(sets.len(), 1);
         assert_eq!(sets[0].name.as_ref(), "Ok");
