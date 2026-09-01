@@ -295,6 +295,16 @@ fn render_children(
 pub fn open_window(nrepl_port: u16, cmd_tx: mpsc::Sender<Cmd>, event_rx: async_channel::Receiver<HostEvent>, cx: &mut App) {
     use gpui::{size, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
 
+    // GPUI's default is platform-specific: on macOS the process stays alive
+    // after the last window closes (QuitMode::Explicit). This is a
+    // single-window app, so quit when the window goes away.
+    cx.on_window_closed(|cx| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+
     let bounds = Bounds::centered(None, size(px(560.), px(720.)), cx);
     cx.open_window(
         WindowOptions {
