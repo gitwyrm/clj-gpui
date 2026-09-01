@@ -59,6 +59,35 @@
     (is (fn? (:on-click (ui/hstack {:on-click (fn [])}))))
     (is (true? (:focus (ui/text-field "" {:focus true}))))))
 
+(deftest scroll-viewport-style-keys
+  (testing "flex scroll with no height"
+    (let [n (ui/scroll {:flex 1} (ui/label "x"))]
+      (is (= :scroll (:type n)))
+      (is (= 1 (:flex n)))
+      (is (nil? (:height n)))
+      (is (nil? (:width n)))))
+  (testing "fixed height"
+    (let [n (ui/scroll {:height 220} (ui/label "x"))]
+      (is (= 220 (:height n)))
+      (is (nil? (:width n)))))
+  (testing "explicit width"
+    (let [n (ui/scroll {:width 300} (ui/label "x"))]
+      (is (= 300 (:width n)))
+      (is (nil? (:height n)))))
+  (testing "explicit width and height"
+    (let [n (ui/scroll {:width 300 :height 220} (ui/label "x"))]
+      (is (= 300 (:width n)))
+      (is (= 220 (:height n)))))
+  (testing "size is a square, same as other nodes"
+    (let [n (ui/scroll {:size 180 :width 300 :height 220} (ui/label "x"))]
+      (is (= 180 (:size n)))
+      (is (= 300 (:width n)))
+      (is (= 220 (:height n)))))
+  (testing "visual styles stay on the node for the inner body"
+    (let [n (ui/scroll {:width 300 :padding 8 :bg "#111111"} (ui/label "x"))]
+      (is (= 8 (:padding n)))
+      (is (= "#111111" (:bg n))))))
+
 (deftest sequences-flatten-inside-stacks
   (let [tree (ui/vstack
               (ui/label "Todos")

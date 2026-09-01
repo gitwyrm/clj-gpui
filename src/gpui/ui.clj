@@ -260,7 +260,9 @@
   "Scroll container. Fills leftover height in a flex parent.
 
   Give it a `:height` (pixels) for a fixed viewport instead. `:flex 1`
-  is implied when `:height` is omitted; passing it is still fine."
+  is implied when `:height` is omitted; passing it is still fine.
+  `:width` constrains the viewport (not the overflowing content).
+  `:size` is a square viewport, same as on other nodes."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
