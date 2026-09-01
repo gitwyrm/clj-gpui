@@ -32,28 +32,79 @@ struct InputSlot {
     submitted: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum ZenityPick {
     Picked(String),
     Cancelled,
     Unavailable,
+    Failed(String),
+}
+
+fn zenity_from_output(
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> ZenityPick {
+    if status.success() {
+        let path = String::from_utf8_lossy(stdout).trim().to_string();
+        if path.is_empty() {
+            ZenityPick::Cancelled
+        } else {
+            ZenityPick::Picked(path)
+        }
+    } else if status.code() == Some(1) {
+        // zenity: 1 means the user clicked Cancel.
+        ZenityPick::Cancelled
+    } else {
+        let err = String::from_utf8_lossy(stderr).trim().to_string();
+        let detail = if err.is_empty() {
+            format!("zenity exited {status}")
+        } else {
+            err
+        };
+        ZenityPick::Failed(detail)
+    }
 }
 
 fn zenity_pick_directory(title: &str) -> ZenityPick {
-    let output = match Command::new("zenity")
+    match Command::new("zenity")
         .args(["--file-selection", "--directory", "--title", title])
         .output()
     {
-        Ok(output) => output,
-        Err(_) => return ZenityPick::Unavailable,
-    };
-    if !output.status.success() {
-        return ZenityPick::Cancelled;
+        Ok(output) => zenity_from_output(output.status, &output.stdout, &output.stderr),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ZenityPick::Unavailable,
+        Err(err) => ZenityPick::Failed(err.to_string()),
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        ZenityPick::Cancelled
-    } else {
-        ZenityPick::Picked(path)
+}
+
+fn zenity_to_cmd(request_id: String, pick: ZenityPick, portal_err: &str) -> Cmd {
+    match pick {
+        ZenityPick::Picked(path) => Cmd::DirectoryPicked {
+            request_id,
+            path: Some(path),
+            error: None,
+            cancelled: false,
+        },
+        ZenityPick::Cancelled => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: None,
+            cancelled: true,
+        },
+        ZenityPick::Unavailable => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: Some(format!(
+                "native folder picker failed ({portal_err}). Install xdg-desktop-portal or zenity."
+            )),
+            cancelled: false,
+        },
+        ZenityPick::Failed(detail) => Cmd::DirectoryPicked {
+            request_id,
+            path: None,
+            error: Some(format!("zenity failed: {detail}")),
+            cancelled: false,
+        },
     }
 }
 
@@ -234,7 +285,7 @@ impl RootView {
             prompt: Some(SharedString::from(prompt.clone())),
         });
         let cmd_tx = self.cmd_tx.clone();
-        cx.spawn(async move |_this, _cx| {
+        cx.spawn(async move |_this, cx| {
             let cmd = match receiver.await {
                 Ok(Ok(Some(paths))) => {
                     let path = paths
@@ -254,28 +305,17 @@ impl RootView {
                     error: None,
                     cancelled: true,
                 },
-                Ok(Err(err)) => match zenity_pick_directory(&prompt) {
-                    ZenityPick::Picked(path) => Cmd::DirectoryPicked {
-                        request_id,
-                        path: Some(path),
-                        error: None,
-                        cancelled: false,
-                    },
-                    ZenityPick::Cancelled => Cmd::DirectoryPicked {
-                        request_id,
-                        path: None,
-                        error: None,
-                        cancelled: true,
-                    },
-                    ZenityPick::Unavailable => Cmd::DirectoryPicked {
-                        request_id,
-                        path: None,
-                        error: Some(format!(
-                            "native folder picker failed ({err}). Install xdg-desktop-portal or zenity."
-                        )),
-                        cancelled: false,
-                    },
-                },
+                Ok(Err(err)) => {
+                    // zenity `.output()` waits for the user. Do that on the
+                    // background executor so the GPUI foreground runtime
+                    // can keep painting while the dialog is open.
+                    let prompt = prompt.clone();
+                    let pick = cx
+                        .background_executor()
+                        .spawn(async move { zenity_pick_directory(&prompt) })
+                        .await;
+                    zenity_to_cmd(request_id, pick, &err.to_string())
+                }
                 Err(_) => Cmd::DirectoryPicked {
                     request_id,
                     path: None,
@@ -999,4 +1039,44 @@ pub fn open_window(
     )
     .unwrap();
     cx.activate(true);
+}
+
+#[cfg(test)]
+mod zenity_tests {
+    use super::{zenity_from_output, ZenityPick};
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    fn exit(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[test]
+    fn success_with_path_is_picked() {
+        assert_eq!(
+            zenity_from_output(exit(0), b"/tmp/docs\n", b""),
+            ZenityPick::Picked("/tmp/docs".into())
+        );
+    }
+
+    #[test]
+    fn success_with_empty_stdout_is_cancelled() {
+        assert_eq!(
+            zenity_from_output(exit(0), b"  \n", b""),
+            ZenityPick::Cancelled
+        );
+    }
+
+    #[test]
+    fn exit_1_is_user_cancel() {
+        assert_eq!(zenity_from_output(exit(1), b"", b""), ZenityPick::Cancelled);
+    }
+
+    #[test]
+    fn other_nonzero_is_failure() {
+        assert_eq!(
+            zenity_from_output(exit(255), b"", b"display is not set\n"),
+            ZenityPick::Failed("display is not set".into())
+        );
+    }
 }
