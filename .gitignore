@@ -1,6 +1,10 @@
 /host/target
+/target
 **/.cpcache
 **/.nrepl-port
 **/.DS_Store
 *.log
 /agent-tools
+*.AppImage
+*.deb
+*.app
