@@ -32,6 +32,59 @@
        "Categories=Utility;Filesystem;\n"
        "StartupNotify=true\n"))
 
+(defn appimage-apprun
+  "AppDir/AppRun: locate the bundled launcher under usr/bin."
+  [{:keys [name]}]
+  (str "#!/bin/sh\n"
+       "set -eu\n"
+       "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+       "export CLJ_GPUI_APP_HOME=\"$here/usr/bin\"\n"
+       "exec \"$here/usr/bin/" name "\" \"$@\"\n"))
+
+(defn deb-wrapper
+  "usr/bin/<name> shim that points at /usr/lib/<name>/bin."
+  [{:keys [name]}]
+  (str "#!/bin/sh\n"
+       "set -eu\n"
+       "export CLJ_GPUI_APP_HOME=\"/usr/lib/" name "/bin\"\n"
+       "exec \"/usr/lib/" name "/bin/" name "\" \"$@\"\n"))
+
+(defn collect-license-files
+  "LICENSE and NOTICE at the project root, plus optional `:license-files`.
+
+  Missing default LICENSE/NOTICE files are skipped. Entries in
+  `:license-files` (relative to the project root) must exist."
+  [cfg]
+  (let [root (io/file (or (:project-dir cfg) "."))
+        auto (->> ["LICENSE" "NOTICE"]
+                  (map #(io/file root %))
+                  (filterv #(.isFile ^java.io.File %)))
+        extras (or (:license-files cfg) [])]
+    (doseq [p extras]
+      (let [f (io/file root (str p))]
+        (when-not (.isFile f)
+          (throw (ex-info (str "license file not found: " p)
+                          {:file (str p) :path (.getPath f)})))))
+    (->> (concat auto (map #(io/file root (str %)) extras))
+         (reduce (fn [acc ^java.io.File f]
+                   (if (some #(= (.getCanonicalPath ^java.io.File %)
+                                 (.getCanonicalPath f))
+                             acc)
+                     acc
+                     (conj acc f)))
+                 [])
+         vec)))
+
+(defn- copy-licenses
+  [cfg ^java.io.File dest-dir]
+  (let [files (collect-license-files cfg)]
+    (when (seq files)
+      (mkdirp dest-dir)
+      (doseq [^java.io.File f files]
+        (copy-file f (io/file dest-dir (.getName f))))
+      (println "[clj-gpui] licenses ->" (.getPath dest-dir)))
+    files))
+
 (defn- copy-host
   [^java.io.File exe ^java.io.File dest]
   (copy-file exe dest)
@@ -102,6 +155,7 @@
       (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file resources "runtime"))] {})
       (copy-icon cfg (io/file resources (str (:name cfg) ".png")))
       (maybe-icns cfg resources)
+      (copy-licenses cfg (io/file resources "licenses"))
       (println "[clj-gpui] wrote" (.getPath ^java.io.File app))
       (assoc cfg :app app :outputs [app]))))
 
@@ -114,18 +168,68 @@
       (contains? #{"aarch64" "arm64"} a) {:deb "arm64" :appimage "aarch64"}
       :else {:deb a :appimage a})))
 
+(def appimagetool-version
+  "Pinned appimagetool release. Never the mutable `continuous` tag."
+  "1.9.1")
+
+(def appimagetool-sha256
+  "SHA-256 of official GitHub release assets for `appimagetool-version`."
+  {"x86_64" "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+   "aarch64" "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"})
+
+(defn appimagetool-url
+  [appimage-arch]
+  (str "https://github.com/AppImage/appimagetool/releases/download/"
+       appimagetool-version
+       "/appimagetool-" appimage-arch ".AppImage"))
+
+(defn- sha256-hex
+  ^String [^java.io.File f]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        buf (byte-array 8192)]
+    (with-open [^java.io.InputStream in (io/input-stream f)]
+      (loop []
+        (let [n (.read in buf)]
+          (when (pos? n)
+            (.update md buf 0 n)
+            (recur)))))
+    (format "%064x" (java.math.BigInteger. 1 (.digest md)))))
+
+(defn- executable-on-path
+  ^java.io.File [name]
+  (some (fn [dir]
+          (let [f (io/file dir name)]
+            (when (.canExecute f) f)))
+        (seq (.split ^String (or (System/getenv "PATH") "")
+                     java.io.File/pathSeparator))))
+
 (defn- ensure-appimagetool
   ^java.io.File [^java.io.File target appimage-arch]
-  (let [tool (io/file target (str "appimagetool-" appimage-arch))
-        url (str "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-"
-                 appimage-arch ".AppImage")]
-    (if (.canExecute tool)
-      tool
-      (do
-        (println "[clj-gpui] downloading appimagetool")
+  (if-let [system (executable-on-path "appimagetool")]
+    (do
+      (println "[clj-gpui] using system appimagetool" (.getPath system))
+      system)
+    (let [expected (get appimagetool-sha256 appimage-arch)
+          _ (when-not expected
+              (throw (ex-info (str "No pinned SHA-256 for appimagetool " appimage-arch
+                                   ". Install appimagetool or extend gpui.package/appimagetool-sha256.")
+                              {:arch appimage-arch})))
+          tool (io/file target (str "appimagetool-" appimagetool-version "-" appimage-arch ".AppImage"))
+          url (appimagetool-url appimage-arch)]
+      (when-not (and (.isFile tool) (= expected (sha256-hex tool)))
+        (println "[clj-gpui] downloading appimagetool" appimagetool-version)
+        (println " " url)
         (sh! ["curl" "-fsSL" "-o" (.getPath tool) url] {})
-        (chmod-exec tool)
-        tool))))
+        (let [actual (sha256-hex tool)]
+          (when-not (= expected actual)
+            (.delete tool)
+            (throw (ex-info (str "appimagetool checksum mismatch for " appimage-arch)
+                            {:url url :expected expected :actual actual})))))
+      (chmod-exec tool)
+      (println (str "[clj-gpui] appimagetool " appimagetool-version
+                    " from https://github.com/AppImage/appimagetool/releases/tag/"
+                    appimagetool-version))
+      tool)))
 
 (defn package-appimage
   [opts]
@@ -156,12 +260,9 @@
           (.delete (io/file appdir ".DirIcon"))
           (catch Exception _))
         (copy-file png (io/file appdir ".DirIcon")))
+      (copy-licenses cfg (mkdirp (io/file usr "share" "doc" (:name cfg))))
       (spit (io/file appdir "AppRun")
-            (str "#!/bin/sh\n"
-                 "set -eu\n"
-                 "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
-                 "export CLJ_GPUI_APP_HOME=\"$here/usr/bin\"\n"
-                 "exec \"$here/usr/bin/" (:name cfg) "\" \"$@\"\n"))
+            (appimage-apprun cfg))
       (chmod-exec (io/file appdir "AppRun"))
       (let [tool (ensure-appimagetool (:target cfg) (:appimage arch))]
         (println "[clj-gpui] appimagetool" (.getPath ^java.io.File out))
@@ -212,14 +313,12 @@
       (copy-file (:jar cfg) (io/file (mkdirp (io/file lib "lib")) (str (:name cfg) ".jar")))
       (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file lib "runtime"))] {})
       (spit (io/file bin (:name cfg))
-            (str "#!/bin/sh\n"
-                 "set -eu\n"
-                 "export CLJ_GPUI_APP_HOME=/usr/lib/" (:name cfg) "/bin\n"
-                 "exec /usr/lib/" (:name cfg) "/bin/" (:name cfg) " \"$@\"\n"))
+            (deb-wrapper cfg))
       (chmod-exec (io/file bin (:name cfg)))
       (spit (io/file share-app (str (:name cfg) ".desktop"))
             (desktop-file cfg))
       (copy-icon cfg (io/file share-icon (str (:name cfg) ".png")))
+      (copy-licenses cfg (mkdirp (io/file root "usr" "share" "doc" (:name cfg))))
       (println "[clj-gpui] dpkg-deb" (.getPath ^java.io.File deb))
       (sh! ["fakeroot" "dpkg-deb" "--build" (.getPath root) (.getPath ^java.io.File deb)] {})
       (println "[clj-gpui] wrote" (.getPath ^java.io.File deb))
