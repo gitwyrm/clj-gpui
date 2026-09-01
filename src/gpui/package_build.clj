@@ -204,21 +204,31 @@
   (or (System/getenv "JAVA_HOME")
       (System/getProperty "java.home")))
 
+(defn jlink-executable
+  "Absolute `jlink` from JAVA_HOME / java.home. Never PATH-only lookup.
+
+  Packaging must invoke this path, not the bare `jlink` name: on macOS
+  the running JVM often has a valid java.home whose bin directory is
+  not on the shell PATH."
+  ^String []
+  (let [jlink (io/file (java-home) "bin" "jlink")]
+    (when-not (.canExecute jlink)
+      (throw (ex-info (str "jlink not found at " (.getPath jlink)
+                           ". Packaging needs a JDK, not a JRE.")
+                      {:jlink (.getPath jlink)})))
+    (.getPath jlink)))
+
 (defn jre
   "Build a reduced JRE with jlink into `target/runtime`."
   [opts]
   (let [cfg (if (loaded-config? opts) opts (load-config opts))
         dest (io/file (:target cfg) "runtime")
-        jlink (io/file (java-home) "bin" "jlink")
+        jlink (jlink-executable)
         modules (or (:modules opts) default-jlink-modules)]
-    (when-not (.canExecute jlink)
-      (throw (ex-info (str "jlink not found at " (.getPath jlink)
-                           ". Packaging needs a JDK, not a JRE.")
-                      {:jlink (.getPath jlink)})))
     (when (.exists dest)
       (sh! ["rm" "-rf" (.getPath dest)] {}))
-    (println "[clj-gpui] jlink ->" (.getPath dest))
-    (sh! ["jlink"
+    (println "[clj-gpui] jlink" jlink "->" (.getPath dest))
+    (sh! [jlink
           "--add-modules" (str/join "," modules)
           "--strip-debug"
           "--no-header-files"
