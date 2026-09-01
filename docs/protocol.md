@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **3**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **4**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **3**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":3,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":4,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -80,13 +80,17 @@ On an application exception Clojure still returns `ok: true` with an error UI tr
 
 Invokes the real Clojure IFn that was registered when the current tree was exported, then the host **always** issues another `render`. That second fetch carries text-field submit `seq` and covers handlers that do not touch an atom. While the callback runs, Clojure does not send `request-render` from `r/atom` watches, so a typical `swap!` click is one paint, not two. nREPL updates, hot reload, and `ui/request-render!` still use `request-render`.
 
-Optional `value` is included for text-field events:
+Optional `value` is a JSON value (string, number, boolean, array, or `null`):
 
 ```json
 {"op":"callback","id":2,"callback-id":"cb-2","value":"hello"}
+{"op":"callback","id":3,"callback-id":"cb-3","value":true}
+{"op":"callback","id":4,"callback-id":"cb-4","value":36.5}
 ```
 
-Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments. When `value` is present (including `""`), Clojure calls `(f value)`.
+When `value` is present (including `""`, `false`, `0`, and `null`), Clojure calls `(f value)`. Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments.
+
+v4 changed `value` from string-only to any JSON type so switch/slider/select can pass booleans, numbers, and ids without encoding them as strings. Text fields still send strings. New node types were added in the same bump so a v3 host cannot silently paint “Unknown GPUI node” placeholders.
 
 ### `reload`
 
@@ -106,28 +110,46 @@ Result of `pick-directory`. `path` is set when the user chose a folder. `cancell
 
 Clojure invokes the `gpui.platform/pick-directory` callback. It does not automatically re-export the tree; a typical handler `swap!`s an `r/atom`.
 
-## Node schema (version 3)
+## Node schema (version 4)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
 |---|---|---|
-| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`) |
-| `id` | string | optional stable identity, especially `text-field` |
-| `text` | string | `label`, `button`, `checkbox`, `text-field` (current value) |
-| `placeholder` | string | `text-field` |
-| `children` | array of nodes | layouts, `scroll` |
-| `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack` |
+| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`, `switch`, `toggle`, `radio-group`, `slider`, `progress`, `divider`, `spinner`, `tag`, `alert`, `skeleton`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `accordion`, `description-list`) |
+| `id` | string | optional stable identity, especially `text-field`, `slider`, `select` |
+| `text` | string | `label`, `button`, `checkbox`, `text-field`, `switch`, `toggle`, `divider`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar` |
+| `placeholder` | string | `text-field`, `select` |
+| `children` | array of nodes | layouts, `scroll`, `group-box`, `badge` |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` |
+| `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
-| `on-change` | string callback id | `text-field` (called with the field string) |
+| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (id) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `on-blur` | string callback id | `text-field` (called with the field string) |
 | `on-escape` | string callback id | `text-field` (0-arg) |
+| `on-close` | string callback id | `alert` (0-arg) |
+| `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `text-field`: request keyboard focus |
-| `checked` | bool | `checkbox` |
+| `checked` | bool | `checkbox`, `switch`, `toggle` |
+| `value` | JSON number, string, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs`/`accordion` (selected id) |
+| `min`, `max`, `step` | number | `slider` |
+| `orientation` | string | `radio-group`, `slider`, `divider`, `description-list`: `horizontal` (default) or `vertical` |
+| `disabled` | bool | buttons and most controls |
+| `tooltip` | string | any node: gpui-component tooltip |
+| `href` | string | `link` |
+| `icon` | string | `icon`, `spinner` (kebab `circle-check`) |
+| `control-size` | string | `xs`/`small`/`medium`/`large` (Clojure `:size :small` is rewritten so pixel `:size` stays numeric) |
+| `count` | number | `badge` |
+| `dot` | bool | `badge` |
+| `dashed` | bool | `divider` |
+| `outline` | bool | `tag` |
+| `searchable` | bool | `select` |
+| `multiple` | bool | `accordion` |
+| `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
-| `variant` | string | `button` (`primary`, `ghost`, `text`, `outline`, `danger`) |
+| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle` |
 | `compact` | bool | `button` |
 | `strikethrough` | bool | text |
 | `shadow` | bool | layouts |
@@ -140,13 +162,13 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
 | `theme` | string | any node: `system` (default), `light`, `dark`, a shipped gpui-component palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
-| `title` | string | `window` (or any root): native window title (default `clj-gpui`) |
+| `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` titles |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
-Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` with ids such as `"cb-2"`. The registry is rebuilt on every export.
+Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:content` are walked too. The registry is rebuilt on every export.
 
-The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1 (`Button`, `Checkbox`, `Input`, `v_flex` / `h_flex`, themed `Root`).
+The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1. Icon-bearing widgets (`icon`, `spinner`, `alert`, `select` chevron, `clipboard`) load SVGs from `gpui-component-assets` 0.5.1. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
 

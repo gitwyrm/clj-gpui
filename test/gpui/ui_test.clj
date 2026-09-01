@@ -59,6 +59,151 @@
     (is (fn? (:on-click (ui/hstack {:on-click (fn [])}))))
     (is (true? (:focus (ui/text-field "" {:focus true}))))))
 
+(deftest named-control-size-does-not-use-pixel-size
+  (let [n (ui/spinner {:size :small})]
+    (is (= "small" (:control-size n)))
+    (is (nil? (:size n))))
+  (let [n (ui/icon :check {:size :large})]
+    (is (= "large" (:control-size n)))
+    (is (= "check" (:icon n)))))
+
+(deftest option-item-normalization
+  (is (= {:id "light" :label "light"} (ui/option-item :light)))
+  (is (= {:id "Rust" :label "Rust"} (ui/option-item "Rust")))
+  (is (= {:id "clj" :label "Clojure"}
+         (ui/option-item {:id :clj :label "Clojure"})))
+  (is (= ["a" "b"] (mapv :id (ui/option-items [:a nil :b]))))
+  (is (nil? (ui/option-item nil)))
+  (is (= "ui/dark" (ui/wire-id :ui/dark)))
+  (is (= "light" (ui/wire-id :light))))
+
+(deftest switch-slider-select-nodes
+  (testing "switch"
+    (let [n (ui/switch true {:on-change (fn [_]) :text "On"})]
+      (is (= :switch (:type n)))
+      (is (true? (:checked n)))
+      (is (= "On" (:text n)))
+      (is (fn? (:on-change n))))
+    (is (fn? (:on-change (ui/switch false (fn [_]))))))
+  (testing "slider defaults"
+    (let [n (ui/slider 40 {:min 0 :max 100 :step 5})]
+      (is (= :slider (:type n)))
+      (is (= 40 (:value n)))
+      (is (= 0 (:min n)))
+      (is (= 100 (:max n)))
+      (is (= 5 (:step n)))))
+  (testing "select options"
+    (let [n (ui/select :clj {:options [{:id :clj :label "Clojure"} "Rust"]
+                             :placeholder "Lang"})]
+      (is (= :select (:type n)))
+      (is (= "clj" (:value n)))
+      (is (= [{:id "clj" :label "Clojure"} {:id "Rust" :label "Rust"}]
+             (:options n)))
+      (is (= "Lang" (:placeholder n)))))
+  (testing "radio-group"
+    (let [n (ui/radio-group :dark {:options [:light :dark]
+                                   :orientation :horizontal})]
+      (is (= :radio-group (:type n)))
+      (is (= "dark" (:value n)))
+      (is (= :horizontal (:orientation n)))
+      (is (= ["light" "dark"] (mapv :id (:options n))))))
+  (testing "tabs"
+    (let [n (ui/tabs :advanced {:items [{:id :general :label "General"}
+                                        {:id :advanced :label "Advanced"}]
+                                :variant :underline})]
+      (is (= :tabs (:type n)))
+      (is (= "advanced" (:value n)))
+      (is (= :underline (:variant n)))))
+  (testing "progress clamps in host; Clojure passes the number"
+    (is (= 45 (:value (ui/progress 45))))
+    (is (= 0 (:value (ui/progress nil)))))
+  (testing "divider"
+    (is (= :divider (:type (ui/divider))))
+    (is (= "or" (:text (ui/divider "or"))))
+    (is (true? (:dashed (ui/divider {:dashed true})))))
+  (testing "tag alert kbd link"
+    (is (= :danger (:variant (ui/tag "Err" {:variant :danger}))))
+    (is (= "Saved" (:text (ui/alert "Saved" {:variant :success}))))
+    (is (= "ctrl-s" (:text (ui/kbd "ctrl-s"))))
+    (is (= "https://clojure.org" (:href (ui/link "https://clojure.org" "Clojure"))))
+    (is (= "Clojure" (:text (ui/link "https://clojure.org" "Clojure")))))
+  (testing "badge wraps children"
+    (let [n (ui/badge 4 (ui/icon :bell))]
+      (is (= 4 (:count n)))
+      (is (= :icon (get-in n [:children 0 :type]))))
+    (is (true? (:dot (ui/badge {:dot true} (ui/label "x"))))))
+  (testing "group-box flattens children"
+    (let [n (ui/group-box {:title "Audio" :variant :outline}
+                          (ui/label "a")
+                          [(ui/label "b")])]
+      (is (= :group-box (:type n)))
+      (is (= "Audio" (:title n)))
+      (is (= 2 (count (:children n))))))
+  (testing "breadcrumb clipboard avatar"
+    (is (= ["Home" "Proj"]
+           (mapv :label (:items (ui/breadcrumb [{:id :home :label "Home"} "Proj"])))))
+    (is (= "copy-me" (:text (ui/clipboard "copy-me"))))
+    (is (= "Ada" (:text (ui/avatar "Ada")))))
+  (testing "accordion content stays a node"
+    (let [n (ui/accordion :a {:items [{:id :a :title "One" :content (ui/label "hi")}
+                                      {:id :b :title "Two" :content (ui/label "there")}]})]
+      (is (= "a" (:value n)))
+      (is (= "One" (get-in n [:items 0 :label])))
+      (is (= :label (get-in n [:items 0 :content :type]))))
+    (is (= "a,b" (:value (ui/accordion [:a :b]
+                                       {:multiple true
+                                        :items [{:id :a :title "A" :content (ui/label "x")}
+                                                {:id :b :title "B" :content (ui/label "y")}]})))))
+  (testing "description-list"
+    (let [n (ui/description-list [{:label "Host" :value "GPUI"}
+                                  {:label "UI" :value "clj-gpui"}])]
+      (is (= :description-list (:type n)))
+      (is (= ["Host" "UI"] (mapv :label (:items n))))
+      (is (= ["GPUI" "clj-gpui"] (mapv :text (:items n)))))))
+
+(deftest export-new-widget-callbacks
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/switch true {:on-change #(reset! got %)})
+                   (ui/slider 10 {:on-change #(reset! got %)})
+                   (ui/select "a" {:options ["a" "b"]
+                                   :on-change #(reset! got %)})
+                   (ui/alert "x" {:on-close #(reset! got :closed)})
+                   (ui/clipboard "z" {:on-copied #(reset! got %)})))
+        children (:children exported)
+        switch-id (get-in children [0 :on-change])
+        slider-id (get-in children [1 :on-change])
+        select-id (get-in children [2 :on-change])
+        close-id (get-in children [3 :on-close])
+        copied-id (get-in children [4 :on-copied])]
+    (is (string? switch-id))
+    (is (= {:ok true :id switch-id} (runtime/invoke-callback! switch-id true)))
+    (is (true? @got))
+    (is (= {:ok true :id slider-id} (runtime/invoke-callback! slider-id 33.5)))
+    (is (= 33.5 @got))
+    (is (= {:ok true :id select-id} (runtime/invoke-callback! select-id "b")))
+    (is (= "b" @got))
+    (is (string? close-id))
+    (is (= {:ok true :id close-id} (runtime/invoke-callback! close-id)))
+    (is (= :closed @got))
+    (is (string? copied-id))
+    (is (= {:ok true :id copied-id} (runtime/invoke-callback! copied-id "z")))
+    (is (= "z" @got))))
+
+(deftest invoke-callback-false-zero-and-null
+  (runtime/reset-callbacks!)
+  (let [got (atom :unset)
+        exported (runtime/export-tree (ui/switch false {:on-change #(reset! got %)}))
+        id (:on-change exported)]
+    (is (= {:ok true :id id} (runtime/invoke-callback! id false true)))
+    (is (false? @got))
+    (is (= {:ok true :id id} (runtime/invoke-callback! id 0 true)))
+    (is (zero? @got))
+    (is (= {:ok true :id id} (runtime/invoke-callback! id nil true)))
+    (is (nil? @got))))
+
 (deftest scroll-viewport-style-keys
   (testing "flex scroll with no height"
     (let [n (ui/scroll {:flex 1} (ui/label "x"))]

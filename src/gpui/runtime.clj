@@ -107,25 +107,40 @@
     (swap! callbacks assoc id f)
     id))
 
+(def ^:private callback-keys
+  [:on-click :on-change :on-submit :on-double-click :on-blur
+   :on-escape :on-close :on-copied])
+
+(declare sanitize)
+
+(defn- sanitize-item
+  [item]
+  (if (map? item)
+    (cond-> (reduce (fn [m k]
+                      (if (fn? (get m k))
+                        (assoc m k (register-callback! (get m k)))
+                        m))
+                    item
+                    callback-keys)
+      (some? (:content item)) (update :content sanitize)
+      (seq (:children item)) (update :children #(mapv sanitize %)))
+    item))
+
 (defn- sanitize
   "Replace Clojure functions in the UI tree with callback ids before JSON."
   [node]
   (cond
     (ui/ui-node? node)
-    (let [node (cond-> node
-                 (fn? (:on-click node))
-                 (assoc :on-click (register-callback! (:on-click node)))
-                 (fn? (:on-change node))
-                 (assoc :on-change (register-callback! (:on-change node)))
-                 (fn? (:on-submit node))
-                 (assoc :on-submit (register-callback! (:on-submit node)))
-                 (fn? (:on-double-click node))
-                 (assoc :on-double-click (register-callback! (:on-double-click node)))
-                 (fn? (:on-blur node))
-                 (assoc :on-blur (register-callback! (:on-blur node)))
-                 (fn? (:on-escape node))
-                 (assoc :on-escape (register-callback! (:on-escape node))))]
-      (update node :children #(mapv sanitize (or % []))))
+    (let [node (reduce (fn [m k]
+                         (if (fn? (get m k))
+                           (assoc m k (register-callback! (get m k)))
+                           m))
+                       node
+                       callback-keys)]
+      (-> node
+          (update :children #(mapv sanitize (or % [])))
+          (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
+          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))))
 
     (sequential? node)
     (mapv sanitize node)
@@ -360,17 +375,19 @@
 (defn invoke-callback!
   "Invoke a previously registered Clojure function from a GPUI event.
 
-  Buttons and checkboxes are 0-arg. Text fields pass the current string
-  as `value` when the host includes it on the callback message.
-  `:on-escape` is 0-arg. `:on-double-click` is 0-arg."
+  Buttons and checkboxes are 0-arg. When the host includes `value`
+  (string, boolean, number, JSON collection, or JSON `null`), Clojure
+  calls `(f value)`. `:on-escape` is 0-arg. `:on-double-click` is 0-arg."
   ([callback-id]
-   (invoke-callback! callback-id nil))
+   (invoke-callback! callback-id nil false))
   ([callback-id value]
+   (invoke-callback! callback-id value (some? value)))
+  ([callback-id value present?]
    (if-let [f (get @callbacks callback-id)]
      (do
        (swap! callback-depth inc)
        (try
-         (if (some? value)
+         (if present?
            (f value)
            (f))
          {:ok true :id callback-id}
@@ -387,7 +404,9 @@
                    "render" {:ok true
                              :tree (export-tree)
                              :themes (theme/wire-sets)}
-                   "callback" (invoke-callback! (:callback-id msg) (:value msg))
+                   "callback" (invoke-callback! (:callback-id msg)
+                                                (:value msg)
+                                                (contains? msg :value))
                    "directory-picked" (do
                                         (try
                                           (require 'gpui.platform)
