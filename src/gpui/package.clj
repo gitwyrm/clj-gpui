@@ -420,44 +420,44 @@
     (throw (ex-info "AppImage packaging must run on Linux." {:os (os-key)})))
   (let [cfg (-> opts uberjar host jre)
         pkg (mkdirp (io/file (:target cfg) "package"))
-        appdir (io/file pkg (str (:name cfg) ".AppDir"))
-        usr (io/file appdir "usr")
-        bin (mkdirp (io/file usr "bin"))
-        share-app (mkdirp (io/file usr "share" "applications"))
-        share-icon (mkdirp (io/file usr "share" "icons" "hicolor" "256x256" "apps"))
-        arch (linux-arch)
-        out (io/file pkg (str (:name cfg) "-" (:version cfg) "-" (:appimage arch) ".AppImage"))]
+        appdir (io/file pkg (str (:name cfg) ".AppDir"))]
     (when (.exists appdir)
       (sh! ["rm" "-rf" (.getPath appdir)] {}))
-    (mkdirp bin)
-    (write-launcher cfg (io/file bin (:name cfg)))
-    (copy-host (:host cfg) (io/file bin "clj-gpui-host"))
-    (copy-file (:jar cfg) (io/file (mkdirp (io/file usr "lib")) (str (:name cfg) ".jar")))
-    (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file usr "runtime"))] {})
-    (let [desktop (desktop-file cfg)]
-      (spit (io/file share-app (str (:name cfg) ".desktop")) desktop)
-      (spit (io/file appdir (str (:name cfg) ".desktop")) desktop))
-    (when-let [png (copy-icon cfg (io/file share-icon (str (:name cfg) ".png")))]
-      (copy-file png (io/file appdir (str (:name cfg) ".png")))
-      (try
-        (.delete (io/file appdir ".DirIcon"))
-        (catch Exception _))
-      (copy-file png (io/file appdir ".DirIcon")))
-    (spit (io/file appdir "AppRun")
-          (str "#!/bin/sh\n"
-               "set -eu\n"
-               "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
-               "export CLJ_GPUI_APP_HOME=\"$here/usr/bin\"\n"
-               "exec \"$here/usr/bin/" (:name cfg) "\" \"$@\"\n"))
-    (chmod-exec (io/file appdir "AppRun"))
-    (let [tool (ensure-appimagetool (:target cfg) (:appimage arch))]
-      (println "[clj-gpui] appimagetool" (.getPath ^java.io.File out))
-      (sh! [(.getPath tool) "--no-appstream" (.getPath appdir) (.getPath out)]
-           {:env {"APPIMAGE_EXTRACT_AND_RUN" "1"
-                  "ARCH" (:appimage arch)}}))
-    (chmod-exec out)
-    (println "[clj-gpui] wrote" (.getPath ^java.io.File out))
-    (assoc cfg :appimage out :appdir appdir)))
+    (let [usr (io/file appdir "usr")
+          bin (mkdirp (io/file usr "bin"))
+          share-app (mkdirp (io/file usr "share" "applications"))
+          share-icon (mkdirp (io/file usr "share" "icons" "hicolor" "256x256" "apps"))
+          arch (linux-arch)
+          out (io/file pkg (str (:name cfg) "-" (:version cfg) "-" (:appimage arch) ".AppImage"))]
+      (mkdirp bin)
+      (write-launcher cfg (io/file bin (:name cfg)))
+      (copy-host (:host cfg) (io/file bin "clj-gpui-host"))
+      (copy-file (:jar cfg) (io/file (mkdirp (io/file usr "lib")) (str (:name cfg) ".jar")))
+      (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file usr "runtime"))] {})
+      (let [desktop (desktop-file cfg)]
+        (spit (io/file share-app (str (:name cfg) ".desktop")) desktop)
+        (spit (io/file appdir (str (:name cfg) ".desktop")) desktop))
+      (when-let [png (copy-icon cfg (io/file share-icon (str (:name cfg) ".png")))]
+        (copy-file png (io/file appdir (str (:name cfg) ".png")))
+        (try
+          (.delete (io/file appdir ".DirIcon"))
+          (catch Exception _))
+        (copy-file png (io/file appdir ".DirIcon")))
+      (spit (io/file appdir "AppRun")
+            (str "#!/bin/sh\n"
+                 "set -eu\n"
+                 "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+                 "export CLJ_GPUI_APP_HOME=\"$here/usr/bin\"\n"
+                 "exec \"$here/usr/bin/" (:name cfg) "\" \"$@\"\n"))
+      (chmod-exec (io/file appdir "AppRun"))
+      (let [tool (ensure-appimagetool (:target cfg) (:appimage arch))]
+        (println "[clj-gpui] appimagetool" (.getPath ^java.io.File out))
+        (sh! [(.getPath tool) "--no-appstream" (.getPath appdir) (.getPath out)]
+             {:env {"APPIMAGE_EXTRACT_AND_RUN" "1"
+                    "ARCH" (:appimage arch)}}))
+      (chmod-exec out)
+      (println "[clj-gpui] wrote" (.getPath ^java.io.File out))
+      (assoc cfg :appimage out :appdir appdir))))
 
 (defn debian-control
   [{:keys [name version description maintainer arch]}]
@@ -483,36 +483,34 @@
         arch (:deb (linux-arch))
         pkg (mkdirp (io/file (:target cfg) "package"))
         root (io/file pkg (str (:name cfg) "_" (:version cfg) "_" arch))
-        debian (mkdirp (io/file root "DEBIAN"))
-        bin (mkdirp (io/file root "usr" "bin"))
-        lib (mkdirp (io/file root "usr" "lib" (:name cfg)))
-        lib-bin (mkdirp (io/file lib "bin"))
-        share-app (mkdirp (io/file root "usr" "share" "applications"))
-        share-icon (mkdirp (io/file root "usr" "share" "icons" "hicolor" "256x256" "apps"))
         deb (io/file pkg (str (:name cfg) "_" (:version cfg) "_" arch ".deb"))
         cfg (assoc cfg :arch arch)]
     (when (.exists root)
       (sh! ["rm" "-rf" (.getPath root)] {}))
-    (mkdirp debian)
-    (mkdirp lib-bin)
-    (spit (io/file debian "control") (debian-control cfg))
-    (write-launcher cfg (io/file lib-bin (:name cfg)))
-    (copy-host (:host cfg) (io/file lib-bin "clj-gpui-host"))
-    (copy-file (:jar cfg) (io/file (mkdirp (io/file lib "lib")) (str (:name cfg) ".jar")))
-    (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file lib "runtime"))] {})
-    (spit (io/file bin (:name cfg))
-          (str "#!/bin/sh\n"
-               "set -eu\n"
-               "export CLJ_GPUI_APP_HOME=/usr/lib/" (:name cfg) "/bin\n"
-               "exec /usr/lib/" (:name cfg) "/bin/" (:name cfg) " \"$@\"\n"))
-    (chmod-exec (io/file bin (:name cfg)))
-    (spit (io/file share-app (str (:name cfg) ".desktop"))
-          (desktop-file cfg))
-    (copy-icon cfg (io/file share-icon (str (:name cfg) ".png")))
-    (println "[clj-gpui] dpkg-deb" (.getPath ^java.io.File deb))
-    (sh! ["fakeroot" "dpkg-deb" "--build" (.getPath root) (.getPath ^java.io.File deb)] {})
-    (println "[clj-gpui] wrote" (.getPath ^java.io.File deb))
-    (assoc cfg :deb deb :deb-root root)))
+    (let [debian (mkdirp (io/file root "DEBIAN"))
+          bin (mkdirp (io/file root "usr" "bin"))
+          lib (mkdirp (io/file root "usr" "lib" (:name cfg)))
+          lib-bin (mkdirp (io/file lib "bin"))
+          share-app (mkdirp (io/file root "usr" "share" "applications"))
+          share-icon (mkdirp (io/file root "usr" "share" "icons" "hicolor" "256x256" "apps"))]
+      (spit (io/file debian "control") (debian-control cfg))
+      (write-launcher cfg (io/file lib-bin (:name cfg)))
+      (copy-host (:host cfg) (io/file lib-bin "clj-gpui-host"))
+      (copy-file (:jar cfg) (io/file (mkdirp (io/file lib "lib")) (str (:name cfg) ".jar")))
+      (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file lib "runtime"))] {})
+      (spit (io/file bin (:name cfg))
+            (str "#!/bin/sh\n"
+                 "set -eu\n"
+                 "export CLJ_GPUI_APP_HOME=/usr/lib/" (:name cfg) "/bin\n"
+                 "exec /usr/lib/" (:name cfg) "/bin/" (:name cfg) " \"$@\"\n"))
+      (chmod-exec (io/file bin (:name cfg)))
+      (spit (io/file share-app (str (:name cfg) ".desktop"))
+            (desktop-file cfg))
+      (copy-icon cfg (io/file share-icon (str (:name cfg) ".png")))
+      (println "[clj-gpui] dpkg-deb" (.getPath ^java.io.File deb))
+      (sh! ["fakeroot" "dpkg-deb" "--build" (.getPath root) (.getPath ^java.io.File deb)] {})
+      (println "[clj-gpui] wrote" (.getPath ^java.io.File deb))
+      (assoc cfg :deb deb :deb-root root))))
 
 (defn package-linux
   "AppImage and .deb for the current Linux host."
