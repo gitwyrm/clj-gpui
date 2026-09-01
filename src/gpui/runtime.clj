@@ -98,7 +98,13 @@
                  (fn? (:on-change node))
                  (assoc :on-change (register-callback! (:on-change node)))
                  (fn? (:on-submit node))
-                 (assoc :on-submit (register-callback! (:on-submit node))))]
+                 (assoc :on-submit (register-callback! (:on-submit node)))
+                 (fn? (:on-double-click node))
+                 (assoc :on-double-click (register-callback! (:on-double-click node)))
+                 (fn? (:on-blur node))
+                 (assoc :on-blur (register-callback! (:on-blur node)))
+                 (fn? (:on-escape node))
+                 (assoc :on-escape (register-callback! (:on-escape node))))]
       (update node :children #(mapv sanitize (or % []))))
 
     (sequential? node)
@@ -210,7 +216,8 @@
   "Invoke a previously registered Clojure function from a GPUI event.
 
   Buttons and checkboxes are 0-arg. Text fields pass the current string
-  as `value` when the host includes it on the callback message."
+  as `value` when the host includes it on the callback message.
+  `:on-escape` is 0-arg. `:on-double-click` is 0-arg."
   ([callback-id]
    (invoke-callback! callback-id nil))
   ([callback-id value]

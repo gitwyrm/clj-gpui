@@ -20,6 +20,12 @@ pub struct Node {
     pub on_change: Option<String>,
     #[serde(default, rename = "on-submit")]
     pub on_submit: Option<String>,
+    #[serde(default, rename = "on-double-click")]
+    pub on_double_click: Option<String>,
+    #[serde(default, rename = "on-blur")]
+    pub on_blur: Option<String>,
+    #[serde(default, rename = "on-escape")]
+    pub on_escape: Option<String>,
     #[serde(default)]
     pub checked: Option<bool>,
     #[serde(default)]
@@ -57,6 +63,19 @@ pub struct Node {
     /// Root layout: `"system"` (default), `"light"`, or `"dark"`.
     #[serde(default)]
     pub theme: Option<String>,
+    /// Native window title. Omitted keeps `clj-gpui`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Root layout: `"dev"` (default, nREPL footer) or `"app"` (no host chrome).
+    #[serde(default)]
+    pub chrome: Option<String>,
+    #[serde(default, rename = "window-width")]
+    pub window_width: Option<f32>,
+    #[serde(default, rename = "window-height")]
+    pub window_height: Option<f32>,
+    /// Text field: request keyboard focus when true.
+    #[serde(default)]
+    pub focus: bool,
     /// Checkbox: `"circle"` for a round toggle. Omitted is the square widget.
     #[serde(default)]
     pub shape: Option<String>,

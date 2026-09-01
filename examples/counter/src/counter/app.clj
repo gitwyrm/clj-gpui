@@ -8,7 +8,14 @@
 (defn app []
   (let [{:keys [count]} @!state]
     (ui/vstack
-     {:theme :dark :gap 16 :padding 8}
+     {:title "Counter"
+      :chrome :dev
+      :window-width 440
+      :window-height 400
+      :theme :dark
+      :gap 16
+      :padding 16
+      :flex 1}
      (ui/label "Counter" {:font-size 22 :font-weight :semibold})
      (ui/label "Real JVM Clojure. Native GPUI window. No webview."
                {:font-size 13 :color "#9aa4b2"})

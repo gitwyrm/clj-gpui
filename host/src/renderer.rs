@@ -1,6 +1,6 @@
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, App, ClickEvent, Context, Entity, Focusable,
+    div, prelude::*, px, rgb, size, AnyElement, App, ClickEvent, Context, Entity, Focusable,
     SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
@@ -19,6 +19,8 @@ struct InputSlot {
     state: Entity<InputState>,
     on_change: Option<String>,
     on_submit: Option<String>,
+    on_blur: Option<String>,
+    on_escape: Option<String>,
     /// When set, ignore `Change` and wait for the tree that follows this submit.
     wait_for_seq: Option<u64>,
     /// Submitted string; a late `Change` echoing it must not restore the draft.
@@ -34,8 +36,11 @@ pub struct RootView {
     inputs: HashMap<String, InputSlot>,
     used_inputs: HashSet<String>,
     _appearance: Subscription,
+    _keystrokes: Subscription,
     next_submit_seq: u64,
     tree_seq: Option<u64>,
+    applied_title: String,
+    applied_window_size: Option<(i32, i32)>,
 }
 
 impl RootView {
@@ -51,6 +56,12 @@ impl RootView {
                 this.apply_theme(window, cx);
                 cx.notify();
             }
+        });
+        let keystrokes = cx.observe_keystrokes(|this, event, window, cx| {
+            if event.keystroke.key != "escape" {
+                return;
+            }
+            this.handle_escape(window, cx);
         });
         let _ = cmd_tx.send(Cmd::Render);
         cx.spawn(async move |this, cx| {
@@ -93,8 +104,11 @@ impl RootView {
             inputs: HashMap::new(),
             used_inputs: HashSet::new(),
             _appearance: appearance,
+            _keystrokes: keystrokes,
             next_submit_seq: 0,
             tree_seq: None,
+            applied_title: String::new(),
+            applied_window_size: None,
         }
     }
 
@@ -128,6 +142,62 @@ impl RootView {
         }
     }
 
+    fn requested_chrome(&self) -> &str {
+        self.tree
+            .as_ref()
+            .and_then(|node| node.chrome.as_deref())
+            .filter(|chrome| !chrome.is_empty())
+            .unwrap_or("dev")
+    }
+
+    fn show_dev_chrome(&self) -> bool {
+        self.requested_chrome() != "app"
+    }
+
+    fn apply_chrome(&mut self, window: &mut Window) {
+        let (title, width, height) = {
+            let Some(tree) = self.tree.as_ref() else {
+                return;
+            };
+            (
+                tree.title
+                    .as_deref()
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or("clj-gpui")
+                    .to_string(),
+                tree.window_width.or(tree.width),
+                tree.window_height.or(tree.height),
+            )
+        };
+        if self.applied_title != title {
+            window.set_window_title(&title);
+            self.applied_title = title;
+        }
+        if let (Some(width), Some(height)) = (width, height) {
+            let requested = (width.round() as i32, height.round() as i32);
+            if self.applied_window_size != Some(requested) {
+                window.resize(size(px(width), px(height)));
+                self.applied_window_size = Some(requested);
+            }
+        }
+    }
+
+    fn handle_escape(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for slot in self.inputs.values() {
+            let Some(id) = slot.on_escape.clone() else {
+                continue;
+            };
+            if slot.state.read(cx).focus_handle(cx).is_focused(window) {
+                let _ = self.cmd_tx.send(Cmd::Callback {
+                    id,
+                    value: None,
+                    seq: None,
+                });
+                break;
+            }
+        }
+    }
+
     fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
         let cmd_tx = self.cmd_tx.clone();
         move |_, _, _| {
@@ -151,6 +221,8 @@ impl RootView {
         if let Some(slot) = self.inputs.get_mut(key) {
             slot.on_change = node.on_change.clone();
             slot.on_submit = node.on_submit.clone();
+            slot.on_blur = node.on_blur.clone();
+            slot.on_escape = node.on_escape.clone();
             let state = slot.state.clone();
             let force = matches!(
                 (slot.wait_for_seq, self.tree_seq),
@@ -173,11 +245,15 @@ impl RootView {
                     input.set_placeholder(placeholder, window, cx);
                 });
             }
+            if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
+                state.read(cx).focus_handle(cx).focus(window);
+            }
             return state;
         }
 
         let placeholder = node.placeholder.clone().unwrap_or_default();
         let default = node.text.clone().unwrap_or_default();
+        let want_focus = node.focus;
         let state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(placeholder)
@@ -189,6 +265,8 @@ impl RootView {
                 state: state.clone(),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
+                on_blur: node.on_blur.clone(),
+                on_escape: node.on_escape.clone(),
                 wait_for_seq: None,
                 submitted: None,
             },
@@ -223,14 +301,15 @@ impl RootView {
                 InputEvent::PressEnter { .. } => {
                     this.next_submit_seq = this.next_submit_seq.saturating_add(1);
                     let seq = this.next_submit_seq;
-                    let (on_submit, value, state) = {
+                    let (on_submit, value, state, clear) = {
                         let Some(slot) = this.inputs.get_mut(&key_owned) else {
                             return;
                         };
                         let value = input.read(cx).value().to_string();
                         slot.wait_for_seq = Some(seq);
                         slot.submitted = Some(value.clone());
-                        (slot.on_submit.clone(), value, slot.state.clone())
+                        let clear = slot.on_blur.is_none() && slot.on_escape.is_none();
+                        (slot.on_submit.clone(), value, slot.state.clone(), clear)
                     };
                     if let Some(id) = on_submit {
                         let _ = this.cmd_tx.send(Cmd::Callback {
@@ -239,16 +318,39 @@ impl RootView {
                             seq: Some(seq),
                         });
                     }
-                    // Clear immediately so a stale render cannot put the text back
-                    // before Clojure's post-submit tree arrives.
-                    state.update(cx, |input, cx| {
-                        input.set_value("", window, cx);
+                    // Compose fields (no blur/escape handlers) clear immediately so a
+                    // stale render cannot put the text back before Clojure's tree arrives.
+                    if clear {
+                        state.update(cx, |input, cx| {
+                            input.set_value("", window, cx);
+                        });
+                    }
+                }
+                InputEvent::Blur => {
+                    let Some(slot) = this.inputs.get(&key_owned) else {
+                        return;
+                    };
+                    if slot.wait_for_seq.is_some() {
+                        return;
+                    }
+                    let Some(id) = slot.on_blur.clone() else {
+                        return;
+                    };
+                    let value = input.read(cx).value().to_string();
+                    let _ = this.cmd_tx.send(Cmd::Callback {
+                        id,
+                        value: Some(value),
+                        seq: None,
                     });
                 }
                 _ => {}
             },
         )
         .detach();
+
+        if want_focus {
+            state.read(cx).focus_handle(cx).focus(window);
+        }
 
         state
     }
@@ -262,9 +364,23 @@ impl RootView {
     ) -> AnyElement {
         let key = widget_key(node, path);
         match node.kind.as_str() {
-            "label" => apply_style(div().id(eid(&key)), node)
-                .child(node.text.clone().unwrap_or_default())
-                .into_any_element(),
+            "label" => {
+                let mut el = apply_style(div().id(eid(&key)), node)
+                    .child(node.text.clone().unwrap_or_default());
+                if let Some(callback_id) = node.on_double_click.clone() {
+                    let cmd_tx = self.cmd_tx.clone();
+                    el = el.cursor_pointer().on_click(move |event, _, _| {
+                        if event.click_count() >= 2 {
+                            let _ = cmd_tx.send(Cmd::Callback {
+                                id: callback_id.clone(),
+                                value: None,
+                                seq: None,
+                            });
+                        }
+                    });
+                }
+                el.into_any_element()
+            }
             "button" => {
                 let label = node.text.clone().unwrap_or_default();
                 let mut button = Button::new(eid(&key)).label(label);
@@ -383,6 +499,7 @@ impl RootView {
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_theme(window, cx);
+        self.apply_chrome(window);
         self.used_inputs.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
@@ -405,20 +522,25 @@ impl Render for RootView {
         let used = std::mem::take(&mut self.used_inputs);
         self.inputs.retain(|key, _| used.contains(key));
 
+        let show_footer = self.show_dev_chrome();
+        let status = self.status.clone();
+
         v_flex()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(v_flex().flex_1().child(body))
-            .child(
-                div()
-                    .px_4()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.status.clone()),
-            )
+            .when(show_footer, |el| {
+                el.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(status),
+                )
+            })
     }
 }
 

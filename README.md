@@ -37,7 +37,7 @@ Or from the repo root:
 ./scripts/run.sh
 ```
 
-On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. GPUI and its GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`.
+On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. Later runs rebuild when a host source file (`host/src/**/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the binary. GPUI and its GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`. Set `CLJ_GPUI_BIN` to skip Cargo entirely.
 
 ![clj-gpui native window](docs/screenshot.png)
 
@@ -100,7 +100,11 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
 (defn app []
   (let [{:keys [count draft]} @!state]
     (ui/vstack
-     {:theme :system :gap 12 :padding 8}
+     {:title "clj-gpui"
+      :chrome :dev
+      :theme :system
+      :gap 12
+      :padding 8}
      (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
      (ui/label (str "Count: " count))
      (ui/hstack
@@ -114,7 +118,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
        :on-change #(swap! !state assoc :draft %)}))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Text fields pass the current string to `:on-change` / `:on-submit`.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg.
 
 ## Architecture
 
@@ -183,16 +187,17 @@ docs/protocol.md
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
 (ui/button "+" on-click)
 (ui/button "Save" save! {:primary true})
-(ui/vstack {:theme :system :gap 8 :padding 16} ...)
+(ui/vstack {:title "Todos" :chrome :app :window-width 640 :window-height 820 :theme :system :gap 8 :padding 16} ...)
 (ui/hstack ...)
 (ui/spacer)
 (ui/checkbox checked on-click "Label")
 (ui/checkbox done toggle {:shape :circle})
+(ui/label title {:on-double-click start-edit})
 (ui/scroll {:height 220} ...)
-(ui/text-field value {:placeholder "…" :on-change f :on-submit g})
+(ui/text-field value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
 ```
 
-`:theme` on the root layout is `:system` (follow the OS, the default), `:light`, or `:dark`. `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
+`:theme` on the root layout is `:system` (follow the OS, the default), `:light`, or `:dark`. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it. `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
 ## Environment
 

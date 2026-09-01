@@ -6,8 +6,8 @@
 
     clj -M:dev my.app/app
 
-  The host is built with Cargo on first use when `host/` is present
-  (this repo, a git dep checkout, or CLJ_GPUI_ROOT)."
+  The host is built with Cargo when `host/` is present and either the
+  binary is missing or a host source file is newer than the binary."
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [gpui.runtime :as runtime])
@@ -99,6 +99,31 @@
                      (and (.isFile f) (.canExecute f)))
                    (host-binary-candidates target-dir)))))
 
+(defn host-input-files
+  "Cargo manifest and Rust sources that should trigger a host rebuild."
+  [^java.io.File host-dir]
+  (let [named (->> [(io/file host-dir "Cargo.toml")
+                    (io/file host-dir "Cargo.lock")
+                    (io/file host-dir "build.rs")]
+                   (filterv #(.isFile ^java.io.File %)))
+        src (io/file host-dir "src")
+        rust (if (.isDirectory src)
+               (->> (file-seq src)
+                    (filter (fn [^java.io.File f]
+                              (and (.isFile f)
+                                   (.endsWith ^String (.getName f) ".rs"))))
+                    vec)
+               [])]
+    (into named rust)))
+
+(defn host-stale?
+  "True when `binary` is older than a host source file under `host-dir`."
+  [^java.io.File host-dir ^java.io.File binary]
+  (let [t (.lastModified binary)]
+    (boolean (some (fn [^java.io.File f]
+                     (> (.lastModified f) t))
+                   (host-input-files host-dir)))))
+
 (defn- build-host!
   [^java.io.File root]
   (let [host-dir (io/file root "host")]
@@ -106,7 +131,7 @@
       (throw (ex-info (str "No host/ crate under " (.getPath root)
                            ". Set CLJ_GPUI_BIN to a clj-gpui binary, or CLJ_GPUI_ROOT to the clj-gpui checkout.")
                       {:root (.getPath root)})))
-    (println "[clj-gpui] building native host with cargo (first run can take a while)")
+    (println "[clj-gpui] building native host with cargo")
     (let [args (doto (ArrayList.)
                  (.add "cargo")
                  (.add "build")
@@ -130,17 +155,23 @@
     (let [^java.io.File root (or (library-root)
                                  (throw (ex-info "Could not locate clj-gpui. Set CLJ_GPUI_ROOT or CLJ_GPUI_BIN." {})))
           host-dir (io/file root "host")
-          target-dir (or (cargo-target-dir host-dir) (io/file host-dir "target"))]
-      (or (locate-host-binary target-dir)
-          (do (build-host! root)
-              (let [target-dir (or (cargo-target-dir host-dir) target-dir)]
-                (or (locate-host-binary target-dir)
-                    (throw (ex-info (str "Host build succeeded but clj-gpui binary was not found under "
-                                         (.getPath target-dir)
-                                         ". Cargo may have written a different name; set CLJ_GPUI_BIN.")
-                                    {:target-dir (.getPath target-dir)
-                                     :candidates (mapv #(.getPath ^java.io.File %)
-                                                       (host-binary-candidates target-dir))})))))))))
+          target-dir (or (cargo-target-dir host-dir) (io/file host-dir "target"))
+          bin (locate-host-binary target-dir)]
+      (if (and bin (not (host-stale? host-dir bin)))
+        bin
+        (do
+          (println (if bin
+                     "[clj-gpui] host sources changed, rebuilding native host"
+                     "[clj-gpui] native host missing, building with cargo"))
+          (build-host! root)
+          (let [target-dir (or (cargo-target-dir host-dir) target-dir)]
+            (or (locate-host-binary target-dir)
+                (throw (ex-info (str "Host build succeeded but clj-gpui binary was not found under "
+                                     (.getPath target-dir)
+                                     ". Cargo may have written a different name; set CLJ_GPUI_BIN.")
+                                {:target-dir (.getPath target-dir)
+                                 :candidates (mapv #(.getPath ^java.io.File %)
+                                                   (host-binary-candidates target-dir))})))))))))
 
 (defn- spawn-host!
   [^java.io.File exe port protocol-test?]

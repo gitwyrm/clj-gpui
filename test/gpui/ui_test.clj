@@ -39,7 +39,9 @@
   (testing "style keys pass through"
     (is (true? (:strikethrough (ui/label "x" {:strikethrough true}))))
     (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))
-    (is (= :circle (:shape (ui/checkbox false (fn []) {:shape :circle}))))))
+    (is (= :circle (:shape (ui/checkbox false (fn []) {:shape :circle}))))
+    (is (fn? (:on-double-click (ui/label "x" {:on-double-click (fn [])}))))
+    (is (true? (:focus (ui/text-field "" {:focus true}))))))
 
 (deftest sequences-flatten-inside-stacks
   (let [tree (ui/vstack
@@ -72,6 +74,31 @@
   (let [exported (runtime/export-tree
                   (ui/vstack {:theme :system} (ui/label "x")))]
     (is (= "system" (:theme exported)))))
+
+(deftest window-chrome-on-root-serializes
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:title "Todos"
+                              :chrome :app
+                              :window-width 640
+                              :window-height 820}
+                             (ui/label "x")))]
+    (is (= "Todos" (:title exported)))
+    (is (= "app" (:chrome exported)))
+    (is (= 640 (:window-width exported)))
+    (is (= 820 (:window-height exported)))))
+
+(deftest export-double-click-and-edit-callbacks
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/label "n" {:on-double-click (fn [])})
+                   (ui/text-field "hi" {:on-blur (fn [_])
+                                        :on-escape (fn [])})))]
+    (is (string? (get-in exported [:children 0 :on-double-click])))
+    (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-double-click]))))
+    (is (string? (get-in exported [:children 1 :on-blur])))
+    (is (string? (get-in exported [:children 1 :on-escape])))))
 
 (deftest invoke-callback-passes-text-value
   (runtime/reset-callbacks!)

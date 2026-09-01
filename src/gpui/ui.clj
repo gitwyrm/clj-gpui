@@ -94,7 +94,8 @@
 
   (ui/label \"Hello\")
   (ui/label \"Hello\" {:font-size 20 :font-weight :bold})
-  (ui/label \"todos\" {:font-family \".SystemUIFont\" :font-weight :light})"
+  (ui/label \"todos\" {:font-family \".SystemUIFont\" :font-weight :light})
+  (ui/label title {:on-double-click #(start-edit item)})"
   ([text]
    {:type :label :text (str text)})
   ([text style]
@@ -120,8 +121,14 @@
   Put `:theme :system`, `:light`, or `:dark` on the root layout.
   `:system` (the default) follows the OS appearance.
 
+  Window chrome also lives on the root:
+  `:title`, `:chrome` (`:dev` shows the nREPL footer, `:app` hides it),
+  `:window-width`, and `:window-height`. `:width` / `:height` on the root
+  set the native window too when `:window-width` / `:window-height` are omitted.
+
   (ui/vstack
-    {:theme :light :gap 8 :padding 16}
+    {:title \"Todos\" :chrome :app :window-width 640 :window-height 820
+     :theme :light :gap 8 :padding 16}
     (ui/label \"Hello\")
     (map item-view items))"
   [& args]
@@ -177,13 +184,21 @@
   "Single-line text input rendered with gpui-component's Input.
 
   `on-change` and `:on-submit` receive the current string. Prefer a
-  stable `:id` so typed text survives layout shifts.
+  stable `:id` so typed text survives layout shifts. `:focus true`
+  requests keyboard focus. `:on-blur` gets the string; `:on-escape`
+  is 0-arg.
 
   (ui/text-field draft
                  {:id \"new-todo\"
                   :placeholder \"What needs to be done?\"
                   :on-change #(swap! !state assoc :draft %)
-                  :on-submit add-todo})"
+                  :on-submit add-todo})
+  (ui/text-field draft
+                 {:id \"edit-1\"
+                  :focus true
+                  :on-submit save
+                  :on-blur save
+                  :on-escape cancel})"
   ([value]
    {:type :text-field :text (str (or value ""))})
   ([value on-change-or-opts]

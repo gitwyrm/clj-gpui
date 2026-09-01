@@ -87,8 +87,12 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `placeholder` | string | `text-field` |
 | `children` | array of nodes | layouts, `scroll` |
 | `on-click` | string callback id | `button`, `checkbox` |
+| `on-double-click` | string callback id | `label` (0-arg) |
 | `on-change` | string callback id | `text-field` (called with the field string) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
+| `on-blur` | string callback id | `text-field` (called with the field string) |
+| `on-escape` | string callback id | `text-field` (0-arg) |
+| `focus` | bool | `text-field`: request keyboard focus |
 | `checked` | bool | `checkbox` |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
@@ -105,8 +109,11 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
 | `theme` | string | root layout: `system` (default), `light`, `dark` |
+| `title` | string | root: native window title (default `clj-gpui`) |
+| `chrome` | string | root: `dev` (default, nREPL footer) or `app` (no host chrome) |
+| `window-width`, `window-height` | number | root: native window size in pixels |
 
-Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` with ids such as `"cb-2"`. The registry is rebuilt on every export.
+Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` with ids such as `"cb-2"`. The registry is rebuilt on every export.
 
 The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1 (`Button`, `Checkbox`, `Input`, `v_flex` / `h_flex`, themed `Root`).
 
@@ -118,4 +125,10 @@ Put `:theme` on the **root** node. The host does not choose a theme on its own:
 * `:light` pins gpui-component to light
 * `:dark` pins gpui-component to dark
 
-The native window title is currently the constant `gpui.ui/window-title` (`clj-gpui`).
+Window chrome is also Clojure-owned, on the same root node:
+
+* `:title` sets the native window title (default `clj-gpui`)
+* `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides host chrome
+* `:window-width` / `:window-height` resize the window when those values change in the tree. Root `:width` / `:height` are used if the `window-*` keys are omitted.
+
+The size is applied when the tree’s requested size changes, not on every user drag.
