@@ -180,8 +180,8 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         Cmd::Shutdown => break,
                         Cmd::Render => rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                             .and_then(|value| parse_tree(&value))
-                            .map(HostEvent::Tree),
-                        Cmd::Callback { id, value } => {
+                            .map(|node| HostEvent::Tree(node, None)),
+                        Cmd::Callback { id, value, seq } => {
                             let mut request = json!({"op": "callback", "callback-id": id});
                             if let Some(value) = value {
                                 request["value"] = json!(value);
@@ -191,11 +191,11 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                                 })
                                 .and_then(|value| parse_tree(&value))
-                                .map(HostEvent::Tree)
+                                .map(|node| HostEvent::Tree(node, seq))
                         }
                         Cmd::Reload => rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
                             .and_then(|value| parse_tree(&value))
-                            .map(HostEvent::Tree),
+                            .map(|node| HostEvent::Tree(node, None)),
                     };
                     match result {
                         Ok(event) => {
@@ -230,7 +230,7 @@ pub fn protocol_test() -> Result<()> {
     let mut tree = None;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t)) => {
+            Ok(HostEvent::Tree(t, _)) => {
                 tree = Some(t);
                 break;
             }
@@ -256,13 +256,14 @@ pub fn protocol_test() -> Result<()> {
     host.cmd_tx.send(Cmd::Callback {
         id: plus,
         value: None,
+        seq: None,
     })?;
 
     let started = Instant::now();
     let mut updated = None;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t)) => {
+            Ok(HostEvent::Tree(t, _)) => {
                 updated = Some(t);
                 break;
             }
@@ -282,7 +283,7 @@ pub fn protocol_test() -> Result<()> {
     let mut reloaded = false;
     while started.elapsed() < Duration::from_secs(30) {
         match host.event_rx.recv_blocking() {
-            Ok(HostEvent::Tree(t)) => {
+            Ok(HostEvent::Tree(t, _)) => {
                 if t.contains_text("Count: 1") {
                     reloaded = true;
                     break;

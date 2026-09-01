@@ -98,7 +98,12 @@ impl Node {
 #[derive(Debug, Clone)]
 pub enum Cmd {
     Render,
-    Callback { id: String, value: Option<String> },
+    Callback {
+        id: String,
+        value: Option<String>,
+        /// Set on text-field submit so the following tree can force-sync that field.
+        seq: Option<u64>,
+    },
     Reload,
     Shutdown,
 }
@@ -110,6 +115,7 @@ pub enum HostEvent {
         #[allow(dead_code)]
         app: String,
     },
-    Tree(Node),
+    /// `callback_seq` is `Some` when this tree was fetched right after that submit.
+    Tree(Node, Option<u64>),
     Error(String),
 }

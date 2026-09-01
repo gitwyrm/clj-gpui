@@ -31,15 +31,16 @@
 (defn- add-todo
   [title]
   (let [title (str/trim (str title))]
-    (when (seq title)
-      (swap! !state
-             (fn [state]
-               (-> state
-                   (update :items conj {:id (:next-id state)
-                                        :title title
-                                        :done false})
-                   (update :next-id inc)
-                   (assoc :draft "")))))))
+    (swap! !state
+           (fn [state]
+             (let [cleared (assoc state :draft "")]
+               (if (seq title)
+                 (-> cleared
+                     (update :items conj {:id (:next-id state)
+                                          :title title
+                                          :done false})
+                     (update :next-id inc))
+                 cleared))))))
 
 (defn- toggle-item [id]
   (swap! !state update :items

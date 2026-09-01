@@ -19,7 +19,10 @@ struct InputSlot {
     state: Entity<InputState>,
     on_change: Option<String>,
     on_submit: Option<String>,
-    sync_after_submit: bool,
+    /// When set, ignore `Change` and wait for the tree that follows this submit.
+    wait_for_seq: Option<u64>,
+    /// Submitted string; a late `Change` echoing it must not restore the draft.
+    submitted: Option<String>,
 }
 
 pub struct RootView {
@@ -31,6 +34,8 @@ pub struct RootView {
     inputs: HashMap<String, InputSlot>,
     used_inputs: HashSet<String>,
     _appearance: Subscription,
+    next_submit_seq: u64,
+    tree_seq: Option<u64>,
 }
 
 impl RootView {
@@ -56,8 +61,9 @@ impl RootView {
                             view.nrepl_port = nrepl_port;
                             view.status = format!("nREPL 127.0.0.1:{nrepl_port} · connected");
                         }
-                        HostEvent::Tree(tree) => {
+                        HostEvent::Tree(tree, seq) => {
                             view.tree = Some(tree);
+                            view.tree_seq = seq;
                             view.error = None;
                             view.status = format!(
                                 "nREPL 127.0.0.1:{} · live · hot reload on",
@@ -65,6 +71,10 @@ impl RootView {
                             );
                         }
                         HostEvent::Error(err) => {
+                            for slot in view.inputs.values_mut() {
+                                slot.wait_for_seq = None;
+                                slot.submitted = None;
+                            }
                             view.error = Some(err);
                         }
                     }
@@ -83,6 +93,8 @@ impl RootView {
             inputs: HashMap::new(),
             used_inputs: HashSet::new(),
             _appearance: appearance,
+            next_submit_seq: 0,
+            tree_seq: None,
         }
     }
 
@@ -122,6 +134,7 @@ impl RootView {
             let _ = cmd_tx.send(Cmd::Callback {
                 id: callback_id.clone(),
                 value: None,
+                seq: None,
             });
         }
     }
@@ -139,18 +152,21 @@ impl RootView {
             slot.on_change = node.on_change.clone();
             slot.on_submit = node.on_submit.clone();
             let state = slot.state.clone();
-            let sync = slot.sync_after_submit;
-            if sync {
-                slot.sync_after_submit = false;
-            }
+            let force = matches!(
+                (slot.wait_for_seq, self.tree_seq),
+                (Some(wait), Some(seq)) if wait == seq
+            );
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let desired = node.text.clone().unwrap_or_default();
             let current = state.read(cx).value().to_string();
-            if current != desired && (!focused || sync) {
+            if current != desired && (force || (!focused && slot.wait_for_seq.is_none())) {
                 let desired = desired.clone();
                 state.update(cx, |input, cx| {
                     input.set_value(desired, window, cx);
                 });
+            }
+            if force {
+                slot.wait_for_seq = None;
             }
             if let Some(placeholder) = node.placeholder.clone() {
                 state.update(cx, |input, cx| {
@@ -173,38 +189,61 @@ impl RootView {
                 state: state.clone(),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
-                sync_after_submit: false,
+                wait_for_seq: None,
+                submitted: None,
             },
         );
 
         let key_owned = key.to_string();
-        cx.subscribe(
+        cx.subscribe_in(
             &state,
-            move |this, input, event: &InputEvent, cx| match event {
+            window,
+            move |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
-                    if let Some(id) = this
-                        .inputs
-                        .get(&key_owned)
-                        .and_then(|slot| slot.on_change.clone())
-                    {
+                    let Some(slot) = this.inputs.get_mut(&key_owned) else {
+                        return;
+                    };
+                    if slot.wait_for_seq.is_some() {
+                        return;
+                    }
+                    let value = input.read(cx).value().to_string();
+                    if slot.submitted.as_ref() == Some(&value) {
+                        return;
+                    }
+                    slot.submitted = None;
+                    let Some(id) = slot.on_change.clone() else {
+                        return;
+                    };
+                    let _ = this.cmd_tx.send(Cmd::Callback {
+                        id,
+                        value: Some(value),
+                        seq: None,
+                    });
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.next_submit_seq = this.next_submit_seq.saturating_add(1);
+                    let seq = this.next_submit_seq;
+                    let (on_submit, value, state) = {
+                        let Some(slot) = this.inputs.get_mut(&key_owned) else {
+                            return;
+                        };
                         let value = input.read(cx).value().to_string();
+                        slot.wait_for_seq = Some(seq);
+                        slot.submitted = Some(value.clone());
+                        (slot.on_submit.clone(), value, slot.state.clone())
+                    };
+                    if let Some(id) = on_submit {
                         let _ = this.cmd_tx.send(Cmd::Callback {
                             id,
                             value: Some(value),
+                            seq: Some(seq),
                         });
                     }
-                }
-                InputEvent::PressEnter { .. } => {
-                    if let Some(slot) = this.inputs.get_mut(&key_owned) {
-                        slot.sync_after_submit = true;
-                        if let Some(id) = slot.on_submit.clone() {
-                            let value = input.read(cx).value().to_string();
-                            let _ = this.cmd_tx.send(Cmd::Callback {
-                                id,
-                                value: Some(value),
-                            });
-                        }
-                    }
+                    // Clear immediately so a stale render cannot put the text back
+                    // before Clojure's post-submit tree arrives.
+                    state.update(cx, |input, cx| {
+                        input.set_value("", window, cx);
+                    });
                 }
                 _ => {}
             },
@@ -267,6 +306,7 @@ impl RootView {
                             let _ = cmd_tx.send(Cmd::Callback {
                                 id: callback_id.clone(),
                                 value: None,
+                                seq: None,
                             });
                         });
                     }
