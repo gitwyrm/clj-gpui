@@ -1,19 +1,42 @@
 use crate::catalog;
-use crate::protocol::{Cmd, HostEvent, Node};
+use crate::mapping;
+use crate::protocol::{Cmd, HostEvent, Item, Node};
 use gpui::{
-    div, prelude::*, px, rgb, size, AnyElement, App, Bounds, ClickEvent, Context, Element,
-    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, LayoutId, PathPromptOptions,
-    Pixels, SharedString, Styled, Subscription, Window,
+    div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context, Element,
+    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
+    PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants as _},
+    accordion::Accordion,
+    alert::Alert,
+    avatar::Avatar,
+    badge::Badge,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
     checkbox::Checkbox,
+    clipboard::Clipboard,
+    description_list::DescriptionList,
+    divider::Divider,
+    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    kbd::Kbd,
+    link::Link,
+    progress::Progress,
+    radio::{Radio, RadioGroup},
     scroll::ScrollableElement as _,
+    select::{Select, SelectEvent, SelectItem, SelectState},
+    skeleton::Skeleton,
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
+    spinner::Spinner,
+    switch::Switch,
+    tab::{Tab, TabBar},
+    tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
-    v_flex, ActiveTheme as _, Root,
+    tooltip::Tooltip,
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _,
 };
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
@@ -30,6 +53,38 @@ struct InputSlot {
     wait_for_seq: Option<u64>,
     /// Submitted string; a late `Change` echoing it must not restore the draft.
     submitted: Option<String>,
+}
+
+struct SliderSlot {
+    state: Entity<SliderState>,
+    min: f32,
+    max: f32,
+    step: f32,
+    on_change: Option<String>,
+}
+
+#[derive(Clone)]
+struct SelectOpt {
+    id: SharedString,
+    label: SharedString,
+}
+
+impl SelectItem for SelectOpt {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+struct SelectSlot {
+    state: Entity<SelectState<Vec<SelectOpt>>>,
+    searchable: bool,
+    on_change: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,7 +170,11 @@ pub struct RootView {
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
     inputs: HashMap<String, InputSlot>,
+    sliders: HashMap<String, SliderSlot>,
+    selects: HashMap<String, SelectSlot>,
     used_inputs: HashSet<String>,
+    used_sliders: HashSet<String>,
+    used_selects: HashSet<String>,
     _appearance: Subscription,
     _keystrokes: Subscription,
     next_submit_seq: u64,
@@ -193,7 +252,11 @@ impl RootView {
             nrepl_port,
             cmd_tx,
             inputs: HashMap::new(),
+            sliders: HashMap::new(),
+            selects: HashMap::new(),
             used_inputs: HashSet::new(),
+            used_sliders: HashSet::new(),
+            used_selects: HashSet::new(),
             _appearance: appearance,
             _keystrokes: keystrokes,
             next_submit_seq: 0,
@@ -339,6 +402,14 @@ impl RootView {
         }
     }
 
+    fn emit_value(&self, callback_id: String, value: Value) {
+        let _ = self.cmd_tx.send(Cmd::Callback {
+            id: callback_id,
+            value: Some(value),
+            seq: None,
+        });
+    }
+
     fn input_slot(
         &mut self,
         key: &str,
@@ -424,7 +495,7 @@ impl RootView {
                     };
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(value),
+                        value: Some(json!(value)),
                         seq: None,
                     });
                 }
@@ -444,7 +515,7 @@ impl RootView {
                     if let Some(id) = on_submit {
                         let _ = this.cmd_tx.send(Cmd::Callback {
                             id,
-                            value: Some(value),
+                            value: Some(json!(value)),
                             seq: Some(seq),
                         });
                     }
@@ -469,7 +540,7 @@ impl RootView {
                     let value = input.read(cx).value().to_string();
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(value),
+                        value: Some(json!(value)),
                         seq: None,
                     });
                 }
@@ -482,6 +553,156 @@ impl RootView {
             state.read(cx).focus_handle(cx).focus(window);
         }
 
+        state
+    }
+
+    fn slider_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SliderState> {
+        self.used_sliders.insert(key.to_string());
+        let min = node.min.unwrap_or(0.0);
+        let max = node.max.unwrap_or(100.0);
+        let step = if node.step.unwrap_or(1.0) <= 0.0 {
+            1.0
+        } else {
+            node.step.unwrap_or(1.0)
+        };
+        let lo = min.min(max);
+        let hi = min.max(max);
+        let value = node.number_value().unwrap_or(lo).clamp(lo, hi);
+
+        if let Some(slot) = self.sliders.get_mut(key) {
+            if (slot.min - lo).abs() <= f32::EPSILON
+                && (slot.max - hi).abs() <= f32::EPSILON
+                && (slot.step - step).abs() <= f32::EPSILON
+            {
+                slot.on_change = node.on_change.clone();
+                let current = match slot.state.read(cx).value() {
+                    SliderValue::Single(v) => v,
+                    SliderValue::Range(_, end) => end,
+                };
+                if (current - value).abs() > step.max(0.0001) / 2.0 {
+                    slot.state.update(cx, |s, cx| {
+                        s.set_value(value, window, cx);
+                    });
+                }
+                return slot.state.clone();
+            }
+        }
+
+        let state = cx.new(|_cx| {
+            SliderState::new()
+                .min(lo)
+                .max(hi)
+                .step(step)
+                .default_value(value)
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
+            let SliderEvent::Change(changed) = event;
+            let number = match changed {
+                SliderValue::Single(v) => *v,
+                SliderValue::Range(_, end) => *end,
+            };
+            let Some(id) = this
+                .sliders
+                .get(&key_owned)
+                .and_then(|slot| slot.on_change.clone())
+            else {
+                return;
+            };
+            this.emit_value(id, json!(number));
+        })
+        .detach();
+        self.sliders.insert(
+            key.to_string(),
+            SliderSlot {
+                state: state.clone(),
+                min: lo,
+                max: hi,
+                step,
+                on_change: node.on_change.clone(),
+            },
+        );
+        state
+    }
+
+    fn select_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<SelectOpt>>> {
+        self.used_selects.insert(key.to_string());
+        let items: Vec<SelectOpt> = node
+            .collection()
+            .iter()
+            .map(|item| SelectOpt {
+                id: SharedString::from(item.id_or_label()),
+                label: SharedString::from(item.label_or_id()),
+            })
+            .collect();
+        let selected = node.string_value();
+        let selected_index = selected.as_ref().and_then(|id| {
+            items
+                .iter()
+                .position(|item| item.id.as_ref() == id)
+                .map(|ix| gpui_component::IndexPath::default().row(ix))
+        });
+
+        if let Some(slot) = self.selects.get_mut(key) {
+            if slot.searchable == node.searchable {
+                slot.on_change = node.on_change.clone();
+                let items = items.clone();
+                slot.state.update(cx, |state, cx| {
+                    state.set_items(items, window, cx);
+                    if let Some(id) = selected.as_deref() {
+                        let id = SharedString::from(id.to_string());
+                        state.set_selected_value(&id, window, cx);
+                    }
+                });
+                return slot.state.clone();
+            }
+        }
+
+        let searchable = node.searchable;
+        let items_for_state = items;
+        let state = cx.new(|cx| {
+            let built = SelectState::new(items_for_state, selected_index, window, cx);
+            built.searchable(searchable)
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(
+            &state,
+            move |this, _, event: &SelectEvent<Vec<SelectOpt>>, _cx| {
+                let SelectEvent::Confirm(value) = event;
+                let Some(id) = this
+                    .selects
+                    .get(&key_owned)
+                    .and_then(|slot| slot.on_change.clone())
+                else {
+                    return;
+                };
+                match value {
+                    Some(selected) => this.emit_value(id, json!(selected.to_string())),
+                    None => this.emit_value(id, Value::Null),
+                }
+            },
+        )
+        .detach();
+        self.selects.insert(
+            key.to_string(),
+            SelectSlot {
+                state: state.clone(),
+                searchable,
+                on_change: node.on_change.clone(),
+            },
+        );
         state
     }
 
@@ -544,6 +765,9 @@ impl RootView {
                 if node.compact {
                     button = button.compact();
                 }
+                if node.disabled {
+                    button = button.disabled(true);
+                }
                 if let Some(callback_id) = node.on_click.clone() {
                     button = button.on_click(self.click(callback_id));
                 }
@@ -600,12 +824,36 @@ impl RootView {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(Input::new(&state), node, cx).into_any_element()
             }
+            "switch" => self.render_switch(node, &key, cx),
+            "toggle" => self.render_toggle(node, &key, cx),
+            "radio-group" => self.render_radio_group(node, &key, cx),
+            "slider" => self.render_slider(node, &key, window, cx),
+            "progress" => self.render_progress(node, cx),
+            "divider" => self.render_divider(node, cx),
+            "spinner" => self.render_spinner(node, cx),
+            "tag" => self.render_tag(node, cx),
+            "alert" => self.render_alert(node, &key, cx),
+            "skeleton" => self.render_skeleton(node, cx),
+            "kbd" => self.render_kbd(node, cx),
+            "link" => self.render_link(node, &key, cx),
+            "group-box" => self.render_group_box(node, path, &key, window, cx),
+            "badge" => self.render_badge(node, path, window, cx),
+            "tabs" => self.render_tabs(node, &key, cx),
+            "select" => self.render_select(node, &key, window, cx),
+            "icon" => self.render_icon(node, cx),
+            "clipboard" => self.render_clipboard(node, &key, cx),
+            "breadcrumb" => self.render_breadcrumb(node, &key, cx),
+            "avatar" => self.render_avatar(node, cx),
+            "accordion" => self.render_accordion(node, path, &key, window, cx),
+            "description-list" => self.render_description_list(node, cx),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
                 .child(format!("Unknown GPUI node: {other}"))
                 .into_any_element(),
         };
+
+        let element = with_tooltip(element, node, &key);
 
         if let Some(prev) = prev {
             *Theme::global_mut(cx) = prev;
@@ -614,6 +862,433 @@ impl RootView {
             Some(applied) => ThemeScope::new(applied, element).into_any_element(),
             None => element,
         }
+    }
+
+    fn render_switch(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let checked = node.checked.unwrap_or(false);
+        let mut el = Switch::new(eid(key)).checked(checked);
+        if let Some(text) = node.text.clone() {
+            el = el.label(text);
+        }
+        if node.disabled {
+            el = el.disabled(true);
+        }
+        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            el = el.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(el, node, cx).into_any_element()
+    }
+
+    fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let checked = node.checked.unwrap_or(false);
+        let mut el = Toggle::new(eid(key))
+            .checked(checked)
+            .with_variant(mapping::parse_toggle_variant(node.variant.as_deref()));
+        if let Some(text) = node.text.clone() {
+            el = el.label(text);
+        }
+        if node.disabled {
+            el = el.disabled(true);
+        }
+        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            el = el.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(el, node, cx).into_any_element()
+    }
+
+    fn render_radio_group(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let selected = node.string_value();
+        let items = node.collection();
+        let selected_index = selected
+            .as_ref()
+            .and_then(|id| items.iter().position(|item| &item.id_or_label() == id));
+        let mut group = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Horizontal {
+            RadioGroup::horizontal(eid(key))
+        } else {
+            RadioGroup::vertical(eid(key))
+        };
+        group = group
+            .selected_index(selected_index)
+            .disabled(node.disabled)
+            .children(items.iter().map(|item| {
+                Radio::new(SharedString::from(item.id_or_label())).label(item.label_or_id())
+            }));
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            group = group.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(group, node, cx).into_any_element()
+    }
+
+    fn render_slider(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.slider_slot(key, node, window, cx);
+        let mut slider = Slider::new(&state);
+        slider = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+            slider.vertical()
+        } else {
+            slider.horizontal()
+        };
+        if node.disabled {
+            slider = slider.disabled(true);
+        }
+        apply_style(slider, node, cx).into_any_element()
+    }
+
+    fn render_progress(&self, node: &Node, cx: &App) -> AnyElement {
+        let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
+        apply_style(Progress::new().value(value), node, cx).into_any_element()
+    }
+
+    fn render_divider(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut divider = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+            Divider::vertical()
+        } else {
+            Divider::horizontal()
+        };
+        if node.dashed {
+            divider = divider.dashed();
+        }
+        if let Some(label) = node.text.clone().filter(|s| !s.is_empty()) {
+            divider = divider.label(label);
+        }
+        apply_style(divider, node, cx).into_any_element()
+    }
+
+    fn render_spinner(&self, node: &Node, _cx: &App) -> AnyElement {
+        let mut spinner =
+            Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+            spinner = spinner.icon(icon);
+        }
+        spinner.into_any_element()
+    }
+
+    fn render_tag(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut tag = Tag::new().with_variant(mapping::parse_tag_variant(node.variant.as_deref()));
+        if node.outline {
+            tag = tag.outline();
+        }
+        tag = tag.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        let label = node.text.clone().unwrap_or_default();
+        apply_style(tag.child(label), node, cx).into_any_element()
+    }
+
+    fn render_alert(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let message = node
+            .message
+            .clone()
+            .or_else(|| node.text.clone())
+            .unwrap_or_default();
+        let variant = node.variant.as_deref().map(catalog::normalize);
+        let mut alert = match variant.as_deref() {
+            Some("info") => Alert::info(eid(key), message),
+            Some("success") => Alert::success(eid(key), message),
+            Some("warning") => Alert::warning(eid(key), message),
+            Some("error") | Some("danger") => Alert::error(eid(key), message),
+            _ => Alert::new(eid(key), message),
+        };
+        if let Some(title) = node.title.clone() {
+            alert = alert.title(title);
+        }
+        alert = alert.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_close.clone() {
+            alert = alert.on_close(self.click(callback_id));
+        }
+        apply_style(alert, node, cx).into_any_element()
+    }
+
+    fn render_skeleton(&self, node: &Node, cx: &App) -> AnyElement {
+        apply_style(Skeleton::new(), node, cx).into_any_element()
+    }
+
+    fn render_kbd(&self, node: &Node, cx: &App) -> AnyElement {
+        let text = node.text.clone().unwrap_or_default();
+        match Keystroke::parse(&text) {
+            Ok(stroke) => apply_style(Kbd::new(stroke), node, cx).into_any_element(),
+            Err(_) => apply_style(div().child(text), node, cx).into_any_element(),
+        }
+    }
+
+    fn render_link(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let mut link = Link::new(eid(key));
+        if let Some(href) = node.href.clone().filter(|s| !s.is_empty()) {
+            link = link.href(href);
+        }
+        if node.disabled {
+            link = link.disabled(true);
+        }
+        if let Some(callback_id) = node.on_click.clone() {
+            link = link.on_click(self.click(callback_id));
+        }
+        let label = node
+            .text
+            .clone()
+            .unwrap_or_else(|| node.href.clone().unwrap_or_default());
+        apply_style(link.child(label), node, cx).into_any_element()
+    }
+
+    fn render_group_box(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut box_ = GroupBox::new()
+            .id(eid(key))
+            .with_variant(mapping::parse_group_variant(node.variant.as_deref()));
+        if let Some(title) = node.title.clone() {
+            box_ = box_.title(title);
+        }
+        apply_style(box_, node, cx)
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
+    fn render_badge(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut badge = Badge::new();
+        if node.dot {
+            badge = badge.dot();
+        } else if let Some(count) = node.count {
+            badge = badge.count(count as usize);
+        } else if let Some(n) = node.number_value() {
+            badge = badge.count(n.max(0.0) as usize);
+        }
+        badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        badge
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
+    fn render_tabs(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let selected = node.string_value();
+        let selected_index = selected
+            .as_ref()
+            .and_then(|id| items.iter().position(|item| &item.id_or_label() == id))
+            .unwrap_or(0);
+        let mut bar = TabBar::new(eid(key))
+            .with_variant(mapping::parse_tab_variant(node.variant.as_deref()))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .selected_index(selected_index)
+            .children(items.iter().map(|item| Tab::from(item.label_or_id())));
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            bar = bar.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(bar, node, cx).into_any_element()
+    }
+
+    fn render_select(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.select_slot(key, node, window, cx);
+        let mut select = Select::new(&state);
+        if let Some(placeholder) = node.placeholder.clone() {
+            select = select.placeholder(placeholder);
+        }
+        if node.disabled {
+            select = select.disabled(true);
+        }
+        select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        apply_style(select, node, cx).into_any_element()
+    }
+
+    fn render_icon(&self, node: &Node, cx: &App) -> AnyElement {
+        let name = node
+            .icon
+            .as_deref()
+            .or(node.text.as_deref())
+            .unwrap_or("check");
+        let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+        apply_style(
+            Icon::new(icon).with_size(mapping::parse_scale(node.control_size.as_deref())),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn render_clipboard(&self, node: &Node, key: &str, _cx: &App) -> AnyElement {
+        let mut clip = Clipboard::new(eid(key)).value(node.text.clone().unwrap_or_default());
+        if let Some(callback_id) = node.on_copied.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            clip = clip.on_copied(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(value.to_string())),
+                    seq: None,
+                });
+            });
+        }
+        clip.into_any_element()
+    }
+
+    fn render_breadcrumb(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let last = items.len().saturating_sub(1);
+        let mut crumb = Breadcrumb::new();
+        for (ix, item) in items.iter().enumerate() {
+            let mut entry = BreadcrumbItem::new(item.label_or_id()).disabled(item.disabled);
+            if ix != last {
+                if let Some(callback_id) = item.on_click.clone().or_else(|| node.on_change.clone())
+                {
+                    let id = item.id_or_label();
+                    let cmd_tx = self.cmd_tx.clone();
+                    if node.on_change.is_some() && item.on_click.is_none() {
+                        entry = entry.on_click(move |_, _, _| {
+                            let _ = cmd_tx.send(Cmd::Callback {
+                                id: callback_id.clone(),
+                                value: Some(json!(id.clone())),
+                                seq: None,
+                            });
+                        });
+                    } else {
+                        entry = entry.on_click(self.click(callback_id));
+                    }
+                }
+            }
+            crumb = crumb.child(entry);
+        }
+        apply_style(crumb, node, cx).into_any_element()
+    }
+
+    fn render_avatar(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut avatar =
+            Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(name) = node.text.clone().or(node.title.clone()) {
+            avatar = avatar.name(name);
+        }
+        apply_style(avatar, node, cx).into_any_element()
+    }
+
+    fn render_accordion(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = node.collection();
+        let open = node.string_value();
+        let mut accordion = Accordion::new(eid(key)).multiple(node.multiple);
+        if node.disabled {
+            accordion = accordion.disabled(true);
+        }
+        accordion = accordion.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        for (ix, item) in items.iter().enumerate() {
+            let id = item.id_or_label();
+            let title = item.label_or_id();
+            let is_open = if node.multiple {
+                open.as_ref()
+                    .is_some_and(|s| s.split(',').any(|part| part.trim() == id))
+            } else {
+                open.as_deref() == Some(id.as_str())
+            };
+            let content = if let Some(child) = item.content.as_ref() {
+                self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
+            } else {
+                div().into_any_element()
+            };
+            accordion = accordion.item(move |acc| acc.title(title).open(is_open).child(content));
+        }
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let multiple = node.multiple;
+            let cmd_tx = self.cmd_tx.clone();
+            accordion = accordion.on_toggle_click(move |open_ixs, _, _| {
+                if multiple {
+                    let selected: Vec<String> = open_ixs
+                        .iter()
+                        .filter_map(|ix| ids.get(*ix).cloned())
+                        .collect();
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(selected)),
+                        seq: None,
+                    });
+                } else {
+                    let selected = open_ixs.first().and_then(|ix| ids.get(*ix)).cloned();
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: selected.map(|s| json!(s)).or(Some(Value::Null)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        accordion.into_any_element()
+    }
+
+    fn render_description_list(&self, node: &Node, _cx: &App) -> AnyElement {
+        let mut list = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Horizontal {
+            DescriptionList::horizontal()
+        } else {
+            DescriptionList::vertical()
+        };
+        list = list.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        for item in node.collection() {
+            let label = item
+                .label
+                .clone()
+                .or_else(|| item.id.clone())
+                .unwrap_or_default();
+            let value = item.text.clone().unwrap_or_default();
+            list = list.item(label, value, 1);
+        }
+        list.into_any_element()
     }
 
     fn render_scroll(
@@ -713,6 +1388,8 @@ impl Render for RootView {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.used_inputs.clear();
+        self.used_sliders.clear();
+        self.used_selects.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
 
@@ -733,6 +1410,10 @@ impl Render for RootView {
 
         let used = std::mem::take(&mut self.used_inputs);
         self.inputs.retain(|key, _| used.contains(key));
+        let used_sliders = std::mem::take(&mut self.used_sliders);
+        self.sliders.retain(|key, _| used_sliders.contains(key));
+        let used_selects = std::mem::take(&mut self.used_selects);
+        self.selects.retain(|key, _| used_selects.contains(key));
 
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
@@ -816,6 +1497,17 @@ fn apply_button_variant(button: Button, node: &Node) -> Button {
     }
 }
 
+fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
+    let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
+        return el;
+    };
+    div()
+        .id(eid(&format!("{key}-tip")))
+        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        .child(el)
+        .into_any_element()
+}
+
 fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
@@ -894,7 +1586,7 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         if node.bg.is_none()
             && matches!(
                 node.kind.as_str(),
-                "window" | "vstack" | "hstack" | "scroll"
+                "window" | "vstack" | "hstack" | "scroll" | "group-box"
             )
         {
             el = el.bg(cx.theme().background);
