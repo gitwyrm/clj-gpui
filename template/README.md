@@ -1,4 +1,4 @@
-# ClojureGPUI app template
+# clj-gpui app template
 
 Copy this directory to start a native GPUI app driven by JVM Clojure.
 
@@ -25,4 +25,4 @@ When you are not sitting next to this checkout, replace the local root in `deps.
 
 Use the git URL of the library you actually cloned. There is no Clojars release yet.
 
-You can also point at a built host binary with `CLOJUREGPUI_BIN`, or at a library checkout with `CLOJUREGPUI_ROOT`.
+You can also point at a built host binary with `CLJ_GPUI_BIN`, or at a library checkout with `CLJ_GPUI_ROOT`.

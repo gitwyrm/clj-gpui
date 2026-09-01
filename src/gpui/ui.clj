@@ -13,7 +13,7 @@
 
 (def window-title
   "Default native window title. The host currently uses this constant."
-  "ClojureGPUI")
+  "clj-gpui")
 
 (def ^:const ratom-watch-key
   "Watch key installed by `watch!` / `ratom`. Stable even if this ns is renamed."

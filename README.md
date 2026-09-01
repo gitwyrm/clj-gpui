@@ -1,4 +1,4 @@
-# ClojureGPUI
+# clj-gpui
 
 A library for writing **native GPUI applications in real Clojure**.
 
@@ -36,7 +36,7 @@ Or from the repo root:
 
 On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. GPUI and its GPU stack take a while to compile once.
 
-![ClojureGPUI native window](docs/screenshot.png)
+![clj-gpui native window](docs/screenshot.png)
 
 The window footer shows the nREPL port (7888 by default). Connect with CIDER, Calva, or:
 
@@ -82,7 +82,7 @@ clj -M:dev
 
 `gpui.dev` binds a local TCP port, starts nREPL, watches `src/`, and spawns the native host. The host **connects** to Clojure; it does not launch the JVM.
 
-If Cargo is not on `PATH`, build `host/` yourself and set `CLOJUREGPUI_BIN` to that executable. `CLOJUREGPUI_ROOT` points at a library checkout that contains `host/`.
+If Cargo is not on `PATH`, build `host/` yourself and set `CLJ_GPUI_BIN` to that executable. `CLJ_GPUI_ROOT` points at a library checkout that contains `host/`.
 
 ## Application code
 
@@ -107,7 +107,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
   (let [{:keys [count items]} @!state]
     (ui/vstack
      {:gap 12 :padding 8}
-     (ui/label "ClojureGPUI" {:font-size 22 :font-weight :bold})
+     (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
      (ui/label (str "Count: " count))
      (ui/hstack
       {:gap 8}
@@ -200,13 +200,13 @@ docs/protocol.md
 
 | Variable | Meaning |
 |---|---|
-| `CLOJUREGPUI_BIN` | Path to a `clojuregpui` executable, skipping Cargo |
-| `CLOJUREGPUI_ROOT` | Library checkout containing `host/` |
-| `CLOJUREGPUI_PORT` | Set by `gpui.dev` for the host (do not set yourself) |
-| `CLOJUREGPUI_HOST` | TCP host for the host process, default `127.0.0.1` |
-| `CLOJUREGPUI_APP` | Root var if not passed to `gpui.dev` |
-| `CLOJUREGPUI_SRC` | Directory the watcher scans, default `src` |
-| `CLOJUREGPUI_NREPL_PORT` | Preferred nREPL port, default `7888` |
+| `CLJ_GPUI_BIN` | Path to a `clj-gpui` executable, skipping Cargo |
+| `CLJ_GPUI_ROOT` | Library checkout containing `host/` |
+| `CLJ_GPUI_PORT` | Set by `gpui.dev` for the host (do not set yourself) |
+| `CLJ_GPUI_HOST` | TCP host for the host process, default `127.0.0.1` |
+| `CLJ_GPUI_APP` | Root var if not passed to `gpui.dev` |
+| `CLJ_GPUI_SRC` | Directory the watcher scans, default `src` |
+| `CLJ_GPUI_NREPL_PORT` | Preferred nREPL port, default `7888` |
 | `VK_ICD_FILENAMES` | Linux software Vulkan ICD (lavapipe) |
 
 ## Known limitations

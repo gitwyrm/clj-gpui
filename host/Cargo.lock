@@ -840,7 +840,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "clojuregpui"
+name = "clj-gpui"
 version = "0.1.0"
 dependencies = [
  "anyhow",

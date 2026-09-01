@@ -61,9 +61,9 @@ fn parse_tree(value: &Value) -> Result<Node> {
 }
 
 fn connect_to_clojure() -> Result<TcpStream> {
-    let host = std::env::var("CLOJUREGPUI_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let port = std::env::var("CLOJUREGPUI_PORT")
-        .context("CLOJUREGPUI_PORT is not set. Start the app with `clj -M:dev my.app/app`.")?;
+    let host = std::env::var("CLJ_GPUI_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = std::env::var("CLJ_GPUI_PORT")
+        .context("CLJ_GPUI_PORT is not set. Start the app with `clj -M:dev my.app/app`.")?;
     let addr = format!("{host}:{port}");
     println!("[host] connecting to Clojure at {addr}");
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -95,7 +95,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
     let worker_cmds = cmd_tx.clone();
 
     thread::Builder::new()
-        .name("clojuregpui-reader".into())
+        .name("clj-gpui-reader".into())
         .spawn({
             let pending = pending.clone();
             let event_tx = event_tx.clone();
@@ -164,7 +164,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
     println!("[host] Clojure ready app={app} protocol={PROTOCOL_VERSION} nREPL=127.0.0.1:{nrepl_port}");
 
     thread::Builder::new()
-        .name("clojuregpui-worker".into())
+        .name("clj-gpui-worker".into())
         .spawn({
             let writer = writer.clone();
             let pending = pending.clone();
@@ -234,8 +234,8 @@ pub fn protocol_test() -> Result<()> {
     }
     let tree = tree.context("did not receive a UI tree")?;
     println!("[host] received Clojure UI tree");
-    if !tree.contains_text("ClojureGPUI") {
-        bail!("tree did not contain label 'ClojureGPUI': {tree:?}");
+    if !tree.contains_text("clj-gpui") {
+        bail!("tree did not contain label 'clj-gpui': {tree:?}");
     }
     if !tree.contains_text("Count: 0") {
         bail!("tree did not contain initial count: {tree:?}");

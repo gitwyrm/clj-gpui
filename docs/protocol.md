@@ -7,14 +7,14 @@ Environment for the host process:
 
 | Variable | Meaning |
 |---|---|
-| `CLOJUREGPUI_PORT` | TCP port of the Clojure listener (required) |
-| `CLOJUREGPUI_HOST` | TCP host, default `127.0.0.1` |
+| `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
+| `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
 Protocol version is **1**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
-1. Clojure binds `127.0.0.1:0`, then spawns the host with `CLOJUREGPUI_PORT` set.
+1. Clojure binds `127.0.0.1:0`, then spawns the host with `CLJ_GPUI_PORT` set.
 2. Host connects and waits for a `ready` line.
 3. Host sends `render` (and later `callback` / `reload`) as JSON objects with a numeric `id`.
 4. Clojure replies with `{"op":"response","id":…, …}`.
@@ -88,4 +88,4 @@ Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-
 
 Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
 
-The native window title is currently the constant `gpui.ui/window-title` (`ClojureGPUI`).
+The native window title is currently the constant `gpui.ui/window-title` (`clj-gpui`).

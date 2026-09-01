@@ -4,7 +4,7 @@
             [gpui.ui :as ui]))
 
 (deftest window-title
-  (is (= "ClojureGPUI" ui/window-title)))
+  (is (= "clj-gpui" ui/window-title)))
 
 (deftest protocol-version
   (is (= 1 ui/protocol-version)))

@@ -36,7 +36,7 @@
 (defn app-symbol
   []
   (or @app-sym*
-      (when-let [s (env "CLOJUREGPUI_APP")]
+      (when-let [s (env "CLJ_GPUI_APP")]
         (symbol s))))
 
 (defn set-app-symbol!
@@ -50,7 +50,7 @@
 
 (defn- src-root
   []
-  (io/file (env "CLOJUREGPUI_SRC" "src")))
+  (io/file (env "CLJ_GPUI_SRC" "src")))
 
 (defn send!
   [message]
@@ -280,7 +280,7 @@
   []
   (require 'nrepl.server)
   (let [start-server (ns-resolve 'nrepl.server 'start-server)
-        preferred (Long/parseLong (env "CLOJUREGPUI_NREPL_PORT" "7888"))]
+        preferred (Long/parseLong (env "CLJ_GPUI_NREPL_PORT" "7888"))]
     (try
       (let [server (start-server :port preferred :bind "127.0.0.1")]
         (reset! nrepl-port* preferred)

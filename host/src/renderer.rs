@@ -300,7 +300,7 @@ pub fn open_window(nrepl_port: u16, cmd_tx: mpsc::Sender<Cmd>, event_rx: async_c
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("ClojureGPUI".into()),
+                title: Some("clj-gpui".into()),
                 ..Default::default()
             }),
             ..Default::default()
