@@ -257,7 +257,10 @@
           style)))
 
 (defn scroll
-  "Scroll container. Give it a `:height` (pixels) if it should not flex."
+  "Scroll container. Fills leftover height in a flex parent.
+
+  Give it a `:height` (pixels) for a fixed viewport instead. `:flex 1`
+  is implied when `:height` is omitted; passing it is still fine."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
@@ -282,15 +285,15 @@
                   :on-blur save
                   :on-escape cancel})"
   ([value]
-   {:type :text-field :text (str (or value ""))})
+   {:type :text-field :text (str (or value \"\"))})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge {:type :text-field :text (str (or value ""))} on-change-or-opts)
+     (merge {:type :text-field :text (str (or value \"\"))} on-change-or-opts)
      {:type :text-field
-      :text (str (or value ""))
+      :text (str (or value \"\"))
       :on-change on-change-or-opts}))
   ([value on-change opts]
    (merge {:type :text-field
-           :text (str (or value ""))
+           :text (str (or value \"\"))
            :on-change on-change}
           opts)))
