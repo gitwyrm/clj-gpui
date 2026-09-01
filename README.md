@@ -238,7 +238,7 @@ Native platform actions (folder picker, reveal in Finder / the file manager) liv
 (platform/open-path! "/tmp")
 ```
 
-`pick-directory` is asynchronous: it returns immediately and later calls `on-result`. On Linux the host uses the desktop portal, then `zenity` if the portal is unavailable.
+`pick-directory` is asynchronous: it returns immediately and later calls `on-result`. On Linux the host uses the desktop portal, then `zenity` if the portal is unavailable. The zenity wait runs off the GPUI foreground executor.
 
 Labels, `vstack`, and `hstack` accept `:on-click` (0-arg), so a list row can be a clickable stack.
 
@@ -353,7 +353,19 @@ Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the projec
 | macOS | `Name.app` |
 | Linux | `name-version-<arch>.AppImage` and `name_version_<arch>.deb` |
 
-The `.app` / AppImage / `.deb` include a jlink JRE, the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+The `.app` / AppImage / `.deb` include a jlink JRE (invoked via the JDK's absolute `jlink`, not PATH), the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+
+If the application repo has `LICENSE` and/or `NOTICE` at the root, those files are copied into the package:
+
+| Package | Destination |
+|---|---|
+| macOS `.app` | `Contents/Resources/licenses/` |
+| Linux AppImage | `usr/share/doc/<name>/` |
+| Linux `.deb` | `/usr/share/doc/<name>/` |
+
+Additional files can be listed in `gpui.edn` as `:license-files` (paths relative to the project root). This is not a third-party license scanner.
+
+Linux AppImage packaging uses a system `appimagetool` when that command is on `PATH`. Otherwise it downloads the pinned [appimagetool 1.9.1](https://github.com/AppImage/appimagetool/releases/tag/1.9.1) release (not the mutable `continuous` tag) and checks a SHA-256.
 
 Other tasks: `clj -X:build uberjar`, `clj -X:build host`, `clj -X:build jre`.
 
