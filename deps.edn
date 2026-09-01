@@ -8,6 +8,8 @@
          :main-opts ["-m" "gpui.test-runner"]}
   :protocol-test {:extra-paths ["test"]
                   :main-opts ["-m" "gpui.dev" "--protocol-test" "gpui.test-app/app"]}
+  :cljfmt {:extra-deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"}}
+           :main-opts ["-m" "cljfmt.main"]}
   :connect {:main-opts ["-m" "nrepl.cmdline"
                         "--connect"
                         "--host" "127.0.0.1"

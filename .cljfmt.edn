@@ -1,0 +1,3 @@
+{:paths ["src" "test" "examples" "template"]
+ :function-arguments-indentation :community
+ :normalize-newlines-at-file-end? true}

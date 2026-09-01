@@ -21,6 +21,10 @@ From a checkout of this repository:
 # Clojure unit tests
 clojure -M:test
 
+# Format check / apply (cljfmt, community indentation)
+clojure -M:cljfmt check
+clojure -M:cljfmt fix
+
 # End-to-end bridge test without opening a window
 clojure -M:protocol-test
 
@@ -162,10 +166,22 @@ A polling watcher on the **application** `src/**/*.clj` (not library `runtime.cl
 
 If `app` throws, Clojure returns an error UI tree (`ok: true`) so the native window still paints.
 
+## Formatting
+
+Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `examples/`, and `template/`.
+
+```bash
+clojure -M:cljfmt check
+clojure -M:cljfmt fix
+```
+
+The native host is ordinary Rust: `cargo fmt` in `host/` if you touch it.
+
 ## Repository layout
 
 ```text
 deps.edn                      ; git-dep library entry
+.cljfmt.edn                   ; cljfmt paths and community indentation
 src/gpui/ui.clj               ; public widgets
 src/gpui/ratom.clj            ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui

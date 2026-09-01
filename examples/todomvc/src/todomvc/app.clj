@@ -143,57 +143,57 @@
        :padding 28
        :gap 8
        :align :center}
-     (ui/label "todos" {:font-size 80
-                        :font-weight :light
-                        :font-family ".SystemUIFont"
-                        :color title-color})
-     (ui/vstack
-      {:width 550 :bg card-bg :shadow true}
-      (ui/hstack
-       {:gap 8 :padding 12 :border-bottom line :align :center}
+      (ui/label "todos" {:font-size 80
+                         :font-weight :light
+                         :font-family ".SystemUIFont"
+                         :color title-color})
+      (ui/vstack
+       {:width 550 :bg card-bg :shadow true}
+       (ui/hstack
+        {:gap 8 :padding 12 :border-bottom line :align :center}
+        (when (seq items)
+          (ui/button "⌄" toggle-all
+                     {:variant :text
+                      :compact true
+                      :font-size 22
+                      :color (if all-done? "#737373" "#e6e6e6")}))
+        (ui/text-field
+         draft
+         {:id "new-todo"
+          :flex 1
+          :font-size 22
+          :placeholder "What needs to be done?"
+          :on-change #(swap! !state assoc :draft %)
+          :on-submit add-todo}))
        (when (seq items)
-         (ui/button "⌄" toggle-all
-                    {:variant :text
-                     :compact true
-                     :font-size 22
-                     :color (if all-done? "#737373" "#e6e6e6")}))
-       (ui/text-field
-        draft
-        {:id "new-todo"
-         :flex 1
-         :font-size 22
-         :placeholder "What needs to be done?"
-         :on-change #(swap! !state assoc :draft %)
-         :on-submit add-todo}))
-      (when (seq items)
-        (ui/vstack
-         {}
-         (if (empty? shown)
-           (ui/label (if (= item-filter :completed)
-                       "No completed todos"
-                       "No active todos")
-                     {:padding 16 :color muted :font-size 16})
-           (ui/scroll
-            {:height 280}
-            (map #(item-row editing %) shown)))
-         (ui/hstack
-          {:padding 10}
-          (ui/label (remaining-label remaining)
-                    {:flex 1 :font-size 13 :color muted})
+         (ui/vstack
+          {}
+          (if (empty? shown)
+            (ui/label (if (= item-filter :completed)
+                        "No completed todos"
+                        "No active todos")
+                      {:padding 16 :color muted :font-size 16})
+            (ui/scroll
+             {:height 280}
+             (map #(item-row editing %) shown)))
           (ui/hstack
-           {:gap 4}
-           (filter-link item-filter :all "All")
-           (filter-link item-filter :active "Active")
-           (filter-link item-filter :completed "Completed"))
-          (ui/hstack
-           {:flex 1 :justify :end}
-           (when (pos? completed)
-             (ui/button "Clear completed" clear-completed
-                        {:variant :text :compact true :color muted})))))))
-     (ui/vstack
-      {:padding 20 :gap 4 :align :center}
-      (ui/label "Press Enter to add a todo" {:font-size 11 :color hint})
-      (ui/label "Double-click a title to edit · Enter or click away to save · Escape to cancel"
-                {:font-size 11 :color hint})
-      (ui/label "Click a checkbox to toggle · × to delete" {:font-size 11 :color hint})
-      (ui/label "Written in real Clojure · rendered by GPUI" {:font-size 11 :color hint}))))))
+           {:padding 10}
+           (ui/label (remaining-label remaining)
+                     {:flex 1 :font-size 13 :color muted})
+           (ui/hstack
+            {:gap 4}
+            (filter-link item-filter :all "All")
+            (filter-link item-filter :active "Active")
+            (filter-link item-filter :completed "Completed"))
+           (ui/hstack
+            {:flex 1 :justify :end}
+            (when (pos? completed)
+              (ui/button "Clear completed" clear-completed
+                         {:variant :text :compact true :color muted})))))))
+      (ui/vstack
+       {:padding 20 :gap 4 :align :center}
+       (ui/label "Press Enter to add a todo" {:font-size 11 :color hint})
+       (ui/label "Double-click a title to edit · Enter or click away to save · Escape to cancel"
+                 {:font-size 11 :color hint})
+       (ui/label "Click a checkbox to toggle · × to delete" {:font-size 11 :color hint})
+       (ui/label "Written in real Clojure · rendered by GPUI" {:font-size 11 :color hint}))))))
