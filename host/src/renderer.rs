@@ -367,6 +367,15 @@ fn eid(path: &str) -> SharedString {
     SharedString::from(path.to_string())
 }
 
+fn quit_host(cx: &mut App) {
+    cx.quit();
+    // Unbundled macOS binaries often ignore `[NSApp terminate:]`, which is
+    // what GPUI's quit() schedules. The window is already gone; kill the
+    // host so Clojure sees the socket close and exits too.
+    #[cfg(target_os = "macos")]
+    std::process::exit(0);
+}
+
 pub fn open_window(
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
@@ -375,13 +384,13 @@ pub fn open_window(
 ) {
     use gpui::{size, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
 
-    // GPUI's default is platform-specific: on macOS the process stays alive
-    // after the last window closes (QuitMode::Explicit). This is a
-    // single-window app, so quit when the window goes away.
+    // GPUI's macOS default is to keep the NSApplication running after the
+    // last window closes. The close-button path also goes through an
+    // async try_borrow_mut; if App is already borrowed, on_window_closed
+    // never fires. Hook should-close too, and always quit this
+    // single-window host — don't wait for windows().is_empty().
     cx.on_window_closed(|cx| {
-        if cx.windows().is_empty() {
-            cx.quit();
-        }
+        quit_host(cx);
     })
     .detach();
 
@@ -397,7 +406,12 @@ pub fn open_window(
         },
         |window, cx| {
             let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, cx));
-            cx.new(|cx| Root::new(view, window, cx))
+            let root = cx.new(|cx| Root::new(view, window, cx));
+            window.on_window_should_close(cx, |_, cx| {
+                quit_host(cx);
+                true
+            });
+            root
         },
     )
     .unwrap();
