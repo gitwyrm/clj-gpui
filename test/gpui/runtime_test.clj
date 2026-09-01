@@ -82,6 +82,14 @@
     (is (str/includes? text "Clojure error"))
     (is (str/includes? text "my/widgets.clj:4:1"))))
 
+(deftest skip-reload-ns-covers-package-fragments
+  (is (#'runtime/skip-reload-ns? 'gpui.package))
+  (is (#'runtime/skip-reload-ns? 'gpui.package_build))
+  (is (#'runtime/skip-reload-ns? 'gpui.package-native))
+  (is (#'runtime/skip-reload-ns? 'gpui.package-launch))
+  (is (not (#'runtime/skip-reload-ns? 'gpui.ui)))
+  (is (not (#'runtime/skip-reload-ns? 'gpui.platform))))
+
 (deftest ns-from-file-uses-path-and-ns-form
   (let [src (doto (io/file (System/getProperty "java.io.tmpdir")
                            (str "clj-gpui-ns-" (random-uuid)))

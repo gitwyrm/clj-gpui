@@ -38,7 +38,8 @@
     (is (str/includes? plist "CFBundleIdentifier"))
     (is (str/includes? plist "com.gitwyrm.cljdu"))
     (is (str/includes? plist "0.1.0"))
-    (is (str/includes? plist "cljdu"))))
+    (is (str/includes? plist "<key>CFBundleExecutable</key><string>cljdu</string>"))
+    (is (str/includes? plist "<key>CFBundleIconFile</key><string>cljdu</string>"))))
 
 (deftest desktop-file-is-valid
   (let [desktop (pkg/desktop-file {:name "cljdu"
@@ -60,7 +61,7 @@
     (is (not (str/includes? script "cargo")))))
 
 (deftest launcher-script-is-valid-posix-sh
-  (let [script (pkg/launcher-script {:name "cljdu" :main "cljdu.app/app"})]
+  (let [script (pkg/launcher-script {:name "cljdu" :main "cljdu.app/app"})
         f (io/file (System/getProperty "java.io.tmpdir")
                    (str "clj-gpui-launch-" (random-uuid) ".sh"))]
     (try
@@ -69,6 +70,90 @@
         (is (zero? (.waitFor proc)) script))
       (finally
         (.delete f)))))
+
+(defn- sh-n-ok?
+  [script]
+  (let [f (io/file (System/getProperty "java.io.tmpdir")
+                   (str "clj-gpui-shn-" (random-uuid) ".sh"))]
+    (try
+      (spit f script)
+      (zero? (.waitFor (.start (ProcessBuilder. ["sh" "-n" (.getPath f)]))))
+      (finally
+        (.delete f)))))
+
+(deftest posix-launchers-are-valid-sh
+  (is (sh-n-ok? (pkg/launcher-script {:name "My App" :main "my.app/app"})))
+  (is (sh-n-ok? (pkg/appimage-apprun {:name "My App"})))
+  (is (sh-n-ok? (pkg/deb-wrapper {:name "My App"}))))
+
+(deftest launcher-script-quotes-macos-and-linux-layouts
+  (let [script (pkg/launcher-script {:name "My App" :main "my.app/app"})]
+    (is (str/includes? script "\"$here/../Resources/My App.jar\""))
+    (is (str/includes? script "\"$here/../Resources/runtime/bin/java\""))
+    (is (str/includes? script "\"$here/../runtime/bin/java\""))
+    (is (str/includes? script "\"$here/../lib/My App.jar\""))
+    (is (str/includes? script "export CLJ_GPUI_BIN=\"$host\""))
+    (is (str/includes? script "exec \"$java_home/bin/java\""))))
+
+(deftest appimage-apprun-and-deb-wrapper-quote-paths
+  (is (str/includes? (pkg/appimage-apprun {:name "My App"})
+                     "exec \"$here/usr/bin/My App\""))
+  (is (str/includes? (pkg/deb-wrapper {:name "My App"})
+                     "export CLJ_GPUI_APP_HOME=\"/usr/lib/My App/bin\""))
+  (is (str/includes? (pkg/deb-wrapper {:name "My App"})
+                     "exec \"/usr/lib/My App/bin/My App\"")))
+
+(deftest jlink-executable-is-absolute
+  (let [path (pkg/jlink-executable)
+        f (io/file path)]
+    (is (.isAbsolute f))
+    (is (.canExecute f))
+    (is (str/ends-with? path "jlink"))
+    (is (not= "jlink" path))))
+
+(deftest appimagetool-pin-is-versioned
+  (is (= "1.9.1" pkg/appimagetool-version))
+  (is (string? (get pkg/appimagetool-sha256 "x86_64")))
+  (is (string? (get pkg/appimagetool-sha256 "aarch64")))
+  (is (str/includes? (pkg/appimagetool-url "x86_64") "/1.9.1/"))
+  (is (not (str/includes? (pkg/appimagetool-url "x86_64") "continuous"))))
+
+(deftest collect-license-files-picks-license-and-notice
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "clj-gpui-lic-" (random-uuid)))]
+    (try
+      (.mkdirs dir)
+      (spit (io/file dir "LICENSE") "MIT")
+      (spit (io/file dir "NOTICE") "notice")
+      (spit (io/file dir "THIRD") "extra")
+      (let [files (pkg/collect-license-files {:project-dir dir
+                                              :license-files ["THIRD"]})]
+        (is (= ["LICENSE" "NOTICE" "THIRD"]
+               (mapv #(.getName ^java.io.File %) files))))
+      (finally
+        (doseq [n ["LICENSE" "NOTICE" "THIRD"]]
+          (.delete (io/file dir n)))
+        (.delete dir)))))
+
+(deftest collect-license-files-skips-missing-defaults
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "clj-gpui-lic-empty-" (random-uuid)))]
+    (try
+      (.mkdirs dir)
+      (is (empty? (pkg/collect-license-files {:project-dir dir})))
+      (finally
+        (.delete dir)))))
+
+(deftest collect-license-files-requires-explicit-extras
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "clj-gpui-lic-miss-" (random-uuid)))]
+    (try
+      (.mkdirs dir)
+      (is (thrown? Exception
+                   (pkg/collect-license-files {:project-dir dir
+                                               :license-files ["NOPE"]})))
+      (finally
+        (.delete dir)))))
 
 (deftest debian-control-names-package
   (let [control (pkg/debian-control {:name "cljdu"
