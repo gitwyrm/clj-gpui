@@ -27,7 +27,15 @@
   (testing "layouts"
     (is (= :vstack (:type (ui/vstack {} (ui/label "a")))))
     (is (= :hstack (:type (ui/hstack {}))))
-    (is (= :scroll (:type (ui/scroll {} (ui/label "x")))))))
+    (is (= :scroll (:type (ui/scroll {} (ui/label "x"))))))
+  (testing "text-field"
+    (is (= {:type :text-field :text "hi"}
+           (ui/text-field "hi")))
+    (let [n (ui/text-field "x" {:placeholder "Todo" :id "new-todo"})]
+      (is (= :text-field (:type n)))
+      (is (= "Todo" (:placeholder n)))
+      (is (= "new-todo" (:id n))))
+    (is (fn? (:on-change (ui/text-field "" (fn [s] s)))))))
 
 (deftest sequences-flatten-inside-stacks
   (let [tree (ui/vstack
@@ -47,6 +55,20 @@
     (is (= "vstack" (:type exported)))
     (is (string? (get-in exported [:children 0 :on-click])))
     (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-click]))))))
+
+(deftest invoke-callback-passes-text-value
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/text-field "" {:on-change #(reset! got %)
+                                     :on-submit #(reset! got (str "go:" %))}))
+        change-id (:on-change exported)
+        submit-id (:on-submit exported)]
+    (is (string? change-id))
+    (is (= {:ok true :id change-id} (runtime/invoke-callback! change-id "typed")))
+    (is (= "typed" @got))
+    (is (= {:ok true :id submit-id} (runtime/invoke-callback! submit-id "done")))
+    (is (= "go:done" @got))))
 
 (deftest export-tree-error-overlay
   (runtime/reset-callbacks!)

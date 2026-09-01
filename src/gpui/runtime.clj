@@ -96,7 +96,9 @@
                  (fn? (:on-click node))
                  (assoc :on-click (register-callback! (:on-click node)))
                  (fn? (:on-change node))
-                 (assoc :on-change (register-callback! (:on-change node))))]
+                 (assoc :on-change (register-callback! (:on-change node)))
+                 (fn? (:on-submit node))
+                 (assoc :on-submit (register-callback! (:on-submit node))))]
       (update node :children #(mapv sanitize (or % []))))
 
     (sequential? node)
@@ -205,13 +207,20 @@
        (export-node (error-tree e))))))
 
 (defn invoke-callback!
-  "Invoke a previously registered Clojure function from a GPUI event."
-  [callback-id]
-  (if-let [f (get @callbacks callback-id)]
-    (do
-      (f)
-      {:ok true :id callback-id})
-    {:ok false :error (str "unknown callback " callback-id)}))
+  "Invoke a previously registered Clojure function from a GPUI event.
+
+  Buttons and checkboxes are 0-arg. Text fields pass the current string
+  as `value` when the host includes it on the callback message."
+  ([callback-id]
+   (invoke-callback! callback-id nil))
+  ([callback-id value]
+   (if-let [f (get @callbacks callback-id)]
+     (do
+       (if (some? value)
+         (f value)
+         (f))
+       {:ok true :id callback-id})
+     {:ok false :error (str "unknown callback " callback-id)})))
 
 (defn handle
   [msg]
@@ -220,7 +229,7 @@
           op (:op msg)
           result (case op
                    "render" {:ok true :tree (export-tree)}
-                   "callback" (invoke-callback! (:callback-id msg))
+                   "callback" (invoke-callback! (:callback-id msg) (:value msg))
                    "reload" (try
                               (assoc (reload-app!) :ok true :tree (export-tree))
                               (catch Exception e

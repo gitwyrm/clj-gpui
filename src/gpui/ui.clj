@@ -103,7 +103,7 @@
   "A clickable button. `on-click` is a real Clojure function (often `#()`).
 
   (ui/button \"+\" #(swap! count inc))
-  (ui/button \"Save\" save! {:font-weight :bold})"
+  (ui/button \"Save\" save! {:primary true})"
   ([text]
    {:type :button :text (str text)})
   ([text on-click]
@@ -165,3 +165,28 @@
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
+
+(defn text-field
+  "Single-line text input rendered with gpui-component's Input.
+
+  `on-change` and `:on-submit` receive the current string. Prefer a
+  stable `:id` so typed text survives layout shifts.
+
+  (ui/text-field draft
+                 {:id \"new-todo\"
+                  :placeholder \"What needs to be done?\"
+                  :on-change #(swap! !state assoc :draft %)
+                  :on-submit add-todo})"
+  ([value]
+   {:type :text-field :text (str (or value ""))})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge {:type :text-field :text (str (or value ""))} on-change-or-opts)
+     {:type :text-field
+      :text (str (or value ""))
+      :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge {:type :text-field
+           :text (str (or value ""))
+           :on-change on-change}
+          opts)))

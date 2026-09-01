@@ -56,7 +56,9 @@ fn parse_tree(value: &Value) -> Result<Node> {
             .unwrap_or("Clojure render failed");
         bail!("{err}");
     }
-    let tree = value.get("tree").context("Clojure response missing :tree")?;
+    let tree = value
+        .get("tree")
+        .context("Clojure response missing :tree")?;
     serde_json::from_value(tree.clone()).context("invalid UI tree from Clojure")
 }
 
@@ -161,7 +163,9 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
     let (nrepl_port, app) = ready_rx
         .recv_timeout(Duration::from_secs(30))
         .context("timed out waiting for Clojure :ready")?;
-    println!("[host] Clojure ready app={app} protocol={PROTOCOL_VERSION} nREPL=127.0.0.1:{nrepl_port}");
+    println!(
+        "[host] Clojure ready app={app} protocol={PROTOCOL_VERSION} nREPL=127.0.0.1:{nrepl_port}"
+    );
 
     thread::Builder::new()
         .name("clj-gpui-worker".into())
@@ -177,15 +181,18 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         Cmd::Render => rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                             .and_then(|value| parse_tree(&value))
                             .map(HostEvent::Tree),
-                        Cmd::Callback(id) => rpc(
-                            &writer,
-                            &pending,
-                            &next_id,
-                            json!({"op": "callback", "callback-id": id}),
-                        )
-                        .and_then(|_| rpc(&writer, &pending, &next_id, json!({"op": "render"})))
-                        .and_then(|value| parse_tree(&value))
-                        .map(HostEvent::Tree),
+                        Cmd::Callback { id, value } => {
+                            let mut request = json!({"op": "callback", "callback-id": id});
+                            if let Some(value) = value {
+                                request["value"] = json!(value);
+                            }
+                            rpc(&writer, &pending, &next_id, request)
+                                .and_then(|_| {
+                                    rpc(&writer, &pending, &next_id, json!({"op": "render"}))
+                                })
+                                .and_then(|value| parse_tree(&value))
+                                .map(HostEvent::Tree)
+                        }
                         Cmd::Reload => rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
                             .and_then(|value| parse_tree(&value))
                             .map(HostEvent::Tree),
@@ -246,7 +253,10 @@ pub fn protocol_test() -> Result<()> {
         .and_then(|node| node.on_click.clone())
         .context("no '+' button with a callback id")?;
     println!("[host] invoking Clojure callback {plus}");
-    host.cmd_tx.send(Cmd::Callback(plus))?;
+    host.cmd_tx.send(Cmd::Callback {
+        id: plus,
+        value: None,
+    })?;
 
     let started = Instant::now();
     let mut updated = None;

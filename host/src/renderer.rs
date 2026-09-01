@@ -1,20 +1,25 @@
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, App, ClickEvent, Context, Div, SharedString, Styled,
-    Window,
+    div, prelude::*, px, rgb, AnyElement, App, ClickEvent, Context, Entity, Focusable,
+    SharedString, Styled, Window,
 };
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    scroll::ScrollableElement as _,
+    v_flex, ActiveTheme as _, Root,
+};
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 
-const BG: u32 = 0x1a1b26;
-const SURFACE: u32 = 0x24283b;
-const TEXT: u32 = 0xc0caf5;
-const MUTED: u32 = 0x9aa3b5;
-const ACCENT: u32 = 0x7aa2f7;
-const BUTTON: u32 = 0x3d59a1;
-const BUTTON_HOVER: u32 = 0x5470c6;
-const BUTTON_ACTIVE: u32 = 0x2e447c;
-const BORDER: u32 = 0x3b4261;
-const CHECK: u32 = 0x9ece6a;
+struct InputSlot {
+    state: Entity<InputState>,
+    on_change: Option<String>,
+    on_submit: Option<String>,
+    sync_after_submit: bool,
+}
 
 pub struct RootView {
     tree: Option<Node>,
@@ -22,6 +27,8 @@ pub struct RootView {
     error: Option<String>,
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
+    inputs: HashMap<String, InputSlot>,
+    used_inputs: HashSet<String>,
 }
 
 impl RootView {
@@ -43,8 +50,10 @@ impl RootView {
                         HostEvent::Tree(tree) => {
                             view.tree = Some(tree);
                             view.error = None;
-                            view.status =
-                                format!("nREPL 127.0.0.1:{} · live · hot reload on", view.nrepl_port);
+                            view.status = format!(
+                                "nREPL 127.0.0.1:{} · live · hot reload on",
+                                view.nrepl_port
+                            );
                         }
                         HostEvent::Error(err) => {
                             view.error = Some(err);
@@ -62,67 +71,254 @@ impl RootView {
             error: None,
             nrepl_port,
             cmd_tx,
+            inputs: HashMap::new(),
+            used_inputs: HashSet::new(),
         }
+    }
+
+    fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+        let cmd_tx = self.cmd_tx.clone();
+        move |_, _, _| {
+            let _ = cmd_tx.send(Cmd::Callback {
+                id: callback_id.clone(),
+                value: None,
+            });
+        }
+    }
+
+    fn input_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.used_inputs.insert(key.to_string());
+
+        if let Some(slot) = self.inputs.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_submit = node.on_submit.clone();
+            let state = slot.state.clone();
+            let sync = slot.sync_after_submit;
+            if sync {
+                slot.sync_after_submit = false;
+            }
+            let focused = state.read(cx).focus_handle(cx).is_focused(window);
+            let desired = node.text.clone().unwrap_or_default();
+            let current = state.read(cx).value().to_string();
+            if current != desired && (!focused || sync) {
+                let desired = desired.clone();
+                state.update(cx, |input, cx| {
+                    input.set_value(desired, window, cx);
+                });
+            }
+            if let Some(placeholder) = node.placeholder.clone() {
+                state.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder, window, cx);
+                });
+            }
+            return state;
+        }
+
+        let placeholder = node.placeholder.clone().unwrap_or_default();
+        let default = node.text.clone().unwrap_or_default();
+        let state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(placeholder)
+                .default_value(default)
+        });
+        self.inputs.insert(
+            key.to_string(),
+            InputSlot {
+                state: state.clone(),
+                on_change: node.on_change.clone(),
+                on_submit: node.on_submit.clone(),
+                sync_after_submit: false,
+            },
+        );
+
+        let key_owned = key.to_string();
+        cx.subscribe(
+            &state,
+            move |this, input, event: &InputEvent, cx| match event {
+                InputEvent::Change => {
+                    if let Some(id) = this
+                        .inputs
+                        .get(&key_owned)
+                        .and_then(|slot| slot.on_change.clone())
+                    {
+                        let value = input.read(cx).value().to_string();
+                        let _ = this.cmd_tx.send(Cmd::Callback {
+                            id,
+                            value: Some(value),
+                        });
+                    }
+                }
+                InputEvent::PressEnter { .. } => {
+                    if let Some(slot) = this.inputs.get_mut(&key_owned) {
+                        slot.sync_after_submit = true;
+                        if let Some(id) = slot.on_submit.clone() {
+                            let value = input.read(cx).value().to_string();
+                            let _ = this.cmd_tx.send(Cmd::Callback {
+                                id,
+                                value: Some(value),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+
+        state
+    }
+
+    fn render_node(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = widget_key(node, path);
+        match node.kind.as_str() {
+            "label" => apply_style(div().id(eid(&key)), node)
+                .child(node.text.clone().unwrap_or_default())
+                .into_any_element(),
+            "button" => {
+                let label = node.text.clone().unwrap_or_default();
+                let mut button = Button::new(eid(&key)).label(label);
+                if node.primary {
+                    button = button.primary();
+                }
+                if let Some(callback_id) = node.on_click.clone() {
+                    button = button.on_click(self.click(callback_id));
+                }
+                apply_style(button, node).into_any_element()
+            }
+            "vstack" => apply_style(v_flex().id(eid(&key)), node)
+                .children(self.render_children(node, path, window, cx))
+                .into_any_element(),
+            "hstack" => apply_style(h_flex().id(eid(&key)), node)
+                .children(self.render_children(node, path, window, cx))
+                .into_any_element(),
+            "spacer" => {
+                let el = apply_style(div().id(eid(&key)), node);
+                if node.size.is_some() || node.flex.is_some() {
+                    el.into_any_element()
+                } else {
+                    el.flex_1().into_any_element()
+                }
+            }
+            "checkbox" => {
+                let checked = node.checked.unwrap_or(false);
+                let mut checkbox = Checkbox::new(eid(&key)).checked(checked);
+                if let Some(text) = node.text.clone() {
+                    checkbox = checkbox.label(text);
+                }
+                if let Some(callback_id) = node.on_click.clone() {
+                    let cmd_tx = self.cmd_tx.clone();
+                    checkbox = checkbox.on_click(move |_, _, _| {
+                        let _ = cmd_tx.send(Cmd::Callback {
+                            id: callback_id.clone(),
+                            value: None,
+                        });
+                    });
+                }
+                apply_style(checkbox, node).into_any_element()
+            }
+            "scroll" => apply_style(v_flex().id(eid(&key)), node)
+                .overflow_y_scrollbar()
+                .children(self.render_children(node, path, window, cx))
+                .into_any_element(),
+            "text-field" => {
+                let state = self.input_slot(&key, node, window, cx);
+                apply_style(Input::new(&state), node).into_any_element()
+            }
+            other => div()
+                .id(eid(&key))
+                .text_color(cx.theme().danger)
+                .child(format!("Unknown GPUI node: {other}"))
+                .into_any_element(),
+        }
+    }
+
+    fn render_children(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        node.children
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, child)| self.render_node(&child, &format!("{path}-{index}"), window, cx))
+            .collect()
     }
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = if let Some(error) = &self.error {
-            div()
-                .flex()
-                .flex_col()
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.used_inputs.clear();
+        let tree = self.tree.clone();
+        let error = self.error.clone();
+
+        let body = if let Some(error) = error {
+            v_flex()
                 .gap_2()
-                .child(
-                    div()
-                        .text_color(rgb(0xf7768e))
-                        .child("Clojure error"),
-                )
-                .child(div().text_color(rgb(TEXT)).child(error.clone()))
+                .child(div().text_color(cx.theme().danger).child("Clojure error"))
+                .child(div().text_color(cx.theme().foreground).child(error))
                 .into_any_element()
-        } else if let Some(tree) = &self.tree {
-            render_node(tree, "root", cx)
+        } else if let Some(tree) = tree.as_ref() {
+            self.render_node(tree, "root", window, cx)
         } else {
             div()
-                .text_color(rgb(MUTED))
+                .text_color(cx.theme().muted_foreground)
                 .child("Waiting for Clojure to render…")
                 .into_any_element()
         };
 
-        div()
+        let used = std::mem::take(&mut self.used_inputs);
+        self.inputs.retain(|key, _| used.contains(key));
+
+        v_flex()
             .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
             .child(
-                div()
-                    .flex_1()
-                    .p_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .p_4()
-                            .gap_3()
-                            .rounded_lg()
-                            .bg(rgb(SURFACE))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .child(body),
-                    ),
+                v_flex().flex_1().p_4().child(
+                    v_flex()
+                        .flex_1()
+                        .p_4()
+                        .gap_3()
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().secondary)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .child(body),
+                ),
             )
             .child(
                 div()
                     .px_4()
                     .py_2()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(MUTED))
+                    .border_color(cx.theme().border)
+                    .text_color(cx.theme().muted_foreground)
                     .child(self.status.clone()),
             )
     }
+}
+
+fn widget_key(node: &Node, path: &str) -> String {
+    node.id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn parse_color(value: &str) -> Option<u32> {
@@ -171,128 +367,12 @@ fn eid(path: &str) -> SharedString {
     SharedString::from(path.to_string())
 }
 
-fn clickable(
-    el: gpui::Stateful<Div>,
-    on_click: Option<String>,
-    cx: &mut Context<RootView>,
-) -> gpui::Stateful<Div> {
-    if let Some(callback_id) = on_click {
-        el.on_click(cx.listener(move |this, _: &ClickEvent, _window, _cx| {
-            let _ = this.cmd_tx.send(Cmd::Callback(callback_id.clone()));
-        }))
-    } else {
-        el
-    }
-}
-
-fn render_node(node: &Node, path: &str, cx: &mut Context<RootView>) -> AnyElement {
-    match node.kind.as_str() {
-        "label" => apply_style(div().id(eid(path)), node)
-            .child(node.text.clone().unwrap_or_default())
-            .into_any_element(),
-        "button" => {
-            let label = node.text.clone().unwrap_or_default();
-            clickable(
-                apply_style(div().id(eid(path)), node)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(rgb(BUTTON))
-                    .text_color(rgb(0xffffff))
-                    .cursor(gpui::CursorStyle::PointingHand)
-                    .hover(|s| s.bg(rgb(BUTTON_HOVER)))
-                    .active(|s| s.bg(rgb(BUTTON_ACTIVE))),
-                node.on_click.clone(),
-                cx,
-            )
-            .child(label)
-            .into_any_element()
-        }
-        "vstack" => apply_style(div().id(eid(path)).flex().flex_col(), node)
-            .children(render_children(node, path, cx))
-            .into_any_element(),
-        "hstack" => apply_style(
-            div()
-                .id(eid(path))
-                .flex()
-                .flex_row()
-                .items_center(),
-            node,
-        )
-        .children(render_children(node, path, cx))
-        .into_any_element(),
-        "spacer" => {
-            let el = apply_style(div().id(eid(path)), node);
-            if node.size.is_some() || node.flex.is_some() {
-                el.into_any_element()
-            } else {
-                el.flex_1().into_any_element()
-            }
-        }
-        "checkbox" => {
-            let checked = node.checked.unwrap_or(false);
-            // Visual only. A nested `.id()` / `on_click` takes the hit and, with
-            // a parent handler too, toggles twice — looking like a no-op.
-            let mark = div()
-                .size(px(18.))
-                .rounded_sm()
-                .border_1()
-                .border_color(if checked { rgb(CHECK) } else { rgb(ACCENT) })
-                .bg(if checked { rgb(CHECK) } else { rgb(0x1a1b26) });
-            clickable(
-                apply_style(
-                    div()
-                        .id(eid(path))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .py_1()
-                        .cursor(gpui::CursorStyle::PointingHand)
-                        .block_mouse_except_scroll(),
-                    node,
-                ),
-                node.on_click.clone(),
-                cx,
-            )
-            .child(mark)
-            .when_some(node.text.clone(), |el, text| el.child(text))
-            .into_any_element()
-        }
-        "scroll" => apply_style(
-            div()
-                .id(eid(path))
-                .flex()
-                .flex_col()
-                .overflow_y_scroll(),
-            node,
-        )
-        .children(render_children(node, path, cx))
-        .into_any_element(),
-        other => div()
-            .id(eid(path))
-            .text_color(rgb(0xf7768e))
-            .child(format!("Unknown GPUI node: {other}"))
-            .into_any_element(),
-    }
-}
-
-fn render_children(
-    node: &Node,
-    path: &str,
-    cx: &mut Context<RootView>,
-) -> Vec<AnyElement> {
-    node.children
-        .iter()
-        .enumerate()
-        .map(|(index, child)| render_node(child, &format!("{path}-{index}"), cx))
-        .collect()
-}
-
-pub fn open_window(nrepl_port: u16, cmd_tx: mpsc::Sender<Cmd>, event_rx: async_channel::Receiver<HostEvent>, cx: &mut App) {
+pub fn open_window(
+    nrepl_port: u16,
+    cmd_tx: mpsc::Sender<Cmd>,
+    event_rx: async_channel::Receiver<HostEvent>,
+    cx: &mut App,
+) {
     use gpui::{size, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
 
     // GPUI's default is platform-specific: on macOS the process stays alive
@@ -305,7 +385,7 @@ pub fn open_window(nrepl_port: u16, cmd_tx: mpsc::Sender<Cmd>, event_rx: async_c
     })
     .detach();
 
-    let bounds = Bounds::centered(None, size(px(560.), px(720.)), cx);
+    let bounds = Bounds::centered(None, size(px(640.), px(760.)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -315,8 +395,9 @@ pub fn open_window(nrepl_port: u16, cmd_tx: mpsc::Sender<Cmd>, event_rx: async_c
             }),
             ..Default::default()
         },
-        |_, cx| {
-            cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, cx))
+        |window, cx| {
+            let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, cx));
+            cx.new(|cx| Root::new(view, window, cx))
         },
     )
     .unwrap();

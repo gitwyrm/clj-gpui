@@ -2,7 +2,7 @@
 
 A library for writing **native GPUI applications in real Clojure**.
 
-This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native elements.
+This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [gpui-component](https://crates.io/crates/gpui-component) widgets.
 
 There is no Clojars release and no CI yet. Depend on this repo with `:local/root` or a git SHA.
 
@@ -24,8 +24,11 @@ clojure -M:test
 # End-to-end bridge test without opening a window
 clojure -M:protocol-test
 
-# Example native window
+# Example native window (plain counter)
 cd examples/counter && clj -M:dev
+
+# TodoMVC with a real text field
+cd examples/todomvc && clj -M:dev
 ```
 
 Or from the repo root:
@@ -49,7 +52,6 @@ Then, while the native window is running:
 ```clojure
 (in-ns 'counter.app)
 (swap! !state assoc :count 100)
-(swap! !state update :items conj {:id 99 :title "From the REPL" :done false})
 (defn app [] (gpui.ui/label "Redefined from nREPL"))
 (gpui.ui/request-render!)
 ```
@@ -93,18 +95,10 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
   (:require [gpui.ratom :as r]
             [gpui.ui :as ui]))
 
-(defonce !state
-  (r/atom {:count 0
-           :items [{:title "Write UI in real Clojure" :done true}]}))
-
-(defn item-view [idx {:keys [title done]}]
-  (ui/checkbox
-   done
-   #(swap! !state update-in [:items idx :done] not)
-   title))
+(defonce !state (r/atom {:count 0 :draft ""}))
 
 (defn app []
-  (let [{:keys [count items]} @!state]
+  (let [{:keys [count draft]} @!state]
     (ui/vstack
      {:gap 12 :padding 8}
      (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
@@ -112,15 +106,15 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
      (ui/hstack
       {:gap 8}
       (ui/button "−" #(swap! !state update :count dec))
-      (ui/button "+" #(swap! !state update :count inc)))
-     (when (> count 5)
-       (ui/label "That's a lot!"))
-     (map-indexed item-view items))))
+      (ui/button "+" #(swap! !state update :count inc) {:primary true}))
+     (ui/text-field
+      draft
+      {:id "note"
+       :placeholder "A native text field"
+       :on-change #(swap! !state assoc :draft %)}))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React.
-
-Handlers are 0-argument Clojure functions. The host invokes them by callback id after a click.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Text fields pass the current string to `:on-change` / `:on-submit`.
 
 ## Architecture
 
@@ -135,7 +129,7 @@ Handlers are 0-argument Clojure functions. The host invokes them by callback id 
                        │ host connects as client
 ┌──────────────────────┴───────────────────────┐
 │              Rust process                    │
-│  GPUI window / event loop / GPU renderer     │
+│  GPUI window / gpui-component widgets        │
 │  renderer.rs  ← UI tree as JSON maps         │
 │  bridge.rs    ← TCP client + RPC             │
 └──────────────────────────────────────────────┘
@@ -175,8 +169,9 @@ src/gpui/ratom.clj            ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
 src/gpui/dev.clj              ; Clojure-first launcher
-host/                         ; native GPUI binary (Cargo)
-examples/counter/             ; demo app (:local/root "../..")
+host/                         ; native GPUI + gpui-component host
+examples/counter/             ; plain counter
+examples/todomvc/             ; TodoMVC with a text field
 template/                     ; copyable app skeleton
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
@@ -187,11 +182,13 @@ docs/protocol.md
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
 (ui/button "+" on-click)
+(ui/button "Save" save! {:primary true})
 (ui/vstack {:gap 8 :padding 16} ...)
 (ui/hstack ...)
 (ui/spacer)
 (ui/checkbox checked on-click "Label")
 (ui/scroll {:height 220} ...)
+(ui/text-field value {:placeholder "…" :on-change f :on-submit g})
 ```
 
 `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
@@ -214,10 +211,8 @@ docs/protocol.md
 * **Two processes, JSON copies.** Fine for this slice. A future JNI path can keep the same Clojure API.
 * **Whole-window rerender.** No incremental DOM-style diffing.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
-* **No text input yet.**
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
 * **Packaging** is not solved: you still need a JRE plus the GPUI binary. Git deps; no Clojars or host binary downloads yet.
-* **gpui-component** was skipped. Plain GPUI made the first vertical slice smaller.
 
 ## License
 

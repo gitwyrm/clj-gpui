@@ -7,16 +7,23 @@ pub struct Node {
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
     #[serde(default)]
     pub children: Vec<Node>,
     #[serde(default, rename = "on-click")]
     pub on_click: Option<String>,
     #[serde(default, rename = "on-change")]
-    #[allow(dead_code)]
     pub on_change: Option<String>,
+    #[serde(default, rename = "on-submit")]
+    pub on_submit: Option<String>,
     #[serde(default)]
     pub checked: Option<bool>,
+    #[serde(default)]
+    pub primary: bool,
     #[serde(default)]
     pub gap: Option<f32>,
     #[serde(default)]
@@ -42,21 +49,30 @@ impl Node {
         if self.kind == "button" && self.text.as_deref() == Some(text) {
             return Some(self);
         }
-        self.children.iter().find_map(|child| child.find_button(text))
+        self.children
+            .iter()
+            .find_map(|child| child.find_button(text))
     }
 
     pub fn contains_text(&self, needle: &str) -> bool {
         self.text
             .as_deref()
             .is_some_and(|text| text.contains(needle))
-            || self.children.iter().any(|child| child.contains_text(needle))
+            || self
+                .placeholder
+                .as_deref()
+                .is_some_and(|text| text.contains(needle))
+            || self
+                .children
+                .iter()
+                .any(|child| child.contains_text(needle))
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     Render,
-    Callback(String),
+    Callback { id: String, value: Option<String> },
     Reload,
     Shutdown,
 }
