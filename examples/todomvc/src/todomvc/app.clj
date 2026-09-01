@@ -71,8 +71,8 @@
 
 (defn- item-row [{:keys [id title done]}]
   (ui/hstack
-   {:gap 12 :padding 8 :border-bottom line}
-   (ui/checkbox done #(toggle-item id))
+   {:gap 12 :padding 8 :border-bottom line :align :center}
+   (ui/checkbox done #(toggle-item id) {:shape :circle :size 30})
    (ui/label title {:flex 1
                     :font-size 22
                     :color (if done completed-color text-color)
@@ -89,14 +89,21 @@
         completed (count (filterv :done items))
         all-done? (and (seq items) (every? :done items))]
     (ui/vstack
-     {:flex 1 :bg page-bg :padding 28 :gap 8 :align :center}
-     (ui/label "todos" {:font-size 80 :font-weight :extralight :color title-color})
+     {:theme :light :flex 1 :bg page-bg :padding 28 :gap 8 :align :center}
+     (ui/label "todos" {:font-size 80
+                        :font-weight :light
+                        :font-family ".SystemUIFont"
+                        :color title-color})
      (ui/vstack
       {:width 550 :bg card-bg :shadow true}
       (ui/hstack
-       {:gap 8 :padding 12 :border-bottom line}
+       {:gap 8 :padding 12 :border-bottom line :align :center}
        (when (seq items)
-         (ui/checkbox all-done? toggle-all))
+         (ui/button "⌄" toggle-all
+                    {:variant :text
+                     :compact true
+                     :font-size 22
+                     :color (if all-done? "#737373" "#e6e6e6")}))
        (ui/text-field
         draft
         {:id "new-todo"

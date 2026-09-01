@@ -90,6 +90,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-change` | string callback id | `text-field` (called with the field string) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `checked` | bool | `checkbox` |
+| `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
 | `variant` | string | `button` (`primary`, `ghost`, `text`, `outline`, `danger`) |
 | `compact` | bool | `button` |
@@ -100,13 +101,21 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `justify` | string | `center`, `end`, `between` |
 | `gap`, `padding`, `width`, `height`, `size`, `flex` | number | layout / spacer |
 | `font-size` | number | text |
+| `font-family` | string | text (e.g. `.SystemUIFont`) |
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
+| `theme` | string | root layout: `system` (default), `light`, `dark` |
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` with ids such as `"cb-2"`. The registry is rebuilt on every export.
 
 The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1 (`Button`, `Checkbox`, `Input`, `v_flex` / `h_flex`, themed `Root`).
 
 Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
+
+Put `:theme` on the **root** node. The host does not choose a theme on its own:
+
+* `:system` (default if omitted) follows the OS appearance, including later changes
+* `:light` pins gpui-component to light
+* `:dark` pins gpui-component to dark
 
 The native window title is currently the constant `gpui.ui/window-title` (`clj-gpui`).

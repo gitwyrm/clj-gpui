@@ -50,8 +50,16 @@ pub struct Node {
     pub font_size: Option<f32>,
     #[serde(default, rename = "font-weight")]
     pub font_weight: Option<String>,
+    #[serde(default, rename = "font-family")]
+    pub font_family: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// Root layout: `"system"` (default), `"light"`, or `"dark"`.
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Checkbox: `"circle"` for a round toggle. Omitted is the square widget.
+    #[serde(default)]
+    pub shape: Option<String>,
     #[serde(default)]
     pub height: Option<f32>,
     #[serde(default)]

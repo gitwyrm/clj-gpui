@@ -38,7 +38,8 @@
     (is (fn? (:on-change (ui/text-field "" (fn [s] s))))))
   (testing "style keys pass through"
     (is (true? (:strikethrough (ui/label "x" {:strikethrough true}))))
-    (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))))
+    (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))
+    (is (= :circle (:shape (ui/checkbox false (fn []) {:shape :circle}))))))
 
 (deftest sequences-flatten-inside-stacks
   (let [tree (ui/vstack
@@ -58,6 +59,19 @@
     (is (= "vstack" (:type exported)))
     (is (string? (get-in exported [:children 0 :on-click])))
     (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-click]))))))
+
+(deftest theme-on-root-serializes
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:theme :light :gap 8} (ui/label "x")))]
+    (is (= "vstack" (:type exported)))
+    (is (= "light" (:theme exported))))
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:theme :dark} (ui/label "x")))]
+    (is (= "dark" (:theme exported))))
+  (let [exported (runtime/export-tree
+                  (ui/vstack {:theme :system} (ui/label "x")))]
+    (is (= "system" (:theme exported)))))
 
 (deftest invoke-callback-passes-text-value
   (runtime/reset-callbacks!)

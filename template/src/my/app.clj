@@ -7,7 +7,7 @@
 (defn app []
   (let [{:keys [n]} @!state]
     (ui/vstack
-     {:gap 12 :padding 16}
+     {:theme :system :gap 12 :padding 16}
      (ui/label "Hello from Clojure" {:font-size 20 :font-weight :semibold})
      (ui/hstack
       {:gap 10}

@@ -1,7 +1,7 @@
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
     div, prelude::*, px, rgb, AnyElement, App, ClickEvent, Context, Entity, Focusable,
-    SharedString, Styled, Window,
+    SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
@@ -9,6 +9,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement as _,
+    theme::{Theme, ThemeMode},
     v_flex, ActiveTheme as _, Root,
 };
 use std::collections::{HashMap, HashSet};
@@ -29,6 +30,7 @@ pub struct RootView {
     cmd_tx: mpsc::Sender<Cmd>,
     inputs: HashMap<String, InputSlot>,
     used_inputs: HashSet<String>,
+    _appearance: Subscription,
 }
 
 impl RootView {
@@ -36,8 +38,15 @@ impl RootView {
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
         event_rx: async_channel::Receiver<HostEvent>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.requested_theme() == "system" {
+                this.apply_theme(window, cx);
+                cx.notify();
+            }
+        });
         let _ = cmd_tx.send(Cmd::Render);
         cx.spawn(async move |this, cx| {
             while let Ok(event) = event_rx.recv().await {
@@ -73,6 +82,37 @@ impl RootView {
             cmd_tx,
             inputs: HashMap::new(),
             used_inputs: HashSet::new(),
+            _appearance: appearance,
+        }
+    }
+
+    fn requested_theme(&self) -> &str {
+        self.tree
+            .as_ref()
+            .and_then(|node| node.theme.as_deref())
+            .filter(|theme| !theme.is_empty())
+            .unwrap_or("system")
+    }
+
+    fn apply_theme(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = Theme::global(cx).mode;
+        match self.requested_theme() {
+            "light" => {
+                if current != ThemeMode::Light {
+                    Theme::change(ThemeMode::Light, None, cx);
+                }
+            }
+            "dark" => {
+                if current != ThemeMode::Dark {
+                    Theme::change(ThemeMode::Dark, None, cx);
+                }
+            }
+            _ => {
+                let desired = ThemeMode::from(window.appearance());
+                if current != desired {
+                    Theme::change(desired, None, cx);
+                }
+            }
         }
     }
 
@@ -213,21 +253,25 @@ impl RootView {
                 }
             }
             "checkbox" => {
-                let checked = node.checked.unwrap_or(false);
-                let mut checkbox = Checkbox::new(eid(&key)).checked(checked);
-                if let Some(text) = node.text.clone() {
-                    checkbox = checkbox.label(text);
-                }
-                if let Some(callback_id) = node.on_click.clone() {
-                    let cmd_tx = self.cmd_tx.clone();
-                    checkbox = checkbox.on_click(move |_, _, _| {
-                        let _ = cmd_tx.send(Cmd::Callback {
-                            id: callback_id.clone(),
-                            value: None,
+                if node.shape.as_deref() == Some("circle") {
+                    self.render_circle_checkbox(node, &key)
+                } else {
+                    let checked = node.checked.unwrap_or(false);
+                    let mut checkbox = Checkbox::new(eid(&key)).checked(checked);
+                    if let Some(text) = node.text.clone() {
+                        checkbox = checkbox.label(text);
+                    }
+                    if let Some(callback_id) = node.on_click.clone() {
+                        let cmd_tx = self.cmd_tx.clone();
+                        checkbox = checkbox.on_click(move |_, _, _| {
+                            let _ = cmd_tx.send(Cmd::Callback {
+                                id: callback_id.clone(),
+                                value: None,
+                            });
                         });
-                    });
+                    }
+                    apply_style(checkbox, node).into_any_element()
                 }
-                apply_style(checkbox, node).into_any_element()
             }
             "scroll" => apply_style(v_flex().id(eid(&key)), node)
                 .overflow_y_scrollbar()
@@ -259,10 +303,46 @@ impl RootView {
             .map(|(index, child)| self.render_node(&child, &format!("{path}-{index}"), window, cx))
             .collect()
     }
+
+    fn render_circle_checkbox(&self, node: &Node, key: &str) -> AnyElement {
+        let checked = node.checked.unwrap_or(false);
+        let diameter = node.size.unwrap_or(30.0);
+        let ring = if checked { 0x5d_c2_af } else { 0xd9_d9_d9 };
+        let mut mark = div()
+            .id(eid(&format!("{key}-mark")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(diameter))
+            .rounded_full()
+            .border_1()
+            .border_color(rgb(ring))
+            .cursor_pointer();
+        if checked {
+            mark = mark.child(
+                div()
+                    .text_size(px(16.))
+                    .text_color(rgb(0x5d_c2_af))
+                    .child("✓"),
+            );
+        }
+        if let Some(callback_id) = node.on_click.clone() {
+            mark = mark.on_click(self.click(callback_id));
+        }
+        let mut row = h_flex().id(eid(key)).items_center().gap(px(12.));
+        row = row.child(mark);
+        if let Some(text) = node.text.clone() {
+            row = row.child(div().child(text));
+        }
+        let mut style = node.clone();
+        style.size = None;
+        apply_style(row, &style).into_any_element()
+    }
 }
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_theme(window, cx);
         self.used_inputs.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
@@ -348,6 +428,9 @@ fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
     }
     if let Some(font_size) = node.font_size {
         el = el.text_size(px(font_size));
+    }
+    if let Some(family) = &node.font_family {
+        el = el.font_family(family.clone());
     }
     if let Some(weight) = &node.font_weight {
         el = match weight.as_str() {
@@ -437,7 +520,7 @@ pub fn open_window(
             ..Default::default()
         },
         |window, cx| {
-            let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, cx));
+            let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, window, cx));
             let root = cx.new(|cx| Root::new(view, window, cx));
             window.on_window_should_close(cx, |_, cx| {
                 quit_host(cx);

@@ -100,7 +100,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
 (defn app []
   (let [{:keys [count draft]} @!state]
     (ui/vstack
-     {:gap 12 :padding 8}
+     {:theme :system :gap 12 :padding 8}
      (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
      (ui/label (str "Count: " count))
      (ui/hstack
@@ -171,7 +171,7 @@ src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
 src/gpui/dev.clj              ; Clojure-first launcher
 host/                         ; native GPUI + gpui-component host
 examples/counter/             ; plain counter
-examples/todomvc/             ; TodoMVC with a text field
+examples/todomvc/             ; classic TodoMVC layout
 template/                     ; copyable app skeleton
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
@@ -183,15 +183,16 @@ docs/protocol.md
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
 (ui/button "+" on-click)
 (ui/button "Save" save! {:primary true})
-(ui/vstack {:gap 8 :padding 16} ...)
+(ui/vstack {:theme :system :gap 8 :padding 16} ...)
 (ui/hstack ...)
 (ui/spacer)
 (ui/checkbox checked on-click "Label")
+(ui/checkbox done toggle {:shape :circle})
 (ui/scroll {:height 220} ...)
 (ui/text-field value {:placeholder "…" :on-change f :on-submit g})
 ```
 
-`when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
+`:theme` on the root layout is `:system` (follow the OS, the default), `:light`, or `:dark`. `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
 ## Environment
 

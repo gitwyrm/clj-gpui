@@ -93,7 +93,8 @@
   "A text label. Optional style map uses GPUI-oriented keys, not CSS.
 
   (ui/label \"Hello\")
-  (ui/label \"Hello\" {:font-size 20 :font-weight :bold})"
+  (ui/label \"Hello\" {:font-size 20 :font-weight :bold})
+  (ui/label \"todos\" {:font-family \".SystemUIFont\" :font-weight :light})"
   ([text]
    {:type :label :text (str text)})
   ([text style]
@@ -116,8 +117,11 @@
 (defn vstack
   "Vertical stack. An optional leading map is treated as layout/style.
 
+  Put `:theme :system`, `:light`, or `:dark` on the root layout.
+  `:system` (the default) follows the OS appearance.
+
   (ui/vstack
-    {:gap 8 :padding 16}
+    {:theme :light :gap 8 :padding 16}
     (ui/label \"Hello\")
     (map item-view items))"
   [& args]
@@ -142,7 +146,10 @@
 (defn checkbox
   "A checkbox. `on-click` is a 0-arg Clojure function; toggle the atom yourself.
 
-  (ui/checkbox (:done item) #(swap! state update-in [:items i :done] not) \"Done\")"
+  `:shape :circle` paints a round toggle instead of gpui-component's square.
+
+  (ui/checkbox (:done item) #(swap! state update-in [:items i :done] not) \"Done\")
+  (ui/checkbox done toggle {:shape :circle})"
   ([checked on-click]
    {:type :checkbox :checked (boolean checked) :on-click on-click})
   ([checked on-click label-or-style]
