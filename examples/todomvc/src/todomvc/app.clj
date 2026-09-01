@@ -131,17 +131,18 @@
         remaining (count (remove :done items))
         completed (count (filterv :done items))
         all-done? (and (seq items) (every? :done items))]
-    (ui/vstack
+    (ui/window
      {:title "todos"
       :chrome :app
-      :window-width 640
-      :window-height 820
-      :theme :light
-      :flex 1
-      :bg page-bg
-      :padding 28
-      :gap 8
-      :align :center}
+      :width 640
+      :height 820}
+     (ui/vstack
+      {:theme :light
+       :flex 1
+       :bg page-bg
+       :padding 28
+       :gap 8
+       :align :center}
      (ui/label "todos" {:font-size 80
                         :font-weight :light
                         :font-family ".SystemUIFont"
@@ -195,4 +196,4 @@
       (ui/label "Double-click a title to edit · Enter or click away to save · Escape to cancel"
                 {:font-size 11 :color hint})
       (ui/label "Click a checkbox to toggle · × to delete" {:font-size 11 :color hint})
-      (ui/label "Written in real Clojure · rendered by GPUI" {:font-size 11 :color hint})))))
+      (ui/label "Written in real Clojure · rendered by GPUI" {:font-size 11 :color hint}))))))

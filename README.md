@@ -99,23 +99,21 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
 
 (defn app []
   (let [{:keys [count draft]} @!state]
-    (ui/vstack
-     {:title "clj-gpui"
-      :chrome :dev
-      :theme :system
-      :gap 12
-      :padding 8}
-     (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
-     (ui/label (str "Count: " count))
-     (ui/hstack
-      {:gap 8}
-      (ui/button "−" #(swap! !state update :count dec))
-      (ui/button "+" #(swap! !state update :count inc) {:primary true}))
-     (ui/text-field
-      draft
-      {:id "note"
-       :placeholder "A native text field"
-       :on-change #(swap! !state assoc :draft %)}))))
+    (ui/window
+     {:title "clj-gpui" :chrome :dev :theme :system}
+     (ui/vstack
+      {:gap 12 :padding 8}
+      (ui/label "clj-gpui" {:font-size 22 :font-weight :bold})
+      (ui/label (str "Count: " count))
+      (ui/hstack
+       {:gap 8}
+       (ui/button "−" #(swap! !state update :count dec))
+       (ui/button "+" #(swap! !state update :count inc) {:primary true}))
+      (ui/text-field
+       draft
+       {:id "note"
+        :placeholder "A native text field"
+        :on-change #(swap! !state assoc :draft %)})))))
 ```
 
 That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg.
@@ -187,7 +185,8 @@ docs/protocol.md
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
 (ui/button "+" on-click)
 (ui/button "Save" save! {:primary true})
-(ui/vstack {:title "Todos" :chrome :app :window-width 640 :window-height 820 :theme :system :gap 8 :padding 16} ...)
+(ui/window {:title "Todos" :chrome :app :width 640 :height 820} ...)
+(ui/vstack {:theme :light :gap 8 :padding 16} ...)
 (ui/hstack ...)
 (ui/spacer)
 (ui/checkbox checked on-click "Label")
@@ -197,7 +196,20 @@ docs/protocol.md
 (ui/text-field value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
 ```
 
-`:theme` on the root layout is `:system` (follow the OS, the default), `:light`, or `:dark`. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it. `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
+Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+
+`:theme` is a style on any node: `:system` (follow the OS, the default), `:light`, or `:dark`. Put it on the window for the whole app (and the footer), or on a nested stack to theme just that subtree:
+
+```clojure
+(ui/window
+ {:title "Studio" :width 960 :height 640}
+ (ui/hstack
+  {:flex 1}
+  (ui/vstack {:theme :dark :width 220 :padding 12} (ui/label "Nav"))
+  (ui/vstack {:theme :light :flex 1 :padding 16} (ui/label "Canvas"))))
+```
+
+`when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
 ## Environment
 

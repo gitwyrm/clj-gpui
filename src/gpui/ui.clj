@@ -12,7 +12,7 @@
   1)
 
 (def window-title
-  "Default native window title. The host currently uses this constant."
+  "Default native window title when `ui/window` omits `:title`."
   "clj-gpui")
 
 (def ^:const ratom-watch-key
@@ -115,20 +115,46 @@
   ([text on-click style]
    (merge {:type :button :text (str text) :on-click on-click} style)))
 
+(defn window
+  "Native window. Return this from `app`. Only one makes sense.
+
+  `:title` is the OS window title (default `clj-gpui`).
+  `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+  `:width` / `:height` are the native window size in pixels
+  (`:window-width` / `:window-height` are accepted as aliases).
+  Those size keys are not layout: children fill the window.
+
+  `:theme` may live here (default for the window and the footer) or on
+  any nested node, so different parts of the app can use different themes.
+
+  (ui/window
+    {:title \"Todos\" :chrome :app :width 640 :height 820}
+    (ui/vstack {:theme :light :flex 1 :gap 8 :padding 16}
+      (ui/label \"Hello\")
+      (map item-view items)))"
+  [& args]
+  (let [[style children] (split-style-children args)
+        title (:title style)
+        chrome (:chrome style)
+        width (or (:window-width style) (:width style))
+        height (or (:window-height style) (:height style))
+        node (-> style
+                 (dissoc :title :chrome :width :height :window-width :window-height)
+                 (assoc :type :window :children (flatten-children children)))]
+    (cond-> node
+      title (assoc :title (str title))
+      (some? chrome) (assoc :chrome chrome)
+      (some? width) (assoc :window-width width)
+      (some? height) (assoc :window-height height))))
+
 (defn vstack
   "Vertical stack. An optional leading map is treated as layout/style.
 
-  Put `:theme :system`, `:light`, or `:dark` on the root layout.
-  `:system` (the default) follows the OS appearance.
+  `:theme :system`, `:light`, or `:dark` is a style, not window chrome.
+  It can sit on this stack, on `ui/window`, or on any other node.
+  `:system` (the default when omitted) follows the OS appearance.
 
-  Window chrome also lives on the root:
-  `:title`, `:chrome` (`:dev` shows the nREPL footer, `:app` hides it),
-  `:window-width`, and `:window-height`. `:width` / `:height` on the root
-  set the native window too when `:window-width` / `:window-height` are omitted.
-
-  (ui/vstack
-    {:title \"Todos\" :chrome :app :window-width 640 :window-height 820
-     :theme :light :gap 8 :padding 16}
+  (ui/vstack {:theme :light :gap 8 :padding 16}
     (ui/label \"Hello\")
     (map item-view items))"
   [& args]

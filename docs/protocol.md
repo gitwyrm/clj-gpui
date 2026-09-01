@@ -81,7 +81,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
 |---|---|---|
-| `type` | string | all (`label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`) |
+| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`) |
 | `id` | string | optional stable identity, especially `text-field` |
 | `text` | string | `label`, `button`, `checkbox`, `text-field` (current value) |
 | `placeholder` | string | `text-field` |
@@ -108,10 +108,10 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-family` | string | text (e.g. `.SystemUIFont`) |
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
-| `theme` | string | root layout: `system` (default), `light`, `dark` |
-| `title` | string | root: native window title (default `clj-gpui`) |
-| `chrome` | string | root: `dev` (default, nREPL footer) or `app` (no host chrome) |
-| `window-width`, `window-height` | number | root: native window size in pixels |
+| `theme` | string | any node: `system` (default), `light`, `dark`. Nested nodes scope that subtree |
+| `title` | string | `window` (or any root): native window title (default `clj-gpui`) |
+| `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
+| `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` with ids such as `"cb-2"`. The registry is rebuilt on every export.
 
@@ -119,16 +119,18 @@ The native host paints these nodes with [gpui-component](https://crates.io/crate
 
 Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
 
-Put `:theme` on the **root** node. The host does not choose a theme on its own:
+Put `:theme` on **any** node. The host does not choose a theme on its own:
 
 * `:system` (default if omitted) follows the OS appearance, including later changes
-* `:light` pins gpui-component to light
-* `:dark` pins gpui-component to dark
+* `:light` pins gpui-component to light for that subtree
+* `:dark` pins gpui-component to dark for that subtree
 
-Window chrome is also Clojure-owned, on the same root node:
+A nested `:theme` wraps that subtree during layout and paint so siblings keep their own theme. The footer / waiting state follow the **root** node's `:theme` (usually the `window`).
+
+Window chrome is Clojure-owned on a `window` node (the host still reads these keys from whatever node is the tree root):
 
 * `:title` sets the native window title (default `clj-gpui`)
 * `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides host chrome
-* `:window-width` / `:window-height` resize the window when those values change in the tree. Root `:width` / `:height` are used if the `window-*` keys are omitted.
+* `:window-width` / `:window-height` resize the window when those values change in the tree. On `ui/window`, Clojure maps `:width` / `:height` to these keys so they are not layout. If the root is not a `window`, root `:width` / `:height` are still used when the `window-*` keys are omitted.
 
 The size is applied when the tree’s requested size changes, not on every user drag.

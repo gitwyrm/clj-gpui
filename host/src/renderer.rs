@@ -1,6 +1,7 @@
 use crate::protocol::{Cmd, HostEvent, Node};
 use gpui::{
-    div, prelude::*, px, rgb, size, AnyElement, App, ClickEvent, Context, Entity, Focusable,
+    div, prelude::*, px, rgb, size, AnyElement, App, Bounds, ClickEvent, Context, Element,
+    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, LayoutId, Pixels,
     SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
@@ -52,10 +53,10 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Self {
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            if this.requested_theme() == "system" {
-                this.apply_theme(window, cx);
-                cx.notify();
-            }
+            this.apply_theme(window, cx);
+            // Always notify: nested nodes may use `:theme :system` even when
+            // the root is pinned to light or dark.
+            cx.notify();
         });
         let keystrokes = cx.observe_keystrokes(|this, event, window, cx| {
             if event.keystroke.key != "escape" {
@@ -363,9 +364,28 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = widget_key(node, path);
-        match node.kind.as_str() {
+        let scope = node_theme_mode(node, window);
+        let restore = if let Some(mode) = scope {
+            let prev = Theme::global(cx).mode;
+            if prev != mode {
+                Theme::change(mode, None, cx);
+            }
+            Some(prev)
+        } else {
+            None
+        };
+
+        let element = match node.kind.as_str() {
+            "window" => {
+                let mut layout = node.clone();
+                layout.width = None;
+                layout.height = None;
+                apply_style(v_flex().id(eid(&key)).size_full(), &layout, cx)
+                    .children(self.render_children(node, path, window, cx))
+                    .into_any_element()
+            }
             "label" => {
-                let mut el = apply_style(div().id(eid(&key)), node)
+                let mut el = apply_style(div().id(eid(&key)), node, cx)
                     .child(node.text.clone().unwrap_or_default());
                 if let Some(callback_id) = node.on_double_click.clone() {
                     let cmd_tx = self.cmd_tx.clone();
@@ -391,16 +411,16 @@ impl RootView {
                 if let Some(callback_id) = node.on_click.clone() {
                     button = button.on_click(self.click(callback_id));
                 }
-                apply_style(button, node).into_any_element()
+                apply_style(button, node, cx).into_any_element()
             }
-            "vstack" => apply_style(v_flex().id(eid(&key)), node)
+            "vstack" => apply_style(v_flex().id(eid(&key)), node, cx)
                 .children(self.render_children(node, path, window, cx))
                 .into_any_element(),
-            "hstack" => apply_style(h_flex().id(eid(&key)), node)
+            "hstack" => apply_style(h_flex().id(eid(&key)), node, cx)
                 .children(self.render_children(node, path, window, cx))
                 .into_any_element(),
             "spacer" => {
-                let el = apply_style(div().id(eid(&key)), node);
+                let el = apply_style(div().id(eid(&key)), node, cx);
                 if node.size.is_some() || node.flex.is_some() {
                     el.into_any_element()
                 } else {
@@ -409,7 +429,7 @@ impl RootView {
             }
             "checkbox" => {
                 if node.shape.as_deref() == Some("circle") {
-                    self.render_circle_checkbox(node, &key)
+                    self.render_circle_checkbox(node, &key, cx)
                 } else {
                     let checked = node.checked.unwrap_or(false);
                     let mut checkbox = Checkbox::new(eid(&key)).checked(checked);
@@ -426,22 +446,32 @@ impl RootView {
                             });
                         });
                     }
-                    apply_style(checkbox, node).into_any_element()
+                    apply_style(checkbox, node, cx).into_any_element()
                 }
             }
-            "scroll" => apply_style(v_flex().id(eid(&key)), node)
+            "scroll" => apply_style(v_flex().id(eid(&key)), node, cx)
                 .overflow_y_scrollbar()
                 .children(self.render_children(node, path, window, cx))
                 .into_any_element(),
             "text-field" => {
                 let state = self.input_slot(&key, node, window, cx);
-                apply_style(Input::new(&state), node).into_any_element()
+                apply_style(Input::new(&state), node, cx).into_any_element()
             }
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
                 .child(format!("Unknown GPUI node: {other}"))
                 .into_any_element(),
+        };
+
+        if let Some(prev) = restore {
+            if Theme::global(cx).mode != prev {
+                Theme::change(prev, None, cx);
+            }
+        }
+        match scope {
+            Some(mode) => ThemeScope::new(mode, element).into_any_element(),
+            None => element,
         }
     }
 
@@ -460,7 +490,7 @@ impl RootView {
             .collect()
     }
 
-    fn render_circle_checkbox(&self, node: &Node, key: &str) -> AnyElement {
+    fn render_circle_checkbox(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let diameter = node.size.unwrap_or(30.0);
         let ring = if checked { 0x5d_c2_af } else { 0xd9_d9_d9 };
@@ -492,7 +522,7 @@ impl RootView {
         }
         let mut style = node.clone();
         style.size = None;
-        apply_style(row, &style).into_any_element()
+        apply_style(row, &style, cx).into_any_element()
     }
 }
 
@@ -569,7 +599,7 @@ fn apply_button_variant(button: Button, node: &Node) -> Button {
     }
 }
 
-fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
+fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
     }
@@ -637,7 +667,116 @@ fn apply_style<E: Styled>(mut el: E, node: &Node) -> E {
         Some("between") => el = el.justify_between(),
         _ => {}
     }
+    if node_theme_pref(node).is_some() {
+        if node.color.is_none() {
+            el = el.text_color(cx.theme().foreground);
+        }
+        if node.bg.is_none() && matches!(node.kind.as_str(), "window" | "vstack" | "hstack" | "scroll")
+        {
+            el = el.bg(cx.theme().background);
+        }
+    }
     el
+}
+
+fn node_theme_pref(node: &Node) -> Option<&str> {
+    node.theme
+        .as_deref()
+        .filter(|theme| !theme.is_empty())
+}
+
+fn node_theme_mode(node: &Node, window: &Window) -> Option<ThemeMode> {
+    node_theme_pref(node).map(|pref| match pref {
+        "light" => ThemeMode::Light,
+        "dark" => ThemeMode::Dark,
+        _ => ThemeMode::from(window.appearance()),
+    })
+}
+
+/// Switches gpui-component's global theme around a subtree during layout/paint.
+/// Widgets such as Button read `cx.theme()` in `RenderOnce::render`, which runs
+/// in `request_layout`, not when Clojure builds the tree.
+struct ThemeScope {
+    mode: ThemeMode,
+    child: AnyElement,
+}
+
+impl ThemeScope {
+    fn new(mode: ThemeMode, child: AnyElement) -> Self {
+        Self { mode, child }
+    }
+}
+
+fn with_theme_mode<R>(mode: ThemeMode, cx: &mut App, f: impl FnOnce(&mut App) -> R) -> R {
+    let prev = Theme::global(cx).mode;
+    if prev != mode {
+        Theme::change(mode, None, cx);
+    }
+    let result = f(cx);
+    if prev != mode {
+        Theme::change(prev, None, cx);
+    }
+    result
+}
+
+impl IntoElement for ThemeScope {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ThemeScope {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        with_theme_mode(self.mode, cx, |cx| (self.child.request_layout(window, cx), ()))
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        with_theme_mode(self.mode, cx, |cx| {
+            let _ = self.child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        with_theme_mode(self.mode, cx, |cx| {
+            self.child.paint(window, cx);
+        });
+    }
 }
 
 fn eid(path: &str) -> SharedString {

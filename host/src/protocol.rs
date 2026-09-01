@@ -60,13 +60,13 @@ pub struct Node {
     pub font_family: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
-    /// Root layout: `"system"` (default), `"light"`, or `"dark"`.
+    /// Any node: `"system"` (default), `"light"`, or `"dark"`. Nested nodes scope that subtree.
     #[serde(default)]
     pub theme: Option<String>,
     /// Native window title. Omitted keeps `clj-gpui`.
     #[serde(default)]
     pub title: Option<String>,
-    /// Root layout: `"dev"` (default, nREPL footer) or `"app"` (no host chrome).
+    /// `window` (or any root): `"dev"` (default, nREPL footer) or `"app"` (no host chrome).
     #[serde(default)]
     pub chrome: Option<String>,
     #[serde(default, rename = "window-width")]

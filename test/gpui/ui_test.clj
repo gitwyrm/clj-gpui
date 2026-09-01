@@ -75,18 +75,45 @@
                   (ui/vstack {:theme :system} (ui/label "x")))]
     (is (= "system" (:theme exported)))))
 
-(deftest window-chrome-on-root-serializes
+(deftest window-maps-chrome-and-size
+  (let [n (ui/window {:title "Todos"
+                      :chrome :app
+                      :width 640
+                      :height 820
+                      :theme :light}
+                     (ui/label "x"))]
+    (is (= :window (:type n)))
+    (is (= "Todos" (:title n)))
+    (is (= :app (:chrome n)))
+    (is (= 640 (:window-width n)))
+    (is (= 820 (:window-height n)))
+    (is (= :light (:theme n)))
+    (is (nil? (:width n)))
+    (is (nil? (:height n)))))
+
+(deftest window-chrome-serializes
   (runtime/reset-callbacks!)
   (let [exported (runtime/export-tree
-                  (ui/vstack {:title "Todos"
+                  (ui/window {:title "Todos"
                               :chrome :app
-                              :window-width 640
-                              :window-height 820}
-                             (ui/label "x")))]
+                              :width 640
+                              :height 820}
+                             (ui/vstack {:theme :dark} (ui/label "x"))))]
+    (is (= "window" (:type exported)))
     (is (= "Todos" (:title exported)))
     (is (= "app" (:chrome exported)))
     (is (= 640 (:window-width exported)))
-    (is (= 820 (:window-height exported)))))
+    (is (= 820 (:window-height exported)))
+    (is (= "dark" (get-in exported [:children 0 :theme])))))
+
+(deftest theme-on-nested-node-serializes
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/hstack
+                   (ui/vstack {:theme :dark} (ui/label "nav"))
+                   (ui/vstack {:theme :light} (ui/label "main"))))]
+    (is (= "dark" (get-in exported [:children 0 :theme])))
+    (is (= "light" (get-in exported [:children 1 :theme])))))
 
 (deftest export-double-click-and-edit-callbacks
   (runtime/reset-callbacks!)

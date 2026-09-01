@@ -8,5 +8,6 @@
   (is (identical? ui/label core/label))
   (is (identical? ui/button core/button))
   (is (identical? ui/text-field core/text-field))
+  (is (identical? ui/window core/window))
   (is (= ui/window-title core/window-title))
   (is (= ui/protocol-version core/protocol-version)))
