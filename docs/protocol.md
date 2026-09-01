@@ -111,7 +111,7 @@ Clojure invokes the `gpui.platform/pick-directory` callback. It does not automat
 Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
-|---|---|
+|---|---|---|
 | `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`) |
 | `id` | string | optional stable identity, especially `text-field` |
 | `text` | string | `label`, `button`, `checkbox`, `text-field` (current value) |
