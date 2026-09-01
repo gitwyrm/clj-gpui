@@ -285,15 +285,15 @@
                   :on-blur save
                   :on-escape cancel})"
   ([value]
-   {:type :text-field :text (str (or value \"\"))})
+   {:type :text-field :text (str (or value ""))})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge {:type :text-field :text (str (or value \"\"))} on-change-or-opts)
+     (merge {:type :text-field :text (str (or value ""))} on-change-or-opts)
      {:type :text-field
-      :text (str (or value \"\"))
+      :text (str (or value ""))
       :on-change on-change-or-opts}))
   ([value on-change opts]
    (merge {:type :text-field
-           :text (str (or value \"\"))
+           :text (str (or value ""))
            :on-change on-change}
           opts)))
