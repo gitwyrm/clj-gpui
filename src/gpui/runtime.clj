@@ -266,6 +266,9 @@
   (let [s (str nspace)]
     (or (= nspace 'gpui.runtime)
         (= nspace 'gpui.dev)
+        (= nspace 'gpui.host)
+        (= nspace 'gpui.prod)
+        (= nspace 'gpui.package)
         (str/starts-with? s "clojure.")
         (str/starts-with? s "nrepl."))))
 
@@ -304,6 +307,7 @@
        (require-reload! 'gpui.core)
        (require-reload! 'gpui.ratom)
        (require-reload! 'gpui.theme)
+       (require-reload! 'gpui.platform)
        (require-reload! app)
        (load-app!)
        {:ok true :ns (str app)})
@@ -333,7 +337,7 @@
   native window can show the compile error instead of the previous UI."
   ([]
    (reset-callbacks!)
-   (if-let [e @load-error*]
+  (if-let [e @load-error*]
      (export-node (error-tree e))
      (try
        (when-not @app-var*
@@ -382,6 +386,15 @@
                              :tree (export-tree)
                              :themes (theme/wire-sets)}
                    "callback" (invoke-callback! (:callback-id msg) (:value msg))
+                   "directory-picked" (do
+                                        (try
+                                          (require 'gpui.platform)
+                                          ((ns-resolve 'gpui.platform 'deliver-pick!) msg)
+                                          (catch Exception e
+                                            (binding [*out* *err*]
+                                              (println "[clj-gpui] directory-picked failed:"
+                                                       (.getMessage e)))))
+                                        {:ok true})
                    "reload" (try
                               (assoc (reload-app!)
                                      :ok true
