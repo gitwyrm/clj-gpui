@@ -148,6 +148,8 @@ Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-
 
 The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1 (`Button`, `Checkbox`, `Input`, `v_flex` / `h_flex`, themed `Root`).
 
+A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
+
 Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
 
 Put `:theme` on **any** node. The host does not choose a theme on its own:

@@ -220,7 +220,9 @@ docs/protocol.md
 (ui/checkbox checked on-click "Label")
 (ui/checkbox done toggle {:shape :circle})
 (ui/label title {:on-double-click start-edit})
-(ui/scroll {:height 220} ...)
+(ui/scroll {:flex 1} ...)          ; leftover height in a column
+(ui/scroll {:height 220} ...)      ; fixed viewport
+(ui/scroll {:width 300} ...)       ; constrain viewport width
 (ui/text-field value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
 ```
 

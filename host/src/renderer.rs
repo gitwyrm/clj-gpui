@@ -595,10 +595,7 @@ impl RootView {
                     apply_style(checkbox, node, cx).into_any_element()
                 }
             }
-            "scroll" => apply_style(v_flex().id(eid(&key)), node, cx)
-                .overflow_y_scrollbar()
-                .children(self.render_children(node, path, window, cx))
-                .into_any_element(),
+            "scroll" => self.render_scroll(node, path, &key, window, cx),
             "text-field" => {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(Input::new(&state), node, cx).into_any_element()
@@ -617,6 +614,46 @@ impl RootView {
             Some(applied) => ThemeScope::new(applied, element).into_any_element(),
             None => element,
         }
+    }
+
+    fn render_scroll(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // gpui-component's overflow_y_scrollbar wraps in size_full() (height
+        // 100%). In a column with siblings that makes the scroller as tall as
+        // the parent instead of the leftover space, so the window grows and
+        // the list never scrolls. Bound the wrapper; the inner size_full then
+        // fills that viewport.
+        //
+        // Viewport size (`:width` / `:height` / `:size` / leftover flex) lives
+        // on the wrapper. Visual styles stay on the inner body so they are not
+        // applied twice and so an explicit width is not swallowed by w_full().
+        let viewport = scroll_viewport(node);
+        let mut wrap = v_flex().id(eid(key)).min_h_0().overflow_hidden();
+        wrap = match viewport.width {
+            ScrollExtent::Px(width) => wrap.w(px(width)),
+            ScrollExtent::Fill => wrap.w_full(),
+        };
+        wrap = match viewport.height {
+            ScrollExtent::Px(height) => wrap.h(px(height)),
+            ScrollExtent::Fill => wrap.flex_1(),
+        };
+        let mut inner = node.clone();
+        inner.height = None;
+        inner.width = None;
+        inner.size = None;
+        inner.flex = None;
+        wrap.child(
+            apply_style(v_flex().id(eid(&format!("{key}-body"))), &inner, cx)
+                .overflow_y_scrollbar()
+                .children(self.render_children(node, path, window, cx)),
+        )
+        .into_any_element()
     }
 
     fn render_children(
@@ -704,7 +741,7 @@ impl Render for RootView {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(v_flex().flex_1().child(body))
+            .child(v_flex().flex_1().min_h_0().child(body))
             .when(show_footer, |el| {
                 el.child(
                     div()
@@ -730,6 +767,41 @@ fn widget_key(node: &Node, path: &str) -> String {
 fn parse_color(value: &str) -> Option<u32> {
     let value = value.trim().trim_start_matches('#');
     u32::from_str_radix(value, 16).ok()
+}
+
+/// One axis of a `scroll` viewport: a pixel size, or fill the parent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ScrollExtent {
+    Px(f32),
+    Fill,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScrollViewport {
+    width: ScrollExtent,
+    height: ScrollExtent,
+}
+
+/// Size of the outer scroll viewport. `:size` is a square, matching
+/// `apply_style` on other nodes. Omitted `:height` fills leftover column
+/// space; omitted `:width` fills the parent width.
+fn scroll_viewport(node: &Node) -> ScrollViewport {
+    if let Some(size) = node.size {
+        return ScrollViewport {
+            width: ScrollExtent::Px(size),
+            height: ScrollExtent::Px(size),
+        };
+    }
+    ScrollViewport {
+        width: node
+            .width
+            .map(ScrollExtent::Px)
+            .unwrap_or(ScrollExtent::Fill),
+        height: node
+            .height
+            .map(ScrollExtent::Px)
+            .unwrap_or(ScrollExtent::Fill),
+    }
 }
 
 fn apply_button_variant(button: Button, node: &Node) -> Button {
@@ -761,7 +833,10 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         el = el.size(px(size));
     }
     if node.flex.unwrap_or(0.0) >= 1.0 {
-        el = el.flex_1();
+        // Flex items default to min-height: auto (content size), so a
+        // flex-1 child will not shrink below its contents. That prevents
+        // nested overflow scroll from ever getting a bounded viewport.
+        el = el.flex_1().min_h_0();
     }
     if let Some(font_size) = node.font_size {
         el = el.text_size(px(font_size));
@@ -1078,5 +1153,54 @@ mod zenity_tests {
             zenity_from_output(exit(255), b"", b"display is not set\n"),
             ZenityPick::Failed("display is not set".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod scroll_viewport_tests {
+    use super::{scroll_viewport, Node, ScrollExtent};
+
+    fn node_with(width: Option<f32>, height: Option<f32>, size: Option<f32>) -> Node {
+        Node {
+            width,
+            height,
+            size,
+            ..Node::default()
+        }
+    }
+
+    #[test]
+    fn flex_scroll_no_height_fills_parent() {
+        let v = scroll_viewport(&node_with(None, None, None));
+        assert_eq!(v.width, ScrollExtent::Fill);
+        assert_eq!(v.height, ScrollExtent::Fill);
+    }
+
+    #[test]
+    fn fixed_height_keeps_full_width() {
+        let v = scroll_viewport(&node_with(None, Some(220.0), None));
+        assert_eq!(v.width, ScrollExtent::Fill);
+        assert_eq!(v.height, ScrollExtent::Px(220.0));
+    }
+
+    #[test]
+    fn explicit_width_constrains_viewport() {
+        let v = scroll_viewport(&node_with(Some(300.0), None, None));
+        assert_eq!(v.width, ScrollExtent::Px(300.0));
+        assert_eq!(v.height, ScrollExtent::Fill);
+    }
+
+    #[test]
+    fn explicit_width_and_height() {
+        let v = scroll_viewport(&node_with(Some(300.0), Some(220.0), None));
+        assert_eq!(v.width, ScrollExtent::Px(300.0));
+        assert_eq!(v.height, ScrollExtent::Px(220.0));
+    }
+
+    #[test]
+    fn size_is_a_square_viewport() {
+        let v = scroll_viewport(&node_with(Some(300.0), Some(220.0), Some(180.0)));
+        assert_eq!(v.width, ScrollExtent::Px(180.0));
+        assert_eq!(v.height, ScrollExtent::Px(180.0));
     }
 }
