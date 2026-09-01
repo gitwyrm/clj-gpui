@@ -175,6 +175,7 @@ pub fn reset_default_palettes(cx: &mut App) {
     theme.dark_theme = dark;
 }
 
+#[cfg(test)]
 pub fn bundled_names() -> Vec<String> {
     let mut names: Vec<String> = BUNDLED_JSON
         .iter()
