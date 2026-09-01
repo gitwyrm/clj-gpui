@@ -44,7 +44,7 @@
               {:gap 8}
               (ui/button "Go" (fn [] :fired)))
         exported (runtime/export-tree tree)]
-    (is (= :vstack (:type exported)))
+    (is (= "vstack" (:type exported)))
     (is (string? (get-in exported [:children 0 :on-click])))
     (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-click]))))))
 

@@ -50,11 +50,14 @@
                            ". Set CLOJUREGPUI_BIN to a clojuregpui binary, or CLOJUREGPUI_ROOT to the clj-gpui checkout.")
                       {:root (.getPath root)})))
     (println "[clj-gpui] building native host with cargo (first run can take a while)")
-    (let [pb (doto (ProcessBuilder. ^java.util.List
-                                   (ArrayList. ["cargo" "build" "--release"]))
+    (let [args (doto (ArrayList.)
+                 (.add "cargo")
+                 (.add "build")
+                 (.add "--release"))
+          pb (doto (ProcessBuilder. args)
                (.directory host-dir)
                (.inheritIO))
-          proc (.start pb)
+          ^Process proc (.start pb)
           code (.waitFor proc)]
       (when-not (zero? code)
         (throw (ex-info (str "cargo build --release failed with exit " code)
@@ -67,8 +70,8 @@
       (when-not (.canExecute f)
         (throw (ex-info (str "CLOJUREGPUI_BIN is not executable: " explicit) {})))
       f)
-    (let [root (or (library-root)
-                   (throw (ex-info "Could not locate clj-gpui. Set CLOJUREGPUI_ROOT or CLOJUREGPUI_BIN." {})))]
+    (let [^java.io.File root (or (library-root)
+                                 (throw (ex-info "Could not locate clj-gpui. Set CLOJUREGPUI_ROOT or CLOJUREGPUI_BIN." {})))]
       (or (first (filter #(.canExecute ^java.io.File %) (host-candidates root)))
           (do (build-host! root)
               (or (first (filter #(.canExecute ^java.io.File %) (host-candidates root)))
@@ -77,9 +80,10 @@
 
 (defn- spawn-host!
   [^java.io.File exe port protocol-test?]
-  (let [cmd (cond-> [(.getCanonicalPath exe)]
-              protocol-test? (conj "--protocol-test"))
-        pb (doto (ProcessBuilder. ^java.util.List (ArrayList. cmd))
+  (let [cmd (doto (ArrayList.)
+              (.add (.getCanonicalPath exe))
+              (cond-> protocol-test? (.add "--protocol-test")))
+        pb (doto (ProcessBuilder. cmd)
              (.inheritIO))
         env-map (.environment pb)]
     (.put env-map "CLOJUREGPUI_PORT" (str port))
@@ -127,7 +131,7 @@
                    (.setSoTimeout 60000))
           port (.getLocalPort server)]
       (println (str "[clj-gpui] waiting for host on 127.0.0.1:" port))
-      (let [proc (spawn-host! exe port protocol-test?)
+      (let [^Process proc (spawn-host! exe port protocol-test?)
             sock (.accept server)
             in (BufferedReader.
                 (InputStreamReader. (.getInputStream sock) StandardCharsets/UTF_8))

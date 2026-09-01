@@ -202,7 +202,6 @@
      (export-node (if (fn? tree) (tree) tree))
      (catch Exception e
        (reset! load-error* e)
-       (.printStackTrace e)
        (export-node (error-tree e))))))
 
 (defn invoke-callback!
