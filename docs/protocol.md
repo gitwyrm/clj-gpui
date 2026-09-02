@@ -126,7 +126,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `items` / `options` | array of `{id,label,text,disabled,content,on-click,span}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span) |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
-| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (wire id; Clojure restores the original id) |
+| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (wire id; Clojure restores the original id). Accordion `:multiple` sends a JSON array in original item order |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `on-blur` | string callback id | `text-field` (called with the field string) |
 | `on-escape` | string callback id | `text-field` (0-arg) |
@@ -135,7 +135,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `focus` | bool | `text-field`: request keyboard focus |
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
 | `value` | JSON number, string, array, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`) |
-| `min`, `max`, `step` | number | `slider` |
+| `min`, `max`, `step` | number | `slider`. `step` is drag granularity; the host applies Clojure's controlled value even when it is off-step, then clamps to `min`/`max` |
 | `orientation` | string | `radio-group`, `slider`, `divider`: `horizontal` (default) or `vertical`. `description-list`: `vertical` (default) or `horizontal` |
 | `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
 | `disabled` | bool | buttons and most controls |
@@ -174,6 +174,8 @@ Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-
 The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1. Icon-bearing widgets (`icon`, `spinner`, `alert`, `select` chevron, `clipboard`) load SVGs from `gpui-component-assets` 0.5.1. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
+
+`spinner`, `badge`, and `clipboard` are not gpui-component `Styled` types. The host wraps them in a `div` that receives the usual layout and visual keys (`width`, `height`, `size`, `flex`, `padding`, `bg`, …). `accordion` and `description-list` use the same outer-owns-layout pattern, but the wrapper defaults to `flex-none` and full width so crate `size_full()` cannot steal leftover column height. Inner chrome is not styled twice.
 
 Keywords in the tree become JSON strings (`:semibold` → `"semibold"`).
 

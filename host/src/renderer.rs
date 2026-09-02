@@ -176,6 +176,8 @@ pub struct RootView {
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
     inputs: HashMap<String, InputSlot>,
+    /// Kept for the window lifetime. Crate `SliderState.bounds` is private;
+    /// dropping the entity on unmount remounts at size 0 (100% fill).
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
     used_inputs: HashSet<String>,
@@ -580,16 +582,9 @@ impl RootView {
         // 100% bar; a stale width leaves the fill a few px off the knob until
         // the mouse moves. Keep the entity across tab switches; a canvas on
         // the wrapper re-renders when the laid-out size changes.
-        let min = node.min.unwrap_or(0.0);
-        let max = node.max.unwrap_or(100.0);
-        let step = if node.step.unwrap_or(1.0) <= 0.0 {
-            1.0
-        } else {
-            node.step.unwrap_or(1.0)
-        };
-        let lo = min.min(max);
-        let hi = min.max(max);
-        let value = node.number_value().unwrap_or(lo).clamp(lo, hi);
+        let (lo, hi) = slider_range(node.min, node.max);
+        let step = slider_step(node.step);
+        let value = slider_controlled_value(node.number_value(), lo, hi);
 
         if let Some(slot) = self.sliders.get_mut(key) {
             if (slot.min - lo).abs() <= f32::EPSILON
@@ -601,7 +596,10 @@ impl RootView {
                     SliderValue::Single(v) => v,
                     SliderValue::Range(_, end) => end,
                 };
-                if (current - value).abs() > step.max(0.0001) / 2.0 {
+                // `set_value` notifies without emitting Change, so applying
+                // Clojure's current value cannot loop. Step is drag granularity
+                // only; a 40→42 update with step 5 must still land on 42.
+                if slider_value_changed(current, value) {
                     slot.state.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
@@ -1032,13 +1030,14 @@ impl RootView {
         apply_style(divider, node, cx).into_any_element()
     }
 
-    fn render_spinner(&self, node: &Node, _cx: &App) -> AnyElement {
+    fn render_spinner(&self, node: &Node, cx: &App) -> AnyElement {
         let mut spinner =
             Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
         if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
             spinner = spinner.icon(icon);
         }
-        spinner.into_any_element()
+        // Spinner is not `Styled`; a host div owns Clojure layout/visual keys.
+        style_host(spinner, node, cx)
     }
 
     fn render_tag(&self, node: &Node, cx: &App) -> AnyElement {
@@ -1140,9 +1139,12 @@ impl RootView {
             badge = badge.count(n.max(0.0) as usize);
         }
         badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
-        badge
-            .children(self.render_children(node, path, window, cx))
-            .into_any_element()
+        // Badge is not `Styled`; wrapper owns :width/:height/:size/:flex.
+        style_host(
+            badge.children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
     }
 
     fn render_tabs(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
@@ -1207,7 +1209,7 @@ impl RootView {
         .into_any_element()
     }
 
-    fn render_clipboard(&self, node: &Node, key: &str, _cx: &App) -> AnyElement {
+    fn render_clipboard(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let mut clip = Clipboard::new(eid(key)).value(node.text.clone().unwrap_or_default());
         if let Some(callback_id) = node.on_copied.clone() {
             let cmd_tx = self.cmd_tx.clone();
@@ -1219,7 +1221,8 @@ impl RootView {
                 });
             });
         }
-        clip.into_any_element()
+        // Clipboard is not `Styled`; wrapper owns Clojure layout keys.
+        style_host(clip, node, cx)
     }
 
     fn render_breadcrumb(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
@@ -1291,32 +1294,20 @@ impl RootView {
             let multiple = node.multiple;
             let cmd_tx = self.cmd_tx.clone();
             accordion = accordion.on_toggle_click(move |open_ixs, _, _| {
-                if multiple {
-                    let selected: Vec<String> = open_ixs
-                        .iter()
-                        .filter_map(|ix| ids.get(*ix).cloned())
-                        .collect();
-                    let _ = cmd_tx.send(Cmd::Callback {
-                        id: callback_id.clone(),
-                        value: Some(json!(selected)),
-                        seq: None,
-                    });
-                } else {
-                    let selected = open_ixs.first().and_then(|ix| ids.get(*ix)).cloned();
-                    let _ = cmd_tx.send(Cmd::Callback {
-                        id: callback_id.clone(),
-                        value: selected.map(|s| json!(s)).or(Some(Value::Null)),
-                        seq: None,
-                    });
-                }
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(accordion_callback_value(&ids, open_ixs, multiple)),
+                    seq: None,
+                });
             });
         }
         // Accordion::render uses size_full(); as a flex child that steals the
-        // leftover viewport and squeezes every sibling below it.
-        content_sized(accordion)
+        // leftover viewport and squeezes every sibling below it. Outer wrapper
+        // owns :width/:height/:size/:flex; inner stays content-sized.
+        content_sized(accordion, node, cx)
     }
 
-    fn render_description_list(&self, node: &Node, _cx: &App) -> AnyElement {
+    fn render_description_list(&self, node: &Node, cx: &App) -> AnyElement {
         let mut list =
             if mapping::parse_description_axis(node.orientation.as_deref()) == Axis::Vertical {
                 DescriptionList::vertical()
@@ -1334,7 +1325,7 @@ impl RootView {
             let value = item.text.clone().unwrap_or_default();
             list = list.item(label, value, mapping::parse_span(item.span));
         }
-        content_sized(list)
+        content_sized(list, node, cx)
     }
 
     fn render_scroll(
@@ -1457,8 +1448,8 @@ impl Render for RootView {
         self.inputs.retain(|key, _| used.contains(key));
         // SliderState stores the last laid-out bar size. Dropping it on tab
         // switch recreates an entity whose bounds are 0, so the fill paints
-        // at 100% until the mouse moves. Keep host slots while the window
-        // lives.
+        // at 100% until the mouse moves. Bounds are crate-private, so slots
+        // stay for the window lifetime (see docs/gpui-component.md).
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
 
@@ -1495,6 +1486,53 @@ fn widget_key(node: &Node, path: &str) -> String {
 fn parse_color(value: &str) -> Option<u32> {
     let value = value.trim().trim_start_matches('#');
     u32::from_str_radix(value, 16).ok()
+}
+
+/// Step is drag granularity. Clojure's controlled value is accepted as-is
+/// (then clamped to min/max). `SliderState::set_value` notifies without
+/// emitting `SliderEvent::Change`, so applying an unchanged tree cannot loop.
+const SLIDER_VALUE_EPS: f32 = 1.0e-4;
+
+fn slider_range(min: Option<f32>, max: Option<f32>) -> (f32, f32) {
+    let min = min.unwrap_or(0.0);
+    let max = max.unwrap_or(100.0);
+    (min.min(max), min.max(max))
+}
+
+fn slider_step(step: Option<f32>) -> f32 {
+    if step.unwrap_or(1.0) <= 0.0 {
+        1.0
+    } else {
+        step.unwrap_or(1.0)
+    }
+}
+
+fn slider_controlled_value(raw: Option<f32>, min: f32, max: f32) -> f32 {
+    raw.unwrap_or(min).clamp(min, max)
+}
+
+fn slider_value_changed(current: f32, wanted: f32) -> bool {
+    (current - wanted).abs() > SLIDER_VALUE_EPS
+}
+
+/// Map crate `on_toggle_click` indices to ids. HashSet iteration order is
+/// not stable, so multiple open ids follow original item order.
+fn accordion_callback_value(ids: &[String], open_ixs: &[usize], multiple: bool) -> Value {
+    if multiple {
+        let open: HashSet<usize> = open_ixs.iter().copied().collect();
+        json!(ids
+            .iter()
+            .enumerate()
+            .filter(|(ix, _)| open.contains(ix))
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>())
+    } else {
+        open_ixs
+            .first()
+            .and_then(|ix| ids.get(*ix))
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null)
+    }
 }
 
 /// One axis of a `scroll` viewport: a pixel size, or fill the parent.
@@ -1617,10 +1655,45 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
     el
 }
 
+/// Crate widgets that are not `Styled` (spinner, badge, clipboard): a host
+/// `div` owns Clojure layout and visual keys. The inner control is unchanged.
+fn style_host(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
+    apply_style(div(), node, cx).child(el).into_any_element()
+}
+
 /// Keep a crate widget from filling leftover column height (`size_full` /
-/// `overflow_hidden` inside a flex-1 scroll). Width still stretches.
-fn content_sized(el: impl IntoElement) -> AnyElement {
-    v_flex().w_full().flex_none().child(el).into_any_element()
+/// `overflow_hidden` inside a flex-1 scroll). The outer wrapper owns
+/// `:width` / `:height` / `:size` / `:flex`; the inner widget stays
+/// content-sized. Omitted width still stretches to the column.
+fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
+    let mut wrap = v_flex().flex_none();
+    if node.width.is_none() && node.size.is_none() {
+        wrap = wrap.w_full();
+    }
+    apply_style(wrap, node, cx).child(el).into_any_element()
+}
+
+/// Testable layout contract for `content_sized` wrappers.
+#[derive(Debug, Clone, PartialEq)]
+struct ContentWrap {
+    width: Option<f32>,
+    height: Option<f32>,
+    size: Option<f32>,
+    flex_fill: bool,
+    fill_width: bool,
+    flex_none: bool,
+}
+
+fn content_wrap(node: &Node) -> ContentWrap {
+    let layout = outer_layout(node);
+    ContentWrap {
+        width: layout.width,
+        height: layout.height,
+        size: layout.size,
+        flex_fill: layout.flex_fill,
+        fill_width: layout.width.is_none() && layout.size.is_none(),
+        flex_none: !layout.flex_fill,
+    }
 }
 
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
@@ -2144,5 +2217,150 @@ mod select_control_tests {
         assert_eq!(layout.height, Some(220.0));
         assert!(!layout.flex_fill);
         assert!(layout.full_width);
+    }
+}
+
+#[cfg(test)]
+mod slider_control_tests {
+    use super::{
+        slider_controlled_value, slider_range, slider_step, slider_value_changed, SLIDER_VALUE_EPS,
+    };
+
+    #[test]
+    fn controlled_value_ignores_step_when_syncing() {
+        let (lo, hi) = slider_range(Some(0.0), Some(100.0));
+        assert_eq!(slider_step(Some(5.0)), 5.0);
+        let wanted = slider_controlled_value(Some(42.0), lo, hi);
+        assert_eq!(wanted, 42.0);
+        assert!(
+            slider_value_changed(40.0, wanted),
+            "40 → 42 with step 5 must update the host entity"
+        );
+    }
+
+    #[test]
+    fn unchanged_value_does_not_need_set_value() {
+        assert!(!slider_value_changed(40.0, 40.0));
+        assert!(!slider_value_changed(40.0, 40.0 + SLIDER_VALUE_EPS / 2.0));
+        assert!(slider_value_changed(40.0, 40.1));
+    }
+
+    #[test]
+    fn min_max_clamping() {
+        assert_eq!(slider_range(Some(100.0), Some(0.0)), (0.0, 100.0));
+        assert_eq!(slider_controlled_value(Some(150.0), 0.0, 100.0), 100.0);
+        assert_eq!(slider_controlled_value(Some(-5.0), 0.0, 100.0), 0.0);
+        assert_eq!(slider_controlled_value(None, 10.0, 20.0), 10.0);
+        assert_eq!(slider_step(Some(0.0)), 1.0);
+        assert_eq!(slider_step(None), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod accordion_control_tests {
+    use super::accordion_callback_value;
+    use serde_json::json;
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn multiple_open_ids_follow_item_order_not_hashset_order() {
+        let items = ids(&["audio", "display", "network"]);
+        // Crate HashSet iteration can yield any order; 2 then 0 is the
+        // reverse of item order.
+        let value = accordion_callback_value(&items, &[2, 0], true);
+        assert_eq!(value, json!(["audio", "network"]));
+        let shuffled = accordion_callback_value(&items, &[1, 0], true);
+        assert_eq!(shuffled, json!(["audio", "display"]));
+    }
+
+    #[test]
+    fn comma_in_id_stays_one_array_entry() {
+        let items = ids(&["audio,advanced", "display"]);
+        let value = accordion_callback_value(&items, &[1, 0], true);
+        assert_eq!(value, json!(["audio,advanced", "display"]));
+    }
+
+    #[test]
+    fn single_select_sends_one_id_or_null() {
+        let items = ids(&["audio", "display"]);
+        assert_eq!(
+            accordion_callback_value(&items, &[1], false),
+            json!("display")
+        );
+        assert_eq!(accordion_callback_value(&items, &[], false), json!(null));
+    }
+}
+
+#[cfg(test)]
+mod widget_wrap_tests {
+    use super::{content_wrap, outer_layout, Node};
+
+    #[test]
+    fn accordion_default_is_full_width_flex_none() {
+        let node = Node {
+            kind: "accordion".into(),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&node);
+        assert!(wrap.fill_width);
+        assert!(wrap.flex_none);
+        assert!(!wrap.flex_fill);
+        assert_eq!(wrap.width, None);
+        assert_eq!(wrap.height, None);
+    }
+
+    #[test]
+    fn accordion_outer_owns_width_height_size_flex() {
+        let sized = Node {
+            kind: "accordion".into(),
+            width: Some(240.0),
+            height: Some(80.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&sized);
+        assert_eq!(wrap.width, Some(240.0));
+        assert_eq!(wrap.height, Some(80.0));
+        assert!(!wrap.fill_width);
+        assert!(wrap.flex_none);
+
+        let square = Node {
+            kind: "description-list".into(),
+            size: Some(180.0),
+            width: Some(300.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&square);
+        assert_eq!(wrap.size, Some(180.0));
+        assert!(!wrap.fill_width);
+
+        let grow = Node {
+            kind: "accordion".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&grow);
+        assert!(wrap.flex_fill);
+        assert!(!wrap.flex_none);
+        assert!(wrap.fill_width);
+    }
+
+    #[test]
+    fn spinner_badge_clipboard_layout_keys_are_on_the_node() {
+        for kind in ["spinner", "badge", "clipboard"] {
+            let node = Node {
+                kind: kind.into(),
+                width: Some(24.0),
+                height: Some(24.0),
+                flex: Some(1.0),
+                ..Node::default()
+            };
+            let layout = outer_layout(&node);
+            assert_eq!(layout.width, Some(24.0), "{kind}");
+            assert_eq!(layout.height, Some(24.0), "{kind}");
+            assert!(layout.flex_fill, "{kind}");
+        }
     }
 }

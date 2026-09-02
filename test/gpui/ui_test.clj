@@ -104,7 +104,8 @@
       (is (= 40 (:value n)))
       (is (= 0 (:min n)))
       (is (= 100 (:max n)))
-      (is (= 5 (:step n)))))
+      (is (= 5 (:step n))))
+    (is (= 42 (:value (ui/slider 42 {:min 0 :max 100 :step 5})))))
   (testing "select options"
     (let [n (ui/select :clj {:options [{:id :clj :label "Clojure"} "Rust"]
                              :placeholder "Lang"})]
@@ -173,6 +174,13 @@
                                   :items [{:id "audio,advanced"
                                            :title "Mixed"
                                            :content (ui/label "x")}]})))))
+  (testing "accordion multiple keeps constructor item order on the node"
+    (let [n (ui/accordion [:display :audio]
+                          {:multiple true
+                           :items [{:id :audio :title "Audio" :content (ui/label "a")}
+                                   {:id :display :title "Display" :content (ui/label "b")}]})]
+      (is (= ["display" "audio"] (:value n)))
+      (is (= ["audio" "display"] (mapv :id (:items n))))))
   (testing "description-list"
     (let [n (ui/description-list [{:label "Host" :value "GPUI"}
                                   {:label "UI" :value "clj-gpui"}])]
@@ -302,6 +310,22 @@
     (is (= ["a" "b"] @got))
     (through {:op "callback" :id 7 :callback-id switch-id :value {:k 1}})
     (is (= {:k 1} @got))))
+
+(deftest category-b-layout-keys-stay-on-the-node
+  (is (= 24 (:width (ui/spinner {:width 24}))))
+  (is (= 1 (:flex (ui/spinner {:flex 1}))))
+  (is (= 32 (:size (ui/badge {:size 32 :dot true} (ui/icon :bell)))))
+  (is (= 48 (:width (ui/clipboard "x" {:width 48}))))
+  (let [acc (ui/accordion :audio
+                          {:width 240 :height 80 :flex 1
+                           :items [{:id :audio :title "Audio" :content (ui/label "a")}]})]
+    (is (= 240 (:width acc)))
+    (is (= 80 (:height acc)))
+    (is (= 1 (:flex acc))))
+  (let [dl (ui/description-list [{:label "Host" :value "GPUI"}]
+                                {:width 300 :height 40})]
+    (is (= 300 (:width dl)))
+    (is (= 40 (:height dl)))))
 
 (deftest invoke-callback-false-zero-and-null
   (runtime/reset-callbacks!)

@@ -29,25 +29,25 @@ Classification:
 | `switch::Switch` | `ui/switch` | ✅ | B | `:on-change` receives boolean |
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean |
 | `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives the original Clojure id |
-| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives number. Entity is kept across unmounts; a layout canvas re-renders when the track size changes so fill and thumb stay aligned |
+| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives number. Clojure is source of truth: a controlled value is applied even when it is off-step. Entity is kept across unmounts (crate bounds are private; dropping remounts at 100% fill). A layout canvas re-renders when the track size changes so fill and thumb stay aligned. Dynamic unique ids retain slots until the window closes; bounded cleanup is a follow-up |
 | `progress::Progress` | `ui/progress` | ✅ | B | 0–100 |
 | `divider::Divider` | `ui/divider` | ✅ | B | Horizontal default; `:orientation :vertical` |
-| `spinner::Spinner` | `ui/spinner` | ✅ | B | Needs bundled icons |
+| `spinner::Spinner` | `ui/spinner` | ✅ | B | Needs bundled icons. Host wrapper owns `:width` / `:height` / `:size` / `:flex` (crate type is not `Styled`) |
 | `tag::Tag` | `ui/tag` | ✅ | B | `:variant` keywords |
 | `alert::Alert` | `ui/alert` | ✅ | B | `:on-close` is 0-arg |
 | `skeleton::Skeleton` | `ui/skeleton` | ✅ | B | |
 | `kbd::Kbd` | `ui/kbd` | ✅ | B | GPUI keystroke strings (`"ctrl-s"`) |
 | `link::Link` | `ui/link` | ✅ | B | Opens `href`; optional 0-arg `:on-click` |
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |
-| `badge::Badge` | `ui/badge` | ✅ | B | Count or `:dot`; wraps a child |
+| `badge::Badge` | `ui/badge` | ✅ | B | Count or `:dot`; wraps a child. Host wrapper owns layout keys |
 | `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel; keyword ids round-trip |
 | `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`; `:searchable true` filters by label; `nil` clears |
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
-| `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string |
+| `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string. Host wrapper owns layout keys |
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
 | `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; no image `src` yet |
-| `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids. Host wraps it so crate `size_full()` does not eat leftover column height |
-| `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col) |
+| `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids in original item order. Outer wrapper owns `:width` / `:height` / `:size` / `:flex` (default flex-none + full width) so crate `size_full()` does not eat leftover column height |
+| `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |
 | `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
 | `slider::Slider` range / log scale | — | ❌ | C | Range thumbs and logarithmic scale need richer values |
 | `input::NumberInput` | — | ❌ | C | Extra `NumberInputState` + step semantics |
@@ -125,9 +125,9 @@ Yes: keep **Clojure as the semantic owner**, keep **Rust widget state only where
 | Widget | callback | payload |
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
-| `slider` | `:on-change` | number |
+| `slider` | `:on-change` | number (Clojure value is applied as-is, then clamped; `step` is drag granularity) |
 | `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
-| `accordion` | `:on-change` | open id, or a vector of ids when `:multiple true` |
+| `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |
 | `alert` | `:on-close` | none (0-arg) |
 | `clipboard` | `:on-copied` | copied string |
 | `text-field` | `:on-change` / `:on-submit` / `:on-blur` | string (unchanged) |
