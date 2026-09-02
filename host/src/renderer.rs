@@ -78,6 +78,9 @@ struct InputSlot {
     number_max: Option<f32>,
     number_step: Option<f32>,
     number_stepped: bool,
+    /// Undo/redo groups emit several Change events; flush once. See
+    /// `protocol::InputChangeCoalesce`.
+    change: protocol::InputChangeCoalesce,
 }
 
 struct SliderSlot {
@@ -568,6 +571,51 @@ impl RootView {
         });
     }
 
+    fn schedule_input_change_flush(
+        key: String,
+        editor: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.defer_in(window, move |this, _, _cx| {
+            this.flush_input_change(&key, editor);
+        });
+    }
+
+    fn flush_input_change(&mut self, key: &str, editor: bool) {
+        let slot = if editor {
+            self.editors.get_mut(key)
+        } else {
+            self.inputs.get_mut(key)
+        };
+        let Some(slot) = slot else {
+            return;
+        };
+        if slot.wait_for_seq.is_some() {
+            let _ = slot.change.take_pending();
+            return;
+        }
+        let Some(value) = slot.change.take_pending() else {
+            return;
+        };
+        if slot.submitted.as_ref() == Some(&value) {
+            return;
+        }
+        slot.submitted = None;
+        let Some(id) = slot.on_change.clone() else {
+            return;
+        };
+        let payload = if slot.as_number {
+            let Some(n) = extra::number_from_input(&value) else {
+                return;
+            };
+            json!(n)
+        } else {
+            json!(value)
+        };
+        self.emit_value(id, payload);
+    }
+
     fn input_slot(
         &mut self,
         key: &str,
@@ -633,6 +681,7 @@ impl RootView {
                 number_max: None,
                 number_step: None,
                 number_stepped: false,
+                change: protocol::InputChangeCoalesce::default(),
             },
         );
 
@@ -653,23 +702,9 @@ impl RootView {
                         return;
                     }
                     slot.submitted = None;
-                    let Some(id) = slot.on_change.clone() else {
-                        return;
-                    };
-                    let as_number = slot.as_number;
-                    let payload = if as_number {
-                        let Some(n) = extra::number_from_input(&value) else {
-                            return;
-                        };
-                        json!(n)
-                    } else {
-                        json!(value)
-                    };
-                    let _ = this.cmd_tx.send(Cmd::Callback {
-                        id,
-                        value: Some(payload),
-                        seq: None,
-                    });
+                    if slot.change.on_change(value) {
+                        Self::schedule_input_change_flush(key_owned.clone(), false, window, cx);
+                    }
                 }
                 InputEvent::PressEnter { .. } => {
                     this.next_submit_seq = this.next_submit_seq.saturating_add(1);
@@ -2555,21 +2590,21 @@ impl RootView {
                 number_max: None,
                 number_step: None,
                 number_stepped: false,
+                change: protocol::InputChangeCoalesce::default(),
             },
         );
         let key_owned = key.to_string();
         cx.subscribe_in(
             &state,
             window,
-            move |this, input, event: &InputEvent, _, cx| match event {
+            move |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
-                    if let Some(id) = this
-                        .editors
-                        .get(&key_owned)
-                        .and_then(|s| s.on_change.clone())
-                    {
-                        let value = input.read(cx).value().to_string();
-                        this.emit_value(id, json!(value));
+                    let Some(slot) = this.editors.get_mut(&key_owned) else {
+                        return;
+                    };
+                    let value = input.read(cx).value().to_string();
+                    if slot.change.on_change(value) {
+                        Self::schedule_input_change_flush(key_owned.clone(), true, window, cx);
                     }
                 }
                 InputEvent::Blur => {

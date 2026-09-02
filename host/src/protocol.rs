@@ -181,6 +181,40 @@ impl TableClickCoalesce {
     }
 }
 
+/// Coalesce `InputEvent::Change` from one GPUI effect flush.
+///
+/// gpui-component `InputState::undo` / `redo` applies every history item
+/// in a version group, and each `replace_text_in_range` emits `Change`.
+/// `Context::emit` queues `Effect::Emit`; subscribers run FIFO. Sending
+/// one `Cmd::Callback` per emit lets the bridge `export-tree` after the
+/// first, so later callbacks are unknown ids (`cb-N` is monotonic).
+///
+/// Record the latest value and schedule one deferred flush behind those
+/// already-queued Change emits. The flush sends one `:on-change` with
+/// the final string. Same pattern as `TableClickCoalesce`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct InputChangeCoalesce {
+    pending: Option<String>,
+    flush_scheduled: bool,
+}
+
+impl InputChangeCoalesce {
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_change(&mut self, value: String) -> bool {
+        self.pending = Some(value);
+        if self.flush_scheduled {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    pub fn take_pending(&mut self) -> Option<String> {
+        self.flush_scheduled = false;
+        self.pending.take()
+    }
+}
+
 /// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
 pub fn menu_selection_calls(
     item_click: Option<String>,
@@ -945,6 +979,24 @@ mod tests {
         }
         send_callbacks(&tx, table_activation_calls(None, None, "grace"));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn input_change_coalesce_keeps_latest_value_and_one_flush() {
+        let mut c = InputChangeCoalesce::default();
+        assert!(c.on_change("a".into()));
+        assert!(
+            !c.on_change("ab".into()),
+            "grouped undo emits one Change per history item; only the first schedules a flush"
+        );
+        assert!(!c.on_change("".into()));
+        assert_eq!(c.take_pending(), Some("".into()));
+        assert!(c.take_pending().is_none());
+        assert!(
+            c.on_change("x".into()),
+            "after flush a later Change can schedule again"
+        );
+        assert_eq!(c.take_pending(), Some("x".into()));
     }
 
     #[test]
