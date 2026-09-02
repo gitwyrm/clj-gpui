@@ -1674,6 +1674,7 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
 }
 
 /// Testable layout contract for `content_sized` wrappers.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 struct ContentWrap {
     width: Option<f32>,
@@ -1684,6 +1685,7 @@ struct ContentWrap {
     flex_none: bool,
 }
 
+#[cfg(test)]
 fn content_wrap(node: &Node) -> ContentWrap {
     let layout = outer_layout(node);
     ContentWrap {
