@@ -17,11 +17,15 @@
            :crumb :home
            :alert? true
            :dialog? false
+           :overlay-lock? false
+           :tick 0
            :popover? false
            :menu nil
            :list-sel :alpha
+           :list-confirm nil
            :table-sel :ada
-           :tree-sel :src}))
+           :tree-sel :src
+           :list-rev 0}))
 
 (defn- set-key [k]
   (fn [v]
@@ -105,18 +109,21 @@
    (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? popover? menu]}]
+(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick]}]
   (ui/vstack
    {:gap 12}
-   (ui/label (str "Menu " (pr-str menu)))
+   (ui/label (str "Menu " (pr-str menu) " · tick " tick))
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Open dialog" #(swap! !state assoc :dialog? true) {:primary true})
+    (ui/button "Rerender" #(swap! !state update :tick inc)
+               {:tooltip "Unrelated atom update while a dialog stays open"})
+    (ui/switch overlay-lock? (set-key :overlay-lock?) "Lock overlay")
     (ui/popover popover?
                 {:trigger (ui/button "Popover")
                  :on-open-change (set-key :popover?)}
                 (ui/label "Anchored content.")
-                (ui/button "Close" #(swap! !state assoc :popover? false)))
+                (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost}))
     (ui/dropdown-menu
      [{:id :copy :label "Copy"}
       :-
@@ -131,42 +138,76 @@
     {:on-change (set-key :menu)}
     (ui/label "Right-click this label."))
    (ui/dialog dialog?
-              {:title "Confirm"
+              {:title (str "Confirm · tick " tick)
                :variant :confirm
+               :overlay-closable (not overlay-lock?)
                :on-ok #(swap! !state assoc :dialog? false :menu :ok)
-               :on-cancel #(swap! !state assoc :dialog? false)
+               :on-cancel #(swap! !state assoc :dialog? false :menu :cancel)
                :on-close #(swap! !state assoc :dialog? false)}
-              (ui/label "Close from OK, Cancel, or the overlay."))))
+              (ui/label (str "Close from OK, Cancel, Escape, or the overlay. Tick " tick "."))
+              (ui/button "Disabled" {:disabled true}))))
 
-(defn- data-panel [{:keys [list-sel table-sel tree-sel]}]
-  (ui/vstack
-   {:gap 12}
-   (ui/label (str "List " (pr-str list-sel)
-                  " · table " (pr-str table-sel)
-                  " · tree " (pr-str tree-sel)))
-   (ui/list [{:id :alpha :label "Alpha"}
-             {:id :beta :label "Beta"}
-             {:id :gamma :label "Gamma"}
-             {:id :delta :label "Delta"}]
-            {:selected list-sel
-             :searchable true
-             :height 160
-             :on-change (set-key :list-sel)})
-   (ui/table {:columns [{:id :name :label "Name" :width 140}
-                        {:id :lang :label "Lang" :width 100}]
-              :rows [{:id :ada :cells ["Ada" "Clojure"]}
-                     {:id :grace :cells ["Grace" "Rust"]}
-                     {:id :alan :cells ["Alan" "Go"]}]
-              :selected table-sel
-              :height 160
-              :on-change (set-key :table-sel)})
-   (ui/tree [{:id :src :label "src" :expanded true
-              :items [{:id :lib :label "lib.rs"}
-                      {:id :main :label "main.rs"}]}
-             {:id :readme :label "README.md"}]
-            {:selected tree-sel
-             :height 160
-             :on-change (set-key :tree-sel)})))
+(defn- data-panel [{:keys [list-sel list-confirm table-sel tree-sel list-rev]}]
+  (let [suffix (when (pos? list-rev) (str " · " list-rev))
+        list-items [{:id :alpha :label (str "Alpha" suffix)}
+                    {:id :beta :label (str "Beta" suffix)}
+                    {:id :gamma :label (str "Gamma" suffix)}
+                    {:id :delta :label (str "Delta" suffix)}]
+        list-items (if (= list-sel :gone)
+                     (vec (remove #(= :alpha (:id %)) list-items))
+                     list-items)
+        table-rows [{:id :ada :cells ["Ada" "Clojure"]}
+                    {:id :grace :cells ["Grace" "Rust"]}
+                    {:id :alan :cells ["Alan" "Go"]}]
+        table-rows (if (= table-sel :gone)
+                     (vec (remove #(= :ada (:id %)) table-rows))
+                     table-rows)
+        tree-items (if (= tree-sel :gone)
+                     [{:id :src :label "src" :expanded true
+                       :items [{:id :main :label "main.rs"}]}
+                      {:id :readme :label "README.md"}]
+                     [{:id :src :label "src" :expanded true
+                       :items [{:id :lib :label "lib.rs"}
+                               {:id :main :label "main.rs"}]}
+                      {:id :readme :label "README.md"}])]
+    (ui/vstack
+     {:gap 12}
+     (ui/label (str "List " (pr-str list-sel)
+                    " confirm " (pr-str list-confirm)
+                    " · table " (pr-str table-sel)
+                    " · tree " (pr-str tree-sel)))
+     (ui/hstack
+      {:gap 8 :align :center}
+      (ui/button "List A→B" #(swap! !state assoc :list-sel :beta))
+      (ui/button "List nil" #(swap! !state assoc :list-sel nil))
+      (ui/button "Drop row" #(swap! !state assoc :list-sel :gone))
+      (ui/button "Mutate labels" #(swap! !state update :list-rev inc)))
+     (ui/list list-items
+              {:selected (when (not= list-sel :gone) list-sel)
+               :searchable true
+               :height 160
+               :on-change (set-key :list-sel)
+               :on-confirm (set-key :list-confirm)})
+     (ui/hstack
+      {:gap 8 :align :center}
+      (ui/button "Table A→B" #(swap! !state assoc :table-sel :grace))
+      (ui/button "Table nil" #(swap! !state assoc :table-sel nil))
+      (ui/button "Drop Ada" #(swap! !state assoc :table-sel :gone)))
+     (ui/table {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
+                          {:id :lang :label "Lang" :width 100}]
+                :rows table-rows
+                :selected (when (not= table-sel :gone) table-sel)
+                :height 160
+                :on-change (set-key :table-sel)})
+     (ui/hstack
+      {:gap 8 :align :center}
+      (ui/button "Tree lib" #(swap! !state assoc :tree-sel :lib))
+      (ui/button "Tree nil" #(swap! !state assoc :tree-sel nil))
+      (ui/button "Drop lib" #(swap! !state assoc :tree-sel :gone)))
+     (ui/tree tree-items
+              {:selected (when (not= tree-sel :gone) tree-sel)
+               :height 160
+               :on-change (set-key :tree-sel)}))))
 
 (defn app []
   (let [{:keys [tab] :as state} @!state]

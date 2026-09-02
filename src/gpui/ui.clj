@@ -199,11 +199,19 @@
         (on-change (resolve-option-id id-map wire-value))))
     on-change))
 
+(defn- with-id-callbacks
+  "Restore original Clojure ids for the given option callbacks."
+  [opts xs ks]
+  (reduce (fn [m k]
+            (let [f (get m k)]
+              (cond-> m
+                (fn? f) (assoc k (wrap-option-callback f xs)))))
+          opts
+          ks))
+
 (defn- with-option-callback
   [opts xs]
-  (let [on-change (:on-change opts)]
-    (cond-> opts
-      (fn? on-change) (assoc :on-change (wrap-option-callback on-change xs)))))
+  (with-id-callbacks opts xs [:on-change]))
 
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
@@ -858,12 +866,18 @@
   "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
 
   Not painted inline — the host opens it through gpui-component `Root`.
-  `:on-close` is 0-arg (also after OK/Cancel/overlay). `:on-ok` / `:on-cancel` are
-  0-arg. `:variant` is `:confirm` (OK+Cancel), `:alert` (OK only), or
-  omitted (content + close button). Clicking the dimmed overlay dismisses
-  the dialog (crate `confirm`/`alert` turn that off; this host keeps it on
-  unless `:overlay-closable false`). `:on-open-change` receives `false`
-  when the crate dismisses the dialog.
+  The open dialog always uses the latest Clojure tree: callback ids,
+  title, and body update on the next paint without closing. `:on-close`
+  is 0-arg. `:on-ok` / `:on-cancel` are 0-arg. Crate order per action:
+
+  * OK → `:on-ok`, then `:on-close` (and `:on-open-change false`)
+  * Cancel, Escape, close button, overlay click → `:on-cancel`, then
+    `:on-close` (and `:on-open-change false`)
+
+  Each handler runs at most once per action. `:variant` is `:confirm`
+  (OK+Cancel), `:alert` (OK only), or omitted (content + close button).
+  Clicking the dimmed overlay dismisses the dialog (crate `confirm`/`alert`
+  turn that off; this host keeps it on unless `:overlay-closable false`).
 
   (ui/dialog open?
     {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
@@ -956,8 +970,14 @@
 
 (defn list
   "Virtualized list of `{id, label}` rows. `value` / `:selected` is the
-  selected id; `on-change` receives that original Clojure id. `:on-confirm`
-  fires on click/Enter. `:searchable true` filters by label.
+  selected id; `on-change` receives that original Clojure id.
+
+  `:on-change` fires when selection changes (arrow keys, and also the
+  selection implied by a confirm). `:on-confirm` fires when the item is
+  activated (mouse click or Enter). gpui-component 0.5.1 emits Select for
+  arrows and Confirm only for click/Enter; the host maps those to this
+  contract. Escape / Cancel sends `on-change` with `nil`. `:searchable true`
+  filters by label and keeps that query when Clojure replaces the rows.
 
   (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})"
   ([items]
@@ -968,7 +988,10 @@
                   rewrite-selected
                   apply-control-size)
          selected (:value opts)
-         opts (with-option-callback (dissoc opts :items :options :value) raw)]
+         opts (with-id-callbacks
+                (dissoc opts :items :options :value)
+                raw
+                [:on-change :on-confirm])]
      (merge-widget {:type :list
                     :value (wire-id selected)
                     :items (option-items raw)}
@@ -977,7 +1000,8 @@
 (defn table
   "Virtualized table. `:columns` are `{id, label, width}` maps (not the
   description-list `:columns` count). `:rows` are `{id, cells [...]}`.
-  `on-change` receives the selected row's original id.
+  `on-change` receives the selected row's original id. `:on-confirm` (or
+  `:on-double-click`) fires on double-click with that same original id.
 
   (ui/table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
              :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
@@ -992,7 +1016,10 @@
                  rewrite-selected
                  apply-control-size)
         selected (:value opts)
-        opts (with-option-callback (dissoc opts :value) rows)]
+        opts (with-id-callbacks
+               (dissoc opts :value)
+               rows
+               [:on-change :on-confirm :on-double-click])]
     (merge-widget {:type :table
                    :value (wire-id selected)
                    :options (into [] (keep table-column) columns)
@@ -1001,7 +1028,9 @@
 
 (defn tree
   "Tree of nested `{id, label, items}` rows. `:expanded true` is the initial
-  fold. `on-change` receives the clicked node's original id.
+  fold; later expand/collapse stays host-local until item identity changes.
+  `:selected` is controlled. Nested ids apply when their ancestors are
+  expanded (visible). `on-change` receives the clicked node's original id.
 
   (ui/tree [{:id :src :label \"src\" :expanded true
              :items [{:id :lib :label \"lib.rs\"}]}]

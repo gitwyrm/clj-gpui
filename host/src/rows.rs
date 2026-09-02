@@ -9,6 +9,8 @@ use gpui_component::{
     tree::TreeItem,
     IndexPath,
 };
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -39,24 +41,99 @@ pub fn rows_from_items(items: &[Item]) -> Vec<Row> {
     items.iter().map(Row::from_item).collect()
 }
 
-pub fn rows_fingerprint(items: &[Item]) -> String {
-    fn walk(items: &[Item]) -> String {
-        items
-            .iter()
-            .map(|item| {
-                format!(
-                    "{}:{}:{}:{}:[{}]",
-                    item.id_or_label(),
-                    item.label_or_id(),
-                    item.disabled,
-                    item.cells.join(","),
-                    walk(&item.items)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|")
+/// Structured identity for list/table/tree data. Ignores tree `:expanded`
+/// (host-local) and includes column width so a width-only update refreshes.
+pub fn rows_fingerprint(items: &[Item]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_items(items, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
+    items.len().hash(hasher);
+    for item in items {
+        item.id.hash(hasher);
+        item.label.hash(hasher);
+        item.disabled.hash(hasher);
+        item.cells.hash(hasher);
+        item.width.map(f32::to_bits).hash(hasher);
+        item.checked.hash(hasher);
+        item.icon.hash(hasher);
+        item.separator.hash(hasher);
+        hash_items(&item.items, hasher);
     }
-    walk(items)
+}
+
+pub fn table_fingerprint(columns: &[Item], rows: &[Item]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_items(columns, &mut hasher);
+    hash_items(rows, &mut hasher);
+    hasher.finish()
+}
+
+/// Native selection update for a controlled `:value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionSync {
+    Keep,
+    Select(usize),
+    Clear,
+}
+
+pub fn selection_sync(
+    wanted: Option<&str>,
+    current: Option<usize>,
+    index_of: impl Fn(&str) -> Option<usize>,
+    exists: impl Fn(&str) -> bool,
+) -> SelectionSync {
+    match wanted {
+        None => {
+            if current.is_some() {
+                SelectionSync::Clear
+            } else {
+                SelectionSync::Keep
+            }
+        }
+        Some(id) => {
+            if let Some(ix) = index_of(id) {
+                if current == Some(ix) {
+                    SelectionSync::Keep
+                } else {
+                    SelectionSync::Select(ix)
+                }
+            } else if exists(id) {
+                SelectionSync::Keep
+            } else if current.is_some() {
+                SelectionSync::Clear
+            } else {
+                SelectionSync::Keep
+            }
+        }
+    }
+}
+
+pub fn visible_tree_ids(items: &[TreeItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_visible_tree(items, &mut out);
+    out
+}
+
+fn walk_visible_tree(items: &[TreeItem], out: &mut Vec<String>) {
+    for item in items {
+        out.push(item.id.to_string());
+        if item.is_expanded() {
+            walk_visible_tree(&item.children, out);
+        }
+    }
+}
+
+pub fn tree_contains_id(items: &[TreeItem], id: &str) -> bool {
+    items
+        .iter()
+        .any(|item| item.id.as_ref() == id || tree_contains_id(&item.children, id))
+}
+
+pub fn tree_visible_index(items: &[TreeItem], id: &str) -> Option<usize> {
+    visible_tree_ids(items).iter().position(|row| row == id)
 }
 
 pub fn columns_from_items(items: &[Item]) -> Vec<Column> {
@@ -91,6 +168,7 @@ pub struct RowListDelegate {
     pub items: Vec<Row>,
     pub visible: Vec<usize>,
     pub selected: Option<IndexPath>,
+    query: String,
 }
 
 impl RowListDelegate {
@@ -100,12 +178,32 @@ impl RowListDelegate {
             items,
             visible,
             selected: None,
+            query: String::new(),
         }
     }
 
     pub fn set_items(&mut self, items: Vec<Row>) {
         self.items = items;
-        self.visible = (0..self.items.len()).collect();
+        self.apply_query();
+    }
+
+    pub fn contains_id(&self, id: &str) -> bool {
+        self.items.iter().any(|row| row.id == id)
+    }
+
+    fn apply_query(&mut self) {
+        if self.query.is_empty() {
+            self.visible = (0..self.items.len()).collect();
+        } else {
+            let needle = self.query.to_lowercase();
+            self.visible = self
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.label.to_lowercase().contains(&needle))
+                .map(|(ix, _)| ix)
+                .collect();
+        }
     }
 
     pub fn id_at(&self, ix: IndexPath) -> Option<String> {
@@ -132,18 +230,8 @@ impl ListDelegate for RowListDelegate {
         _: &mut Window,
         _: &mut Context<ListState<Self>>,
     ) -> Task<()> {
-        if query.is_empty() {
-            self.visible = (0..self.items.len()).collect();
-        } else {
-            let needle = query.to_lowercase();
-            self.visible = self
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| row.label.to_lowercase().contains(&needle))
-                .map(|(ix, _)| ix)
-                .collect();
-        }
+        self.query = query.to_string();
+        self.apply_query();
         Task::ready(())
     }
 
@@ -194,6 +282,10 @@ impl RowTableDelegate {
 
     pub fn index_of(&self, id: &str) -> Option<usize> {
         self.rows.iter().position(|row| row.id == id)
+    }
+
+    pub fn contains_id(&self, id: &str) -> bool {
+        self.index_of(id).is_some()
     }
 }
 
@@ -279,6 +371,77 @@ mod tests {
         assert_eq!(converted.len(), 1);
         assert!(converted[0].is_folder());
         assert!(converted[0].is_expanded());
+        assert_eq!(
+            visible_tree_ids(&converted),
+            vec!["src".to_string(), "lib".to_string()]
+        );
+        assert_eq!(tree_visible_index(&converted, "lib"), Some(1));
+        assert!(tree_contains_id(&converted, "lib"));
+        assert!(!tree_contains_id(&converted, "missing"));
+    }
+
+    #[test]
+    fn fingerprint_includes_column_width() {
+        let narrow = items(json!([{"id": "name", "label": "Name", "width": 80}]));
+        let wide = items(json!([{"id": "name", "label": "Name", "width": 140}]));
+        assert_ne!(rows_fingerprint(&narrow), rows_fingerprint(&wide));
+        assert_ne!(
+            table_fingerprint(&narrow, &[]),
+            table_fingerprint(&wide, &[])
+        );
+    }
+
+    #[test]
+    fn set_items_reapplies_active_query() {
+        let mut delegate = RowListDelegate::new(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"},
+            {"id": "clojure", "label": "Clojure"}
+        ]))));
+        delegate.query = "clo".into();
+        delegate.apply_query();
+        assert_eq!(delegate.visible.len(), 1);
+        assert_eq!(
+            delegate.id_at(IndexPath::new(0)).as_deref(),
+            Some("clojure")
+        );
+        delegate.set_items(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"},
+            {"id": "clojure", "label": "Clojure REPL"},
+            {"id": "clock", "label": "Clock"}
+        ]))));
+        assert_eq!(delegate.visible.len(), 2);
+        assert!(delegate.contains_id("clock"));
+        assert_eq!(delegate.index_of("alpha"), None);
+    }
+
+    #[test]
+    fn selection_sync_clears_nil_and_missing() {
+        let index_of = |id: &str| match id {
+            "ada" => Some(0),
+            "grace" => Some(1),
+            _ => None,
+        };
+        let exists = |id: &str| index_of(id).is_some() || id == "hidden";
+        assert_eq!(
+            selection_sync(Some("grace"), Some(0), index_of, exists),
+            SelectionSync::Select(1)
+        );
+        assert_eq!(
+            selection_sync(Some("grace"), Some(1), index_of, exists),
+            SelectionSync::Keep
+        );
+        assert_eq!(
+            selection_sync(None, Some(1), index_of, exists),
+            SelectionSync::Clear
+        );
+        assert_eq!(
+            selection_sync(Some("gone"), Some(0), index_of, exists),
+            SelectionSync::Clear
+        );
+        assert_eq!(
+            selection_sync(Some("hidden"), Some(0), index_of, exists),
+            SelectionSync::Keep
+        );
     }
 
     // The search test above needs App/Window/Context which we cannot build

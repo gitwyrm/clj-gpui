@@ -7,7 +7,9 @@
 
 use crate::mapping;
 use crate::protocol::{Cmd, Item, Node};
-use gpui::{div, px, App, IntoElement, ParentElement, SharedString, Styled, Window};
+use gpui::{
+    div, px, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
+};
 use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -15,6 +17,7 @@ use gpui_component::{
     v_flex, Disableable as _,
 };
 use serde_json::json;
+use std::cell::RefCell;
 use std::sync::mpsc;
 
 #[derive(Clone, Debug)]
@@ -62,6 +65,15 @@ fn walk_dialogs(node: &Node, path: &str, out: &mut Vec<DialogSpec>) {
 
 pub fn dialog_keys(specs: &[DialogSpec]) -> Vec<String> {
     specs.iter().map(|spec| spec.key.clone()).collect()
+}
+
+/// Latest Clojure dialog node for an open crate dialog.
+///
+/// `export-tree` rebuilds callback ids every render. The crate builder is
+/// stored for the dialog's lifetime, so it must read this cell on each
+/// `render_dialog_layer` paint instead of capturing ids from open time.
+pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<DialogSpec> {
+    live.borrow().iter().find(|spec| spec.key == key).cloned()
 }
 
 /// Fill a popup menu from Clojure `{id, label}` rows (nested `:items` are submenus).
@@ -140,29 +152,30 @@ pub fn fill_popup_menu(
 /// Popover content runs as `Fn` during Popover paint while `RootView` is
 /// borrowed, so it cannot consume `AnyElement`s from `render_node`. Rebuild
 /// a small static tree (label / stack / button / divider) from cloned nodes.
-pub fn paint_static(nodes: &[Node], cmd_tx: mpsc::Sender<Cmd>) -> gpui::AnyElement {
+///
+/// `path` is a stable element-id prefix (`dialog-key/content`). Nested
+/// children append `/index` so sibling stacks cannot collide.
+pub fn paint_static(nodes: &[Node], cmd_tx: mpsc::Sender<Cmd>, path: &str) -> gpui::AnyElement {
     v_flex()
         .gap(px(8.))
         .p(px(8.))
         .min_w(px(160.))
-        .children(
-            nodes
-                .iter()
-                .enumerate()
-                .map(|(ix, node)| paint_static_node(node, ix, cmd_tx.clone())),
-        )
+        .children(nodes.iter().enumerate().map(|(ix, node)| {
+            paint_static_node(node, &static_child_path(path, ix), cmd_tx.clone())
+        }))
         .into_any_element()
 }
 
-fn paint_static_node(node: &Node, ix: usize, cmd_tx: mpsc::Sender<Cmd>) -> gpui::AnyElement {
+pub fn static_child_path(prefix: &str, index: usize) -> String {
+    format!("{prefix}/{index}")
+}
+
+fn paint_static_node(node: &Node, path: &str, cmd_tx: mpsc::Sender<Cmd>) -> gpui::AnyElement {
     match node.kind.as_str() {
         "button" => {
             let label = node.text.clone().unwrap_or_default();
-            let mut button =
-                Button::new(SharedString::from(format!("static-btn-{ix}"))).label(label);
-            if node.primary || node.variant.as_deref() == Some("primary") {
-                button = button.primary();
-            }
+            let mut button = Button::new(SharedString::from(path.to_string())).label(label);
+            button = apply_button_chrome(button, node);
             if let Some(callback_id) = node.on_click.clone() {
                 button = button.on_click(move |_, _, _| {
                     let _ = cmd_tx.send(Cmd::Callback {
@@ -176,64 +189,53 @@ fn paint_static_node(node: &Node, ix: usize, cmd_tx: mpsc::Sender<Cmd>) -> gpui:
         }
         "hstack" => h_flex()
             .gap(px(node.gap.unwrap_or(8.)))
-            .children(
-                node.children
-                    .iter()
-                    .enumerate()
-                    .map(|(child_ix, child)| paint_static_node(child, child_ix, cmd_tx.clone())),
-            )
+            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_static_node(child, &static_child_path(path, child_ix), cmd_tx.clone())
+            }))
             .into_any_element(),
         "vstack" => v_flex()
             .gap(px(node.gap.unwrap_or(8.)))
-            .children(
-                node.children
-                    .iter()
-                    .enumerate()
-                    .map(|(child_ix, child)| paint_static_node(child, child_ix, cmd_tx.clone())),
-            )
+            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_static_node(child, &static_child_path(path, child_ix), cmd_tx.clone())
+            }))
             .into_any_element(),
         "divider" => gpui_component::divider::Divider::horizontal().into_any_element(),
         _ => div()
+            .id(SharedString::from(path.to_string()))
             .child(node.text.clone().unwrap_or_default())
             .into_any_element(),
     }
 }
 
-/// Build a `Button` trigger for popover / dropdown-menu. Triggers must be
-/// `Selectable + IntoElement`; `AnyElement` does not qualify.
-pub fn trigger_button(node: Option<&Node>, key: &str) -> Button {
-    let (label, primary, variant, disabled) = match node {
-        Some(n) if n.kind == "button" || n.kind == "label" => (
-            n.text.clone().unwrap_or_else(|| "Open".into()),
-            n.primary,
-            n.variant.clone(),
-            n.disabled,
-        ),
-        Some(n) => (
-            n.text
-                .clone()
-                .or_else(|| n.title.clone())
-                .unwrap_or_else(|| "Open".into()),
-            n.primary,
-            n.variant.clone(),
-            n.disabled,
-        ),
-        None => ("Open".into(), false, None, false),
-    };
-    let mut button = Button::new(SharedString::from(format!("{key}-trigger"))).label(label);
-    match variant.as_deref() {
+fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
+    match node.variant.as_deref() {
         Some("primary") => button = button.primary(),
         Some("ghost") => button = button.ghost(),
         Some("outline") => button = button.outline(),
         Some("danger") => button = button.danger(),
         Some("text") => button = button.text(),
-        _ if primary => button = button.primary(),
+        _ if node.primary => button = button.primary(),
         _ => {}
     }
-    if disabled {
+    if node.disabled {
         button = button.disabled(true);
     }
     button
+}
+
+/// Build a `Button` trigger for popover / dropdown-menu. Triggers must be
+/// `Selectable + IntoElement`; `AnyElement` does not qualify.
+pub fn trigger_button(node: Option<&Node>, key: &str) -> Button {
+    let button = Button::new(SharedString::from(format!("{key}-trigger")));
+    let Some(n) = node else {
+        return button.label("Open");
+    };
+    let label = n
+        .text
+        .clone()
+        .or_else(|| n.title.clone())
+        .unwrap_or_else(|| "Open".into());
+    apply_button_chrome(button.label(label), n)
 }
 
 /// Apply a dialog builder to a crate `Dialog` using the latest spec.
@@ -276,6 +278,13 @@ pub fn crate_dismiss_waiting_for_clojure(
     !crate_open && !wanted_keys.is_empty() && wanted_keys == dialog_keys
 }
 
+/// Bind 0.5.1 Dialog callbacks. The crate itself sequences them:
+///
+/// * OK: `on_ok` (false keeps the dialog open), then `on_close`
+/// * Cancel, Escape, close button, overlay click: `on_cancel`, then `on_close`
+///
+/// This host then sends `:on-open-change false` from `on_close`. Each
+/// Clojure handler is invoked at most once per user action.
 pub fn bind_dialog_callbacks(
     dialog: gpui_component::dialog::Dialog,
     node: &Node,
@@ -399,5 +408,40 @@ mod tests {
         assert!(!crate_dismiss_waiting_for_clojure(&keys, &[], false));
         assert!(!crate_dismiss_waiting_for_clojure(&keys, &keys, true));
         assert!(!crate_dismiss_waiting_for_clojure(&[], &keys, false));
+    }
+
+    #[test]
+    fn live_dialog_spec_uses_latest_callback_generation() {
+        let live = RefCell::new(vec![DialogSpec {
+            key: "ask".into(),
+            node: node(json!({
+                "type": "dialog",
+                "open": true,
+                "on-ok": "cb-7",
+                "on-close": "cb-8"
+            })),
+        }]);
+        assert_eq!(
+            latest_dialog_spec(&live, "ask").and_then(|spec| spec.node.on_ok.clone()),
+            Some("cb-7".into())
+        );
+        live.borrow_mut()[0].node.on_ok = Some("cb-19".into());
+        live.borrow_mut()[0].node.on_close = Some("cb-20".into());
+        let spec = latest_dialog_spec(&live, "ask").unwrap();
+        assert_eq!(spec.node.on_ok.as_deref(), Some("cb-19"));
+        assert_eq!(spec.node.on_close.as_deref(), Some("cb-20"));
+        assert!(latest_dialog_spec(&live, "other").is_none());
+    }
+
+    #[test]
+    fn static_child_paths_are_unique_across_nested_stacks() {
+        let a = static_child_path("ask/content", 0);
+        let nested_a = static_child_path(&a, 0);
+        let nested_b = static_child_path(&a, 1);
+        let sibling = static_child_path("ask/content", 1);
+        let sibling_child = static_child_path(&sibling, 0);
+        let ids = [a, nested_a, nested_b, sibling, sibling_child];
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
     }
 }

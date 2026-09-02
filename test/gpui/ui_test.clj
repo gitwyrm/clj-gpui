@@ -581,9 +581,30 @@
     (is (= {:ok true :id (get-in children [3 :on-change])}
            (runtime/invoke-callback! (get-in children [3 :on-change]) "beta")))
     (is (= :beta @got))
+    (is (= {:ok true :id (get-in children [3 :on-confirm])}
+           (runtime/invoke-callback! (get-in children [3 :on-confirm]) "alpha")))
+    (is (= [:confirm :alpha] @got))
     (is (= {:ok true :id (get-in children [4 :on-change])}
            (runtime/invoke-callback! (get-in children [4 :on-change]) "ada")))
     (is (= :ada @got))
     (is (= {:ok true :id (get-in children [5 :on-change])}
            (runtime/invoke-callback! (get-in children [5 :on-change]) "lib")))
     (is (= :lib @got))))
+
+(deftest later-export-invalidates-prior-callback-ids
+  (runtime/reset-callbacks!)
+  (let [gen1 (atom 0)
+        exported-1 (runtime/export-tree
+                    (ui/dialog true {:on-ok #(swap! gen1 inc)}
+                               (ui/label "one")))
+        id-1 (:on-ok exported-1)
+        gen2 (atom 0)
+        exported-2 (runtime/export-tree
+                    (ui/dialog true {:on-ok #(swap! gen2 inc)}
+                               (ui/label "two")))
+        id-2 (:on-ok exported-2)]
+    (is (string? id-1))
+    (is (= id-1 id-2) "callback ids are reused across export generations")
+    (is (= {:ok true :id id-2} (runtime/invoke-callback! id-2)))
+    (is (= 1 @gen2) "latest generation owns the reused id")
+    (is (zero? @gen1) "prior generation is no longer registered")))
