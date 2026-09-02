@@ -1688,7 +1688,9 @@ impl RootView {
         // default viewport height and uses crate `size_full()`; inside a
         // non-flex host that `flex_1` is ignored and the listing collapses.
         let mut el = apply_style(v_flex().id(eid(&key)).min_h_0(), node, cx);
-        if context_menu_flex_fill(node) && node.flex.unwrap_or(0.0) < 1.0 {
+        // Inherit leftover height from a flex-fill child only when `:flex`
+        // was omitted. An explicit wrapper value (`0`, `0.5`, `1`) is kept.
+        if node.flex.is_none() && context_menu_flex_fill(node) {
             el = el.flex_1().min_w_0().min_h_0();
         }
         el.context_menu(move |menu, window, cx| {
@@ -3378,12 +3380,15 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
 /// The host is a flex column (`v_flex` + `min_h_0`), never a block `div`.
 /// If the menu omitted `:flex`, leftover column height is inherited from any
 /// flex-fill child so wrapping a `:flex 1` table/list/tree does not drop it.
+/// An explicit wrapper `:flex` (including `0` / `0.5`) is never overridden.
 fn context_menu_flex_fill(node: &Node) -> bool {
-    node.flex.unwrap_or(0.0) >= 1.0
-        || node
+    match node.flex {
+        Some(flex) => flex >= 1.0,
+        None => node
             .children
             .iter()
-            .any(|child| child.flex.unwrap_or(0.0) >= 1.0)
+            .any(|child| child.flex.unwrap_or(0.0) >= 1.0),
+    }
 }
 
 /// Testable layout contract for `ui/context-menu`.
@@ -4332,20 +4337,33 @@ mod widget_wrap_tests {
     }
 
     #[test]
-    fn context_menu_inherits_flex_from_table_child() {
-        let node = Node {
-            kind: "context-menu".into(),
-            children: vec![Node {
-                kind: "table".into(),
-                flex: Some(1.0),
-                ..Node::default()
-            }],
+    fn context_menu_inherits_flex_only_when_omitted() {
+        let child = Node {
+            kind: "table".into(),
+            flex: Some(1.0),
             ..Node::default()
         };
-        let wrap = context_menu_wrap(&node);
+        let omitted = Node {
+            kind: "context-menu".into(),
+            children: vec![child.clone()],
+            ..Node::default()
+        };
+        let inherited = context_menu_wrap(&omitted);
+        assert!(inherited.flex_column);
+        assert!(inherited.flex_fill);
+        assert!(inherited.shrink_width);
+        assert!(inherited.shrink_height);
+
+        let explicit_zero = Node {
+            kind: "context-menu".into(),
+            flex: Some(0.0),
+            children: vec![child],
+            ..Node::default()
+        };
+        let wrap = context_menu_wrap(&explicit_zero);
         assert!(wrap.flex_column);
-        assert!(wrap.flex_fill);
-        assert!(wrap.shrink_width);
+        assert!(!wrap.flex_fill);
+        assert!(!wrap.shrink_width);
         assert!(wrap.shrink_height);
     }
 
