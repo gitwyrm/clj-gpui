@@ -30,7 +30,19 @@
            :list-rev 0
            :batch-shift? false
            :close-hit false
-           :dialog-open nil}))
+           :dialog-open nil
+           :sheet? false
+           :toasts []
+           :qty 4
+           :otp ""
+           :color "#3366ff"
+           :date "2026-09-02"
+           :src "(defn hi [] \n  :ok)"
+           :vlist-sel :a
+           :nav :home
+           :sidebar-collapsed false
+           :setting-notify true
+           :split-sizes nil}))
 
 (defn- set-key [k]
   (fn [v]
@@ -114,7 +126,7 @@
    (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open]}]
+(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
@@ -159,9 +171,32 @@
                :on-close #(swap! !state assoc :dialog? false :close-hit true)
                :on-open-change (set-key :dialog-open)}
               (ui/label (str "Close from OK, Cancel, Escape, or the overlay. Tick " tick "."))
-              (ui/button "Disabled" {:disabled true}))))
+              (ui/button "Disabled" {:disabled true}))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button "Open sheet" #(swap! !state assoc :sheet? true))
+    (ui/button "Toast ok" #(swap! !state update :toasts conj
+                                  {:id (str "t-" tick) :variant :success :title "Saved" :message "ok"})
+               {:variant :primary})
+    (ui/button "Toast err" #(swap! !state update :toasts conj
+                                   {:id (str "e-" tick) :variant :error :title "Failed" :message "nope"})))
+   (ui/sheet sheet?
+             {:title "Inspector"
+              :placement :right
+              :on-close #(swap! !state assoc :sheet? false)
+              :footer (ui/button "Close" #(swap! !state assoc :sheet? false) {:primary true})}
+             (ui/label (str "Sheet body · tick " tick)))
+   (map (fn [{:keys [id variant title message]}]
+          (ui/notification {:id id
+                            :variant variant
+                            :title title
+                            :message message
+                            :autohide true
+                            :on-close #(swap! !state update :toasts
+                                              (fn [xs] (vec (remove (fn [t] (= id (:id t))) xs))))}))
+        toasts)))
 
-(defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift tree-sel list-rev batch-shift?]}]
+(defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift tree-sel list-rev batch-shift? vlist-sel]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
         list-items [{:id :alpha :label (str "Alpha" suffix)}
                     {:id :beta :label (str "Beta" suffix)}
@@ -242,7 +277,82 @@
      (ui/tree tree-items
               {:selected (when (not= tree-sel :gone) tree-sel)
                :height 160
-               :on-change (set-key :tree-sel)}))))
+               :on-change (set-key :tree-sel)})
+     (ui/label (str "Virtual " (pr-str vlist-sel)))
+     (ui/virtual-list (mapv (fn [i]
+                              {:id (keyword (str "r" i))
+                               :label (str "Row " i)
+                               :height (if (even? i) 36 48)})
+                            (range 40))
+                      {:selected vlist-sel
+                       :height 160
+                       :on-change (set-key :vlist-sel)}))))
+
+(defn- forms-panel [{:keys [qty otp color date src]}]
+  (ui/vstack
+   {:gap 12}
+   (ui/label (str "qty " qty " · otp " (pr-str otp) " · " color " · " date))
+   (ui/number-input qty {:id "qty" :min 0 :max 20 :step 1 :on-change (set-key :qty)})
+   (ui/otp-input otp {:id "otp" :count 6 :on-change (set-key :otp)})
+   (ui/color-picker color {:on-change (set-key :color)})
+   (ui/date-picker date {:on-change (set-key :date)})
+   (ui/editor src {:id "src" :language "clojure" :height 160 :on-change (set-key :src)})))
+
+(defn- docs-panel [_]
+  (ui/vstack
+   {:gap 12}
+   (ui/chart :line [{:id :a :label "Mon" :value 4}
+                    {:id :b :label "Tue" :value 8}
+                    {:id :c :label "Wed" :value 6}
+                    {:id :d :label "Thu" :value 10}]
+             {:height 160})
+   (ui/hstack
+    {:gap 8}
+    (ui/bar-chart [{:id :a :label "A" :value 3}
+                   {:id :b :label "B" :value 7}]
+                  {:width 200 :height 140})
+    (ui/pie-chart [{:id :a :label "A" :value 2}
+                   {:id :b :label "B" :value 5}]
+                  {:width 160 :height 140}))
+   (ui/markdown "# Markdown\n\nSelectable **gpui-component** `TextView`.\n\n- sheet\n- notification\n- charts"
+                {:height 140})))
+
+(defn- shell-panel [{:keys [nav sidebar-collapsed setting-notify]}]
+  (ui/vstack
+   {:gap 12 :flex 1}
+   (ui/label (str "nav " (pr-str nav) " · notify " (pr-str setting-notify)))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button (if sidebar-collapsed "Expand" "Collapse")
+               #(swap! !state update :sidebar-collapsed not))
+    (ui/label "Sidebar + settings + dock + resizable"))
+   (ui/sidebar [{:id :home :label "Home" :icon :check}
+                {:id :files :label "Files" :icon :folder}
+                {:id :gear :label "Settings" :icon :settings}]
+               {:selected nav
+                :collapsed sidebar-collapsed
+                :title "Demo"
+                :height 140
+                :on-change (set-key :nav)})
+   (ui/settings [{:id :general :label "General"
+                  :items [{:id :notify :label "Notifications"
+                           :variant :switch :checked setting-notify}]}]
+                {:height 180
+                 :on-change (fn [{:keys [id value]}]
+                              (when (= id :notify)
+                                (swap! !state assoc :setting-notify value)))})
+   (ui/resizable {:orientation :horizontal :height 140}
+                 (ui/markdown "Left pane" {:width 160})
+                 (ui/markdown "Right pane"))
+   (ui/dock {:height 180
+             :items [{:id :files :side :left :label "Files"
+                      :content (ui/markdown "**Files**\n\n- a.clj\n- b.rs")}
+                     {:id :main :side :center :label "Main"
+                      :content (ui/chart :area [{:id :a :label "A" :value 2}
+                                                {:id :b :label "B" :value 5}]
+                                         {:height 120})}
+                     {:id :log :side :bottom :label "Log"
+                      :content (ui/label "ready")}]})))
 
 (defn app []
   (let [{:keys [tab] :as state} @!state]
@@ -261,7 +371,10 @@
                {:items [{:id :general :label "General"}
                         {:id :chrome :label "Chrome"}
                         {:id :overlay :label "Overlay"}
-                        {:id :data :label "Data"}]
+                        {:id :data :label "Data"}
+                        {:id :forms :label "Forms"}
+                        {:id :docs :label "Docs"}
+                        {:id :shell :label "Shell"}]
                 :variant :underline
                 :on-change (set-key :tab)})
       (ui/scroll
@@ -272,4 +385,7 @@
           :chrome (chrome-panel state)
           :overlay (overlay-panel state)
           :data (data-panel state)
+          :forms (forms-panel state)
+          :docs (docs-panel state)
+          :shell (shell-panel state)
           (general-panel state))))))))

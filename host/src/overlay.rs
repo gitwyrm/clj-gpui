@@ -1,9 +1,9 @@
-//! Overlay family: dialogs (WindowExt layer), popovers, and popup menus.
+//! Overlay family: dialogs, sheets, notifications, popovers, and popup menus.
 //!
-//! Dialogs are not ordinary tree children. gpui-component paints them from
-//! `Root` via `WindowExt::open_dialog`. The host collects open dialogs from
-//! the Clojure tree and syncs that stack on the next frame so `RootView::render`
-//! never re-enters `Root::update`.
+//! Dialogs and sheets are not ordinary tree children. gpui-component paints
+//! them from `Root` via `WindowExt`. The host collects open overlays from the
+//! Clojure tree and syncs on the next frame so `RootView::render` never
+//! re-enters `Root`. Notifications are a stack on `Root.notification`.
 
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
@@ -37,29 +37,34 @@ pub fn node_key(node: &Node, path: &str) -> String {
 
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
     let mut out = Vec::new();
-    walk_dialogs(root, "root", &mut out);
+    walk_nodes(root, "root", &mut |node, path| {
+        if node.kind == "dialog" && node.open.unwrap_or(false) {
+            out.push(DialogSpec {
+                key: node_key(node, path),
+                node: node.clone(),
+            });
+        }
+    });
     out
 }
 
-fn walk_dialogs(node: &Node, path: &str, out: &mut Vec<DialogSpec>) {
-    if node.kind == "dialog" && node.open.unwrap_or(false) {
-        out.push(DialogSpec {
-            key: node_key(node, path),
-            node: node.clone(),
-        });
-    }
+fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
+    visit(node, path);
     if let Some(trigger) = node.trigger.as_ref() {
-        walk_dialogs(trigger, &format!("{path}-trigger"), out);
+        walk_nodes(trigger, &format!("{path}-trigger"), visit);
+    }
+    if let Some(footer) = node.footer.as_ref() {
+        walk_nodes(footer, &format!("{path}-footer"), visit);
     }
     for (index, child) in node.children.iter().enumerate() {
-        walk_dialogs(child, &format!("{path}-{index}"), out);
+        walk_nodes(child, &format!("{path}-{index}"), visit);
     }
     for (index, item) in node.items.iter().enumerate() {
         if let Some(content) = item.content.as_ref() {
-            walk_dialogs(content, &format!("{path}-item-{index}"), out);
+            walk_nodes(content, &format!("{path}-item-{index}"), visit);
         }
         for (child_ix, child) in item.children.iter().enumerate() {
-            walk_dialogs(child, &format!("{path}-item-{index}-{child_ix}"), out);
+            walk_nodes(child, &format!("{path}-item-{index}-{child_ix}"), visit);
         }
     }
 }
@@ -323,6 +328,108 @@ pub fn bind_dialog_callbacks(
         })
 }
 
+#[derive(Clone, Debug)]
+pub struct SheetSpec {
+    pub key: String,
+    pub node: Node,
+}
+
+/// Crate `Root` holds one sheet. Last open sheet in tree order wins.
+pub fn collect_open_sheet(root: &Node) -> Option<SheetSpec> {
+    let mut found = None;
+    walk_nodes(root, "root", &mut |node, path| {
+        if node.kind == "sheet" && node.open.unwrap_or(false) {
+            found = Some(SheetSpec {
+                key: node_key(node, path),
+                node: node.clone(),
+            });
+        }
+    });
+    found
+}
+
+pub fn latest_sheet_spec(live: &RefCell<Option<SheetSpec>>, key: &str) -> Option<SheetSpec> {
+    live.borrow()
+        .as_ref()
+        .filter(|spec| spec.key == key)
+        .cloned()
+}
+
+pub fn configure_sheet(
+    mut sheet: gpui_component::sheet::Sheet,
+    node: &Node,
+    children: Vec<gpui::AnyElement>,
+    footer: Option<gpui::AnyElement>,
+) -> gpui_component::sheet::Sheet {
+    if let Some(title) = node.title.clone() {
+        sheet = sheet.title(title);
+    }
+    sheet = sheet.overlay_closable(overlay_closable(node));
+    let size = node.size.or(node.width).or(node.height).unwrap_or(350.0);
+    sheet = sheet.size(px(size));
+    if let Some(footer) = footer {
+        sheet = sheet.footer(footer);
+    }
+    sheet.extend(children);
+    sheet
+}
+
+pub fn bind_sheet_callbacks(
+    sheet: gpui_component::sheet::Sheet,
+    node: &Node,
+    cmd_tx: mpsc::Sender<Cmd>,
+) -> gpui_component::sheet::Sheet {
+    let on_close = node.on_close.clone();
+    let on_open_change = node.on_open_change.clone();
+    sheet.on_close(move |_, _, _| {
+        let mut calls = Vec::new();
+        if let Some(id) = on_close.clone() {
+            calls.push(protocol::CallbackCall::fire(id));
+        }
+        if let Some(id) = on_open_change.clone() {
+            calls.push(protocol::CallbackCall::with_value(id, json!(false)));
+        }
+        protocol::send_callbacks(&cmd_tx, calls);
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct NotificationSpec {
+    pub key: String,
+    pub node: Node,
+}
+
+/// Presence in the tree means show, unless `:open` is explicitly false.
+pub fn collect_notifications(root: &Node) -> Vec<NotificationSpec> {
+    let mut out = Vec::new();
+    walk_nodes(root, "root", &mut |node, path| {
+        if node.kind == "notification" && node.open.unwrap_or(true) {
+            out.push(NotificationSpec {
+                key: node_key(node, path),
+                node: node.clone(),
+            });
+        }
+    });
+    out
+}
+
+pub fn notification_fingerprint(node: &Node) -> String {
+    format!(
+        "{}|{}|{}|{:?}",
+        node.title.as_deref().unwrap_or(""),
+        node.message
+            .as_deref()
+            .or(node.text.as_deref())
+            .unwrap_or(""),
+        node.variant.as_deref().unwrap_or(""),
+        node.autohide
+    )
+}
+
+pub fn notification_autohide(node: &Node) -> bool {
+    node.autohide.unwrap_or(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +537,35 @@ mod tests {
         let ids = [a, nested_a, nested_b, sibling, sibling_child];
         let unique: std::collections::HashSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len());
+    }
+
+    #[test]
+    fn collect_open_sheet_takes_the_last_open() {
+        let tree = node(json!({
+            "type": "window",
+            "children": [
+                {"type": "sheet", "open": false, "id": "hidden", "title": "No"},
+                {"type": "sheet", "open": true, "id": "first", "title": "A"},
+                {"type": "sheet", "open": true, "id": "second", "title": "B"}
+            ]
+        }));
+        let spec = collect_open_sheet(&tree).unwrap();
+        assert_eq!(spec.key, "second");
+        assert!(spec.node.contains_text("B"));
+    }
+
+    #[test]
+    fn collect_notifications_skips_explicitly_closed() {
+        let tree = node(json!({
+            "type": "window",
+            "children": [
+                {"type": "notification", "id": "ok", "message": "Saved"},
+                {"type": "notification", "id": "gone", "open": false, "message": "Hide"}
+            ]
+        }));
+        let notes = collect_notifications(&tree);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].key, "ok");
+        assert!(notification_autohide(&notes[0].node));
     }
 }

@@ -1,12 +1,13 @@
 use crate::catalog;
+use crate::extra;
 use crate::mapping;
 use crate::overlay;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
-    Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke,
-    LayoutId, PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
+    DismissEvent, Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId,
+    Keystroke, LayoutId, PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
     accordion::Accordion,
@@ -17,20 +18,29 @@ use gpui_component::{
     button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
     checkbox::Checkbox,
     clipboard::Clipboard,
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
     divider::Divider,
+    dock::{DockArea, DockItem},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{
+        Input, InputEvent, InputState, NumberInput, NumberInputEvent, OtpInput, OtpState,
+        StepAction,
+    },
     kbd::Kbd,
     link::Link,
     list::{List, ListEvent, ListState},
     menu::{ContextMenuExt as _, DropdownMenu as _},
+    notification::Notification,
     popover::Popover,
     progress::Progress,
     radio::{Radio, RadioGroup},
+    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     spinner::Spinner,
@@ -62,6 +72,12 @@ struct InputSlot {
     wait_for_seq: Option<u64>,
     /// Submitted string; a late `Change` echoing it must not restore the draft.
     submitted: Option<String>,
+    /// NumberInput: emit JSON numbers and honor step/min/max.
+    as_number: bool,
+    number_min: Option<f32>,
+    number_max: Option<f32>,
+    number_step: Option<f32>,
+    number_stepped: bool,
 }
 
 struct SliderSlot {
@@ -127,6 +143,40 @@ struct TreeSlot {
     fingerprint: u64,
     on_change: Option<String>,
 }
+
+struct OtpSlot {
+    state: Entity<OtpState>,
+    length: usize,
+    on_change: Option<String>,
+    on_blur: Option<String>,
+}
+
+struct ColorSlot {
+    state: Entity<ColorPickerState>,
+    on_change: Option<String>,
+}
+
+struct DateSlot {
+    state: Entity<DatePickerState>,
+    range: bool,
+    on_change: Option<String>,
+}
+
+struct DockSlot {
+    area: Entity<DockArea>,
+    fingerprint: String,
+    panels: HashMap<String, Entity<extra::CljPanel>>,
+}
+
+struct NotificationSlot {
+    entity: Entity<Notification>,
+    fingerprint: String,
+    on_click: Option<String>,
+    on_close: Option<String>,
+    suppress_close: bool,
+}
+
+struct CljNotification;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ZenityPick {
@@ -218,15 +268,34 @@ pub struct RootView {
     lists: HashMap<String, ListSlot>,
     tables: HashMap<String, TableSlot>,
     trees: HashMap<String, TreeSlot>,
+    otps: HashMap<String, OtpSlot>,
+    colors: HashMap<String, ColorSlot>,
+    dates: HashMap<String, DateSlot>,
+    editors: HashMap<String, InputSlot>,
+    vlists: HashMap<String, Entity<extra::VirtualListView>>,
+    docks: HashMap<String, DockSlot>,
+    resizables: HashMap<String, Entity<ResizableState>>,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_keys: Vec<String>,
     dialog_pending: bool,
+    sheet: Option<overlay::SheetSpec>,
+    sheet_live: Rc<RefCell<Option<overlay::SheetSpec>>>,
+    sheet_key: Option<String>,
+    sheet_pending: bool,
+    notes: HashMap<String, NotificationSlot>,
+    note_waiting: HashSet<String>,
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
     used_lists: HashSet<String>,
     used_tables: HashSet<String>,
     used_trees: HashSet<String>,
+    used_otps: HashSet<String>,
+    used_colors: HashSet<String>,
+    used_dates: HashSet<String>,
+    used_editors: HashSet<String>,
+    used_vlists: HashSet<String>,
+    used_docks: HashSet<String>,
     _appearance: Subscription,
     _window_bounds: Subscription,
     _keystrokes: Subscription,
@@ -317,15 +386,34 @@ impl RootView {
             lists: HashMap::new(),
             tables: HashMap::new(),
             trees: HashMap::new(),
+            otps: HashMap::new(),
+            colors: HashMap::new(),
+            dates: HashMap::new(),
+            editors: HashMap::new(),
+            vlists: HashMap::new(),
+            docks: HashMap::new(),
+            resizables: HashMap::new(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_keys: Vec::new(),
             dialog_pending: false,
+            sheet: None,
+            sheet_live: Rc::new(RefCell::new(None)),
+            sheet_key: None,
+            sheet_pending: false,
+            notes: HashMap::new(),
+            note_waiting: HashSet::new(),
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
             used_lists: HashSet::new(),
             used_tables: HashSet::new(),
             used_trees: HashSet::new(),
+            used_otps: HashSet::new(),
+            used_colors: HashSet::new(),
+            used_dates: HashSet::new(),
+            used_editors: HashSet::new(),
+            used_vlists: HashSet::new(),
+            used_docks: HashSet::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
             _keystrokes: keystrokes,
@@ -389,7 +477,7 @@ impl RootView {
     }
 
     fn handle_escape(&self, window: &mut Window, cx: &mut Context<Self>) {
-        for slot in self.inputs.values() {
+        for slot in self.inputs.values().chain(self.editors.values()) {
             let Some(id) = slot.on_escape.clone() else {
                 continue;
             };
@@ -540,6 +628,11 @@ impl RootView {
                 on_escape: node.on_escape.clone(),
                 wait_for_seq: None,
                 submitted: None,
+                as_number: false,
+                number_min: None,
+                number_max: None,
+                number_step: None,
+                number_stepped: false,
             },
         );
 
@@ -563,29 +656,52 @@ impl RootView {
                     let Some(id) = slot.on_change.clone() else {
                         return;
                     };
+                    let as_number = slot.as_number;
+                    let payload = if as_number {
+                        let Some(n) = extra::number_from_input(&value) else {
+                            return;
+                        };
+                        json!(n)
+                    } else {
+                        json!(value)
+                    };
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(json!(value)),
+                        value: Some(payload),
                         seq: None,
                     });
                 }
                 InputEvent::PressEnter { .. } => {
                     this.next_submit_seq = this.next_submit_seq.saturating_add(1);
                     let seq = this.next_submit_seq;
-                    let (on_submit, value, state, clear) = {
+                    let (on_submit, value, state, clear, as_number) = {
                         let Some(slot) = this.inputs.get_mut(&key_owned) else {
                             return;
                         };
                         let value = input.read(cx).value().to_string();
                         slot.wait_for_seq = Some(seq);
                         slot.submitted = Some(value.clone());
-                        let clear = slot.on_blur.is_none() && slot.on_escape.is_none();
-                        (slot.on_submit.clone(), value, slot.state.clone(), clear)
+                        let clear =
+                            !slot.as_number && slot.on_blur.is_none() && slot.on_escape.is_none();
+                        (
+                            slot.on_submit.clone(),
+                            value,
+                            slot.state.clone(),
+                            clear,
+                            slot.as_number,
+                        )
                     };
                     if let Some(id) = on_submit {
+                        let payload = if as_number {
+                            extra::number_from_input(&value)
+                                .map(|n| json!(n))
+                                .unwrap_or_else(|| json!(value.clone()))
+                        } else {
+                            json!(value.clone())
+                        };
                         let _ = this.cmd_tx.send(Cmd::Callback {
                             id,
-                            value: Some(json!(value)),
+                            value: Some(payload),
                             seq: Some(seq),
                         });
                     }
@@ -607,10 +723,18 @@ impl RootView {
                     let Some(id) = slot.on_blur.clone() else {
                         return;
                     };
+                    let as_number = slot.as_number;
                     let value = input.read(cx).value().to_string();
+                    let payload = if as_number {
+                        extra::number_from_input(&value)
+                            .map(|n| json!(n))
+                            .unwrap_or_else(|| json!(value))
+                    } else {
+                        json!(value)
+                    };
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(json!(value)),
+                        value: Some(payload),
                         seq: None,
                     });
                 }
@@ -907,6 +1031,27 @@ impl RootView {
             "list" => self.render_list(node, &key, window, cx),
             "table" => self.render_table(node, &key, window, cx),
             "tree" => self.render_tree(node, &key, window, cx),
+            "sheet" => div().into_any_element(),
+            "notification" => div().into_any_element(),
+            "number-input" => self.render_number_input(node, &key, window, cx),
+            "otp-input" => self.render_otp_input(node, &key, window, cx),
+            "color-picker" => self.render_color_picker(node, &key, window, cx),
+            "date-picker" => self.render_date_picker(node, &key, window, cx),
+            "editor" => self.render_editor(node, &key, window, cx),
+            "virtual-list" => self.render_virtual_list(node, &key, window, cx),
+            "chart" => extra::paint_chart(node, &key, cx),
+            "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
+                .child(extra::paint_markdown(node, &key, window, cx))
+                .into_any_element(),
+            "sidebar" => self.render_sidebar(node, &key, cx),
+            "settings" => viewport_sized(
+                extra::build_settings(node, &key, &self.cmd_tx),
+                node,
+                360.0,
+                cx,
+            ),
+            "dock" => self.render_dock(node, &key, window, cx),
+            "resizable" => self.render_resizable(node, path, &key, window, cx),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
@@ -1837,6 +1982,850 @@ impl RootView {
         });
     }
 
+    fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted = self.tree.as_ref().and_then(overlay::collect_open_sheet);
+        let wanted_key = wanted.as_ref().map(|spec| spec.key.clone());
+        let crate_open = window.has_active_sheet(cx);
+        let keys_changed = wanted_key != self.sheet_key;
+        let wanted_keys: Vec<String> = wanted_key.iter().cloned().collect();
+        let current_keys: Vec<String> = self.sheet_key.iter().cloned().collect();
+        let waiting =
+            overlay::crate_dismiss_waiting_for_clojure(&wanted_keys, &current_keys, crate_open);
+        let should_open = wanted_key.is_some() && !crate_open && !waiting;
+        let should_close = wanted_key.is_none() && crate_open;
+        self.sheet = wanted.clone();
+        *self.sheet_live.borrow_mut() = wanted;
+        if self.sheet_pending {
+            return;
+        }
+        if !(keys_changed || should_open || should_close) {
+            return;
+        }
+        self.sheet_pending = true;
+        let entity = cx.entity();
+        window.on_next_frame(move |window, cx| {
+            window.close_sheet(cx);
+            let (key, live, cmd_tx, placement) = entity.update(cx, |this, _| {
+                this.sheet_pending = false;
+                let key = this.sheet.as_ref().map(|spec| spec.key.clone());
+                this.sheet_key = key.clone();
+                let placement = this
+                    .sheet
+                    .as_ref()
+                    .map(|spec| extra::parse_sheet_placement(&spec.node))
+                    .unwrap_or(gpui_component::Placement::Right);
+                (key, this.sheet_live.clone(), this.cmd_tx.clone(), placement)
+            });
+            let Some(key) = key else {
+                return;
+            };
+            window.open_sheet_at(placement, cx, move |sheet, _, _| {
+                let Some(spec) = overlay::latest_sheet_spec(&live, &key) else {
+                    return sheet;
+                };
+                let children = vec![overlay::paint_static(
+                    &spec.node.children,
+                    cmd_tx.clone(),
+                    &format!("{}/content", spec.key),
+                )];
+                let footer = spec.node.footer.as_ref().map(|node| {
+                    overlay::paint_static(
+                        std::slice::from_ref(node.as_ref()),
+                        cmd_tx.clone(),
+                        &format!("{}/footer", spec.key),
+                    )
+                });
+                let sheet = overlay::configure_sheet(sheet, &spec.node, children, footer);
+                overlay::bind_sheet_callbacks(sheet, &spec.node, cmd_tx.clone())
+            });
+        });
+    }
+
+    fn sync_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted = self
+            .tree
+            .as_ref()
+            .map(overlay::collect_notifications)
+            .unwrap_or_default();
+        let wanted_keys: HashSet<String> = wanted.iter().map(|spec| spec.key.clone()).collect();
+        self.note_waiting.retain(|key| wanted_keys.contains(key));
+
+        let stale: Vec<String> = self
+            .notes
+            .keys()
+            .filter(|key| !wanted_keys.contains(*key))
+            .cloned()
+            .collect();
+        for key in stale {
+            if let Some(mut slot) = self.notes.remove(&key) {
+                slot.suppress_close = true;
+                slot.entity.update(cx, |note, cx| {
+                    note.dismiss(window, cx);
+                });
+            }
+        }
+
+        for spec in wanted {
+            if self.note_waiting.contains(&spec.key) {
+                continue;
+            }
+            let fingerprint = overlay::notification_fingerprint(&spec.node);
+            if let Some(slot) = self.notes.get_mut(&spec.key) {
+                slot.on_click = spec.node.on_click.clone();
+                slot.on_close = spec.node.on_close.clone();
+                if slot.fingerprint == fingerprint {
+                    continue;
+                }
+                slot.fingerprint = fingerprint.clone();
+                slot.suppress_close = true;
+                slot.entity.update(cx, |note, cx| note.dismiss(window, cx));
+                self.notes.remove(&spec.key);
+            }
+            self.push_notification(spec, fingerprint, window, cx);
+        }
+    }
+
+    fn push_notification(
+        &mut self,
+        spec: overlay::NotificationSpec,
+        fingerprint: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = spec.key.clone();
+        let mut note = match spec
+            .node
+            .variant
+            .as_deref()
+            .map(crate::catalog::normalize)
+            .as_deref()
+        {
+            Some("success") => Notification::success(
+                spec.node
+                    .message
+                    .clone()
+                    .or(spec.node.text.clone())
+                    .unwrap_or_default(),
+            ),
+            Some("warning") => Notification::warning(
+                spec.node
+                    .message
+                    .clone()
+                    .or(spec.node.text.clone())
+                    .unwrap_or_default(),
+            ),
+            Some("error") | Some("danger") => Notification::error(
+                spec.node
+                    .message
+                    .clone()
+                    .or(spec.node.text.clone())
+                    .unwrap_or_default(),
+            ),
+            _ => Notification::info(
+                spec.node
+                    .message
+                    .clone()
+                    .or(spec.node.text.clone())
+                    .unwrap_or_default(),
+            ),
+        };
+        if let Some(title) = spec.node.title.clone() {
+            note = note.title(title);
+        }
+        note = note
+            .id1::<CljNotification>(SharedString::from(key.clone()))
+            .autohide(overlay::notification_autohide(&spec.node));
+        let on_click = spec.node.on_click.clone();
+        if let Some(callback) = on_click.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            note = note.on_click(move |_, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback.clone(),
+                    value: None,
+                    seq: None,
+                });
+            });
+        }
+        window.push_notification(note, cx);
+        let entity = window
+            .notifications(cx)
+            .last()
+            .cloned()
+            .expect("notification just pushed");
+        let key_owned = key.clone();
+        cx.subscribe(&entity, move |this, _, _: &DismissEvent, _cx| {
+            let Some(slot) = this.notes.remove(&key_owned) else {
+                return;
+            };
+            this.note_waiting.insert(key_owned.clone());
+            if slot.suppress_close {
+                return;
+            }
+            if let Some(id) = slot.on_close {
+                let _ = this.cmd_tx.send(Cmd::Callback {
+                    id,
+                    value: None,
+                    seq: None,
+                });
+            }
+        })
+        .detach();
+        self.notes.insert(
+            key,
+            NotificationSlot {
+                entity,
+                fingerprint,
+                on_click,
+                on_close: spec.node.on_close.clone(),
+                suppress_close: false,
+            },
+        );
+    }
+
+    fn render_number_input(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.number_slot(key, node, window, cx);
+        let mut input = NumberInput::new(&state);
+        if let Some(placeholder) = node.placeholder.clone() {
+            input = input.placeholder(placeholder);
+        }
+        if node.disabled {
+            input = input.disabled(true);
+        }
+        apply_style(
+            input.with_size(mapping::parse_scale(node.control_size.as_deref())),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn number_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let wanted = node
+            .number_value()
+            .map(|n| n.to_string())
+            .or_else(|| node.string_value())
+            .or_else(|| node.text.clone())
+            .unwrap_or_default();
+        let mut sync_node = node.clone();
+        sync_node.text = Some(wanted);
+        let state = self.input_slot(key, &sync_node, window, cx);
+        let need_step = if let Some(slot) = self.inputs.get_mut(key) {
+            slot.as_number = true;
+            slot.number_min = node.min;
+            slot.number_max = node.max;
+            slot.number_step = node.step;
+            let need = !slot.number_stepped;
+            if need {
+                slot.number_stepped = true;
+            }
+            need
+        } else {
+            false
+        };
+        if need_step {
+            let key_owned = key.to_string();
+            cx.subscribe_in(
+                &state,
+                window,
+                move |this, input, event: &NumberInputEvent, window, cx| {
+                    let NumberInputEvent::Step(action) = event;
+                    let Some(slot) = this.inputs.get(&key_owned) else {
+                        return;
+                    };
+                    let mut bounds = Node::default();
+                    bounds.min = slot.number_min;
+                    bounds.max = slot.number_max;
+                    bounds.step = slot.number_step;
+                    let current = extra::number_from_input(&input.read(cx).value()).unwrap_or(0.0);
+                    let next = extra::apply_number_step(
+                        current,
+                        matches!(action, StepAction::Increment),
+                        &bounds,
+                    );
+                    input.update(cx, |state, cx| {
+                        state.set_value(next.to_string(), window, cx);
+                    });
+                },
+            )
+            .detach();
+        }
+        state
+    }
+
+    fn render_otp_input(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.otp_slot(key, node, window, cx);
+        let mut input =
+            OtpInput::new(&state).with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if node.disabled {
+            input = input.disabled(true);
+        }
+        style_host(input, node, cx)
+    }
+
+    fn otp_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<OtpState> {
+        self.used_otps.insert(key.to_string());
+        let length = extra::otp_length(node);
+        let wanted = node
+            .string_value()
+            .or_else(|| node.text.clone())
+            .unwrap_or_default();
+        if let Some(slot) = self.otps.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_blur = node.on_blur.clone();
+            let state = slot.state.clone();
+            if slot.length == length {
+                let focused = state.read(cx).focus_handle(cx).is_focused(window);
+                let current = state.read(cx).value().to_string();
+                if current != wanted && !focused {
+                    state.update(cx, |otp, cx| otp.set_value(wanted, window, cx));
+                }
+                state.update(cx, |otp, cx| otp.set_masked(node.masked, window, cx));
+                return state;
+            }
+        }
+        let masked = node.masked;
+        let default = wanted.clone();
+        let state = cx.new(|cx| {
+            OtpState::new(length, window, cx)
+                .default_value(default)
+                .masked(masked)
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(
+            &state,
+            move |this, otp, event: &InputEvent, cx| match event {
+                InputEvent::Change => {
+                    if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_change.clone()) {
+                        let value = otp.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                InputEvent::Blur => {
+                    if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_blur.clone()) {
+                        let value = otp.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        self.otps.insert(
+            key.to_string(),
+            OtpSlot {
+                state: state.clone(),
+                length,
+                on_change: node.on_change.clone(),
+                on_blur: node.on_blur.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_color_picker(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.color_slot(key, node, window, cx);
+        let mut picker = ColorPicker::new(&state);
+        if let Some(label) = node.text.clone().or(node.title.clone()) {
+            picker = picker.label(label);
+        }
+        apply_style(
+            picker.with_size(mapping::parse_scale(node.control_size.as_deref())),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn color_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ColorPickerState> {
+        self.used_colors.insert(key.to_string());
+        let wanted = node
+            .string_value()
+            .or_else(|| node.text.clone())
+            .and_then(|s| extra::parse_hex_color(&s));
+        if let Some(slot) = self.colors.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            let state = slot.state.clone();
+            if let Some(color) = wanted {
+                let current = state.read(cx).value();
+                let same =
+                    current.map(extra::format_hex_color) == Some(extra::format_hex_color(color));
+                if !same {
+                    state.update(cx, |picker, cx| picker.set_value(color, window, cx));
+                }
+            }
+            return state;
+        }
+        let state = cx.new(|cx| {
+            let mut picker = ColorPickerState::new(window, cx);
+            if let Some(color) = wanted {
+                picker = picker.default_value(color);
+            }
+            picker
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(&state, move |this, _, event: &ColorPickerEvent, _cx| {
+            let ColorPickerEvent::Change(color) = event;
+            if let Some(id) = this
+                .colors
+                .get(&key_owned)
+                .and_then(|s| s.on_change.clone())
+            {
+                let value = color.map(extra::format_hex_color);
+                this.emit_value(id, json!(value));
+            }
+        })
+        .detach();
+        self.colors.insert(
+            key.to_string(),
+            ColorSlot {
+                state: state.clone(),
+                on_change: node.on_change.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_date_picker(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.date_slot(key, node, window, cx);
+        let mut picker = DatePicker::new(&state).cleanable(true);
+        if let Some(placeholder) = node.placeholder.clone() {
+            picker = picker.placeholder(placeholder);
+        }
+        if node.disabled {
+            picker = picker.disabled(true);
+        }
+        apply_style(
+            picker.with_size(mapping::parse_scale(node.control_size.as_deref())),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn date_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<DatePickerState> {
+        self.used_dates.insert(key.to_string());
+        let range = node.range || node.multiple;
+        let wanted = extra::date_from_value(&node.value, range);
+        if let Some(slot) = self.dates.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            let state = slot.state.clone();
+            if slot.range == range {
+                let current = state.read(cx).date();
+                if current != wanted {
+                    state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
+                }
+                return state;
+            }
+        }
+        let state = cx.new(|cx| {
+            let mut picker = if range {
+                DatePickerState::range(window, cx)
+            } else {
+                DatePickerState::new(window, cx)
+            };
+            picker = picker.date_format("%Y-%m-%d");
+            picker
+        });
+        state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
+        let key_owned = key.to_string();
+        cx.subscribe(&state, move |this, _, event: &DatePickerEvent, _cx| {
+            let DatePickerEvent::Change(date) = event;
+            if let Some(id) = this.dates.get(&key_owned).and_then(|s| s.on_change.clone()) {
+                this.emit_value(id, extra::date_to_value(*date));
+            }
+        })
+        .detach();
+        self.dates.insert(
+            key.to_string(),
+            DateSlot {
+                state: state.clone(),
+                range,
+                on_change: node.on_change.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_editor(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.editor_slot(key, node, window, cx);
+        viewport_sized(Input::new(&state), node, 200.0, cx)
+    }
+
+    fn editor_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        self.used_editors.insert(key.to_string());
+        let language = extra::editor_language(node);
+        let wanted = node.text.clone().unwrap_or_default();
+        if let Some(slot) = self.editors.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_submit = node.on_submit.clone();
+            slot.on_blur = node.on_blur.clone();
+            slot.on_escape = node.on_escape.clone();
+            let state = slot.state.clone();
+            let focused = state.read(cx).focus_handle(cx).is_focused(window);
+            let current = state.read(cx).value().to_string();
+            if current != wanted && !focused {
+                state.update(cx, |input, cx| input.set_value(wanted, window, cx));
+            }
+            let lang = language.clone();
+            state.update(cx, |input, cx| input.set_highlighter(lang, cx));
+            return state;
+        }
+        let placeholder = node.placeholder.clone().unwrap_or_default();
+        let state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor(language)
+                .placeholder(placeholder)
+                .default_value(wanted)
+                .rows(12)
+        });
+        self.editors.insert(
+            key.to_string(),
+            InputSlot {
+                state: state.clone(),
+                on_change: node.on_change.clone(),
+                on_submit: node.on_submit.clone(),
+                on_blur: node.on_blur.clone(),
+                on_escape: node.on_escape.clone(),
+                wait_for_seq: None,
+                submitted: None,
+                as_number: false,
+                number_min: None,
+                number_max: None,
+                number_step: None,
+                number_stepped: false,
+            },
+        );
+        let key_owned = key.to_string();
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, input, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    if let Some(id) = this
+                        .editors
+                        .get(&key_owned)
+                        .and_then(|s| s.on_change.clone())
+                    {
+                        let value = input.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                InputEvent::Blur => {
+                    if let Some(id) = this.editors.get(&key_owned).and_then(|s| s.on_blur.clone()) {
+                        let value = input.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        state
+    }
+
+    fn render_virtual_list(
+        &mut self,
+        node: &Node,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_vlists.insert(key.to_string());
+        let view = extra::VirtualListView::from_node(node, self.cmd_tx.clone());
+        if let Some(entity) = self.vlists.get(key) {
+            entity.update(cx, |list, cx| {
+                *list = view;
+                cx.notify();
+            });
+            return viewport_sized(self.vlists[key].clone(), node, 200.0, cx);
+        }
+        let entity = cx.new(|_| view);
+        self.vlists.insert(key.to_string(), entity.clone());
+        viewport_sized(entity, node, 200.0, cx)
+    }
+
+    fn render_sidebar(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+        let collapsed = node.collapsed;
+        let selected = node.string_value();
+        let cmd_tx = self.cmd_tx.clone();
+        let on_change = node.on_change.clone();
+        let items: Vec<SidebarMenuItem> = node
+            .collection()
+            .iter()
+            .map(|item| {
+                let id = item.id_or_label();
+                let mut row = SidebarMenuItem::new(item.label_or_id())
+                    .active(selected.as_deref() == Some(id.as_str()))
+                    .collapsed(collapsed);
+                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                    row = row.icon(icon);
+                }
+                let cmd_tx = cmd_tx.clone();
+                let on_change = on_change.clone();
+                if item.disabled {
+                    row
+                } else {
+                    row.on_click(move |_, _, _| {
+                        if let Some(callback) = on_change.clone() {
+                            protocol::send_callbacks(
+                                &cmd_tx,
+                                vec![protocol::CallbackCall::with_value(
+                                    callback,
+                                    json!(id.clone()),
+                                )],
+                            );
+                        }
+                    })
+                }
+            })
+            .collect();
+        let mut sidebar = match extra::parse_sidebar_side(node) {
+            gpui_component::Side::Right => Sidebar::right(),
+            _ => Sidebar::left(),
+        };
+        sidebar = sidebar
+            .collapsed(collapsed)
+            .child(SidebarMenu::new().children(items));
+        if let Some(title) = node.title.clone() {
+            sidebar = sidebar.header(div().px_2().py_1().child(title));
+        }
+        viewport_sized(sidebar, node, 280.0, cx)
+    }
+
+    fn render_dock(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_docks.insert(key.to_string());
+        let fingerprint = node
+            .collection()
+            .iter()
+            .map(|item| format!("{}:{}", extra::dock_side(item), item.id_or_label()))
+            .collect::<Vec<_>>()
+            .join("|");
+        if let Some(slot) = self.docks.get_mut(key) {
+            if slot.fingerprint == fingerprint {
+                for item in node.collection() {
+                    let id = item.id_or_label();
+                    if let Some(panel) = slot.panels.get(&id) {
+                        let content =
+                            item.content
+                                .as_ref()
+                                .map(|n| *n.clone())
+                                .unwrap_or_else(|| Node {
+                                    kind: "label".into(),
+                                    text: item.label.clone(),
+                                    ..Node::default()
+                                });
+                        panel.update(cx, |p, cx| {
+                            p.title = item.label_or_id().into();
+                            *p.live.borrow_mut() = content;
+                            cx.notify();
+                        });
+                    }
+                }
+                return viewport_sized(slot.area.clone(), node, 360.0, cx);
+            }
+        }
+        let area =
+            cx.new(|cx| DockArea::new(SharedString::from(key.to_string()), None, window, cx));
+        let weak = area.downgrade();
+        let mut panels: HashMap<String, Entity<extra::CljPanel>> = HashMap::new();
+        let mut by_side: HashMap<&str, Vec<std::sync::Arc<dyn gpui_component::dock::PanelView>>> =
+            HashMap::new();
+        for (ix, item) in node.collection().iter().enumerate() {
+            let id = item.id_or_label();
+            let content = item
+                .content
+                .as_ref()
+                .map(|n| *n.clone())
+                .unwrap_or_else(|| Node {
+                    kind: "label".into(),
+                    text: item.label.clone(),
+                    ..Node::default()
+                });
+            let live = Rc::new(RefCell::new(content));
+            let path = format!("{key}/panel/{ix}");
+            let title = item.label_or_id();
+            let cmd_tx = self.cmd_tx.clone();
+            let panel = cx.new(|cx| {
+                extra::CljPanel::new(title.clone(), live, path, cmd_tx, cx.focus_handle())
+            });
+            let side = extra::dock_side(item);
+            by_side
+                .entry(side)
+                .or_default()
+                .push(std::sync::Arc::new(panel.clone()));
+            panels.insert(id, panel);
+        }
+        area.update(cx, |dock, cx| {
+            if let Some(center) = by_side.remove("center") {
+                if !center.is_empty() {
+                    dock.set_center(DockItem::tabs(center, &weak, window, cx), window, cx);
+                }
+            }
+            if let Some(left) = by_side.remove("left") {
+                if !left.is_empty() {
+                    dock.set_left_dock(
+                        DockItem::tabs(left, &weak, window, cx),
+                        node.width.map(px),
+                        true,
+                        window,
+                        cx,
+                    );
+                }
+            }
+            if let Some(right) = by_side.remove("right") {
+                if !right.is_empty() {
+                    dock.set_right_dock(
+                        DockItem::tabs(right, &weak, window, cx),
+                        Some(px(240.)),
+                        true,
+                        window,
+                        cx,
+                    );
+                }
+            }
+            if let Some(bottom) = by_side.remove("bottom") {
+                if !bottom.is_empty() {
+                    dock.set_bottom_dock(
+                        DockItem::tabs(bottom, &weak, window, cx),
+                        Some(px(160.)),
+                        true,
+                        window,
+                        cx,
+                    );
+                }
+            }
+        });
+        self.docks.insert(
+            key.to_string(),
+            DockSlot {
+                area: area.clone(),
+                fingerprint,
+                panels,
+            },
+        );
+        viewport_sized(area, node, 360.0, cx)
+    }
+
+    fn render_resizable(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let vertical = mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical;
+        let state = self
+            .resizables
+            .entry(key.to_string())
+            .or_insert_with(|| cx.new(|_| ResizableState::default()))
+            .clone();
+        if let Some(id) = node.on_change.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            let _ = id;
+            let _ = cmd_tx;
+        }
+        let mut group = if vertical {
+            v_resizable(eid(key))
+        } else {
+            h_resizable(eid(key))
+        };
+        group = group.with_state(&state);
+        if let Some(on_change) = node.on_change.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            group = group.on_resize(move |state, _, cx| {
+                let sizes: Vec<f32> = state
+                    .read(cx)
+                    .sizes()
+                    .iter()
+                    .map(|p| f32::from(*p))
+                    .collect();
+                protocol::send_callbacks(
+                    &cmd_tx,
+                    vec![protocol::CallbackCall::with_value(
+                        on_change.clone(),
+                        json!(sizes),
+                    )],
+                );
+            });
+        }
+        for (index, child) in node.children.iter().enumerate() {
+            let painted = self.render_node(child, &format!("{path}-{index}"), window, cx);
+            let mut panel = resizable_panel().child(painted);
+            if let Some(size) = child.width.or(child.height).or(child.size) {
+                panel = panel.size(px(size));
+            }
+            group = group.child(panel);
+        }
+        viewport_sized(group, node, 240.0, cx)
+    }
+
     fn render_scroll(
         &mut self,
         node: &Node,
@@ -1889,7 +2878,7 @@ impl RootView {
             .into_iter()
             .enumerate()
             .filter_map(|(index, child)| {
-                if child.kind == "dialog" {
+                if child.kind == "dialog" || child.kind == "sheet" || child.kind == "notification" {
                     None
                 } else {
                     Some(self.render_node(&child, &format!("{path}-{index}"), window, cx))
@@ -1944,6 +2933,12 @@ impl Render for RootView {
         self.used_lists.clear();
         self.used_tables.clear();
         self.used_trees.clear();
+        self.used_otps.clear();
+        self.used_colors.clear();
+        self.used_dates.clear();
+        self.used_editors.clear();
+        self.used_vlists.clear();
+        self.used_docks.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
 
@@ -1976,10 +2971,26 @@ impl Render for RootView {
         self.tables.retain(|key, _| used_tables.contains(key));
         let used_trees = std::mem::take(&mut self.used_trees);
         self.trees.retain(|key, _| used_trees.contains(key));
+        let used_otps = std::mem::take(&mut self.used_otps);
+        self.otps.retain(|key, _| used_otps.contains(key));
+        let used_colors = std::mem::take(&mut self.used_colors);
+        self.colors.retain(|key, _| used_colors.contains(key));
+        let used_dates = std::mem::take(&mut self.used_dates);
+        self.dates.retain(|key, _| used_dates.contains(key));
+        let used_editors = std::mem::take(&mut self.used_editors);
+        self.editors.retain(|key, _| used_editors.contains(key));
+        let used_vlists = std::mem::take(&mut self.used_vlists);
+        self.vlists.retain(|key, _| used_vlists.contains(key));
+        let used_docks = std::mem::take(&mut self.used_docks);
+        self.docks.retain(|key, _| used_docks.contains(key));
 
         self.sync_dialogs(window, cx);
+        self.sync_sheet(window, cx);
+        self.sync_notifications(window, cx);
 
         let dialog_layer = Root::render_dialog_layer(window, cx);
+        let sheet_layer = Root::render_sheet_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
 
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
@@ -2003,6 +3014,8 @@ impl Render for RootView {
             })
             // gpui-component 0.5.1 Root::render does not paint this layer.
             .children(dialog_layer)
+            .children(sheet_layer)
+            .children(notification_layer)
     }
 }
 

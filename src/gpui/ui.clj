@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  5)
+  6)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -213,6 +213,31 @@
   [opts xs]
   (with-id-callbacks opts xs [:on-change]))
 
+(defn- flatten-settings-fields
+  "Pages may be a flat field list or groups with nested `:items`."
+  [pages]
+  (mapcat
+   (fn [page]
+     (let [rows (or (and (map? page) (:items page)) [])]
+       (if (some #(and (map? %) (seq (:items %))) rows)
+         (mapcat #(or (:items %) []) rows)
+         rows)))
+   pages))
+
+(defn- wrap-settings-callback
+  "Restore original Clojure field ids from `{:id … :value …}` payloads."
+  [on-change pages]
+  (if (fn? on-change)
+    (let [fields (flatten-settings-fields pages)
+          id-map (option-id-map (concat pages fields))]
+      (fn [payload]
+        (let [wire (if (map? payload) (:id payload) payload)
+              value (if (map? payload) (:value payload) payload)]
+          (on-change {:id (resolve-option-id id-map wire) :value value}))))
+    on-change))
+
+(declare option-items)
+
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
 
@@ -234,7 +259,19 @@
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
         (ui-node? content) (assoc :content content)
         (and (some? content) (not (ui-node? content)))
-        (assoc :content (first (flatten-children [content])))))
+        (assoc :content (first (flatten-children [content])))
+        (contains? x :checked) (assoc :checked (boolean (:checked x)))
+        (some? (:height x)) (assoc :height (:height x))
+        (some? (:side x)) (assoc :side (if (keyword? (:side x)) (name (:side x)) (str (:side x))))
+        (some? (:variant x)) (assoc :variant (if (keyword? (:variant x))
+                                               (name (:variant x))
+                                               (str (:variant x))))
+        (some? (:min x)) (assoc :min (:min x))
+        (some? (:max x)) (assoc :max (:max x))
+        (some? (:step x)) (assoc :step (:step x))
+        (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
+        (seq (:items x)) (assoc :items (option-items (:items x)))
+        (and (contains? x :id) (contains? x :value)) (assoc :value value)))
     (keyword? x) {:id (wire-id x) :label (name x)}
     :else {:id (str x) :label (str x)}))
 
@@ -1066,3 +1103,290 @@
                     :value (wire-id selected)
                     :items (into [] (keep tree-item) raw)}
                    opts))))
+
+(defn sheet
+  "Slide-over sheet on the overlay layer. Controlled by `open?`.
+
+  gpui-component 0.5.1 holds one active sheet. The last open sheet in
+  tree order wins. `:placement` is `:left` / `:right` / `:top` /
+  `:bottom` (default `:right`). `:footer` is a child node. Overlay
+  click dismisses unless `:overlay-closable false`. `:on-close` is
+  0-arg; `:on-open-change` receives `false` on dismiss.
+
+  (ui/sheet open?
+    {:title \"Inspect\" :placement :right :on-close hide!}
+    (ui/label \"Details\"))"
+  [open?-or-opts & args]
+  (let [[open? opts children]
+        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
+          (let [[opts children] (leading-opts args)]
+            [open?-or-opts opts children])
+          (let [[opts children] (leading-opts (cons open?-or-opts args))]
+            [(or (:open? opts) (:open opts) false) opts children]))
+        footer (:footer opts)
+        opts (-> opts
+                 (dissoc :footer)
+                 rewrite-open
+                 apply-control-size)]
+    (cond-> (merge {:type :sheet
+                    :open (boolean open?)
+                    :children (flatten-children children)}
+                   opts
+                   {:open (boolean open?)})
+      (ui-node? footer) (assoc :footer footer)
+      (and (some? footer) (not (ui-node? footer)))
+      (assoc :footer (first (flatten-children [footer]))))))
+
+(defn notification
+  "Toast on the overlay stack. Presence in the tree shows it unless
+  `:open? false`. `:variant` is `:info` (default), `:success`,
+  `:warning`, or `:error`. `:autohide` defaults true. Unchanged
+  title/message/variant/autohide is not re-pushed (that would reset
+  the hide timer). Dismiss fires 0-arg `:on-close`. Click fires
+  0-arg `:on-click`.
+
+  (ui/notification {:variant :success :title \"Saved\" :message \"ok\"})"
+  ([message-or-opts]
+   (if (map? message-or-opts)
+     (let [opts (rewrite-open (apply-control-size message-or-opts))]
+       (merge {:type :notification} opts))
+     {:type :notification :message (str message-or-opts)}))
+  ([message opts]
+   (merge {:type :notification :message (str message)}
+          (rewrite-open (apply-control-size (or opts {}))))))
+
+(defn number-input
+  "Numeric field with step buttons. `on-change` receives a number.
+  `:min` / `:max` / `:step` clamp stepper clicks. Typed values emit
+  when they parse as a number.
+
+  (ui/number-input 42 {:min 0 :max 100 :step 1 :on-change set!})"
+  ([value]
+   {:type :number-input :value (or value 0) :text (str (or value 0))})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :number-input
+                    :value (or value 0)
+                    :text (str (or value 0))}
+                   on-change-or-opts)
+     {:type :number-input
+      :value (or value 0)
+      :text (str (or value 0))
+      :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :number-input
+                  :value (or value 0)
+                  :text (str (or value 0))
+                  :on-change on-change}
+                 opts)))
+
+(defn otp-input
+  "Fixed-length digit cells. `:on-change` fires when every cell is
+  filled (crate complete-only). `:count` defaults to 6 (clamped 1–12).
+  `:masked true` hides digits. `:on-blur` receives the current string.
+
+  (ui/otp-input code {:count 6 :masked true :on-change set!})"
+  ([value]
+   {:type :otp-input :value (str (or value "")) :text (str (or value ""))})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :otp-input
+                    :value (str (or value ""))
+                    :text (str (or value ""))}
+                   on-change-or-opts)
+     {:type :otp-input
+      :value (str (or value ""))
+      :text (str (or value ""))
+      :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :otp-input
+                  :value (str (or value ""))
+                  :text (str (or value ""))
+                  :on-change on-change}
+                 opts)))
+
+(defn color-picker
+  "Hex color (`\"#3366ff\"`). `on-change` receives a hex string or `nil`.
+
+  (ui/color-picker \"#3366ff\" {:on-change set!})"
+  ([value]
+   {:type :color-picker :value value})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :color-picker :value value} on-change-or-opts)
+     {:type :color-picker :value value :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :color-picker :value value :on-change on-change}
+                 opts)))
+
+(defn date-picker
+  "ISO date `\"YYYY-MM-DD\"`. `:range true` (or `:multiple`) uses
+  `[start end]` (missing bounds are JSON `null`). `on-change` receives
+  that same JSON shape. Display format is `%Y-%m-%d`.
+
+  (ui/date-picker \"2026-09-02\" {:on-change set!})
+  (ui/date-picker [\"2026-01-01\" \"2026-01-31\"] {:range true})"
+  ([value]
+   {:type :date-picker :value value})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :date-picker :value value} on-change-or-opts)
+     {:type :date-picker :value value :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :date-picker :value value :on-change on-change}
+                 opts)))
+
+(defn editor
+  "Code highlighter input (`InputState::code_editor`). Not an LSP
+  editor. `:language` is a highlighter name (`\"rust\"`, `\"clojure\"`,
+  omitted is `\"text\"`). `on-change` receives the string.
+
+  (ui/editor src {:language \"rust\" :height 200 :on-change set!})"
+  ([value]
+   {:type :editor :text (str (or value ""))})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :editor :text (str (or value ""))} on-change-or-opts)
+     {:type :editor :text (str (or value "")) :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :editor :text (str (or value "")) :on-change on-change}
+                 opts)))
+
+(defn virtual-list
+  "Variable-height virtualized rows `{id, label, height?}`. Default
+  row height is 36px. `:selected` / `on-change` restore original ids.
+
+  (ui/virtual-list items {:selected id :on-change set! :height 200})"
+  ([items]
+   (virtual-list items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (-> (or opts {})
+                  rewrite-selected
+                  apply-control-size)
+         selected (:value opts)
+         opts (with-option-callback (dissoc opts :items :options :value) raw)]
+     (merge-widget {:type :virtual-list
+                    :value (wire-id selected)
+                    :items (option-items raw)}
+                   opts))))
+
+(defn chart
+  "Series chart. `kind` is `:line` (default), `:bar`, `:area`, or `:pie`.
+  Points are `{id, label, value}` maps (`value` is the y / slice).
+
+  (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})"
+  ([kind points]
+   (chart kind points nil))
+  ([kind points opts]
+   (merge-widget {:type :chart
+                  :variant (if (keyword? kind) (name kind) (str (or kind "line")))
+                  :items (option-items (or points []))}
+                 (or opts {}))))
+
+(defn line-chart
+  "See `chart` with `:line`."
+  ([points] (chart :line points nil))
+  ([points opts] (chart :line points opts)))
+
+(defn bar-chart
+  "See `chart` with `:bar`."
+  ([points] (chart :bar points nil))
+  ([points opts] (chart :bar points opts)))
+
+(defn area-chart
+  "See `chart` with `:area`."
+  ([points] (chart :area points nil))
+  ([points opts] (chart :area points opts)))
+
+(defn pie-chart
+  "See `chart` with `:pie`."
+  ([points] (chart :pie points nil))
+  ([points opts] (chart :pie points opts)))
+
+(defn markdown
+  "Selectable markdown `TextView`. `:height` or `:flex 1` makes it scroll.
+
+  (ui/markdown \"# Hello\")"
+  ([text]
+   {:type :markdown :text (str (or text ""))})
+  ([text opts]
+   (merge {:type :markdown :text (str (or text ""))} (or opts {}))))
+
+(defn html
+  "Selectable HTML `TextView`. Same layout notes as `markdown`.
+
+  (ui/html \"<p>Hi</p>\")"
+  ([text]
+   {:type :html :text (str (or text ""))})
+  ([text opts]
+   (merge {:type :html :text (str (or text ""))} (or opts {}))))
+
+(defn sidebar
+  "App sidebar of `{id, label, icon?}` rows. `:side` is `:left` (default)
+  or `:right`. `:collapsed` shrinks chrome. `:selected` / `on-change`
+  restore original ids. `:title` is a header string.
+
+  (ui/sidebar items {:selected id :side :left :on-change set!})"
+  ([items]
+   (sidebar items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (-> (or opts {})
+                  (dissoc :items)
+                  rewrite-selected
+                  apply-control-size)
+         selected (:value opts)
+         opts (with-option-callback (dissoc opts :value) raw)]
+     (merge-widget {:type :sidebar
+                    :value (wire-id selected)
+                    :items (option-items raw)}
+                   opts))))
+
+(defn settings
+  "Settings pages. Each page is `{id, label, items}` where `items` are
+  fields or groups (`{:label \"Alerts\" :items [fields]}`). Field
+  `:variant` is `:switch`, `:checkbox`, `:number`, `:dropdown`, or
+  `:input` (inferred from `:checked` / nested `:items` / numeric
+  `:value`). `:on-change` receives `{:id field-id :value …}` with the
+  original Clojure field id.
+
+  (ui/settings pages {:on-change (fn [{:keys [id value]}])})"
+  ([pages]
+   (settings pages nil))
+  ([pages opts]
+   (let [raw (or pages [])
+         opts (or opts {})
+         opts (assoc opts :on-change (wrap-settings-callback (:on-change opts) raw))]
+     (merge-widget {:type :settings :items (option-items raw)}
+                   (dissoc opts :items :pages)))))
+
+(defn dock
+  "Dock area. Items are `{id, label, side, content}` maps. `:side` is
+  `:left`, `:right`, `:bottom`, or `:center` (default). Panel bodies
+  are the static overlay subset (label / button / stack / divider)
+  plus `markdown` and `chart` — not list/table/editor.
+
+  (ui/dock {:items [{:id :files :side :left :label \"Files\"
+                     :content (ui/markdown \"…\")}]})"
+  ([opts]
+   (let [opts (if (map? opts) opts {})
+         raw (or (:items opts) [])]
+     (merge-widget {:type :dock :items (option-items raw)}
+                   (dissoc opts :items)))))
+
+(defn resizable
+  "Split panes. `:orientation` is `:horizontal` (default) or
+  `:vertical`. Child `:width` / `:height` / `:size` is the initial
+  panel size in px. `:on-change` receives a vector of px sizes.
+
+  (ui/resizable {:orientation :horizontal :on-change (fn [sizes])}
+    child1 child2)"
+  [opts-or-child & children]
+  (let [[opts kids]
+        (if (and (map? opts-or-child) (not (ui-node? opts-or-child)))
+          [opts-or-child children]
+          [{} (cons opts-or-child children)])]
+    (merge-widget {:type :resizable
+                   :children (flatten-children kids)}
+                  (apply-control-size opts))))

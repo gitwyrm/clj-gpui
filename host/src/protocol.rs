@@ -2,7 +2,7 @@ use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub const PROTOCOL_VERSION: u64 = 5;
+pub const PROTOCOL_VERSION: u64 = 6;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -263,6 +263,24 @@ pub struct Item {
     /// Tree item expanded on first paint.
     #[serde(default)]
     pub expanded: bool,
+    /// Chart y / settings field / numeric cell. JSON number, string, or bool.
+    #[serde(default)]
+    pub value: Option<Value>,
+    /// Virtual-list row height in pixels.
+    #[serde(default)]
+    pub height: Option<f32>,
+    /// Dock panel side: `left`, `right`, `bottom`, `center`.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Settings field type (`switch`, `input`, `number`, `dropdown`).
+    #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub min: Option<f32>,
+    #[serde(default)]
+    pub max: Option<f32>,
+    #[serde(default)]
+    pub step: Option<f32>,
 }
 
 impl Item {
@@ -287,6 +305,24 @@ impl Item {
             || self.id.as_deref() == Some("-")
             || self.label.as_deref() == Some("-")
             || self.text.as_deref() == Some("-")
+    }
+
+    pub fn number_value(&self) -> Option<f32> {
+        match &self.value {
+            Some(Value::Number(n)) => n.as_f64().map(|n| n as f32),
+            Some(Value::String(s)) => s.parse().ok(),
+            _ => self.text.as_deref().and_then(|s| s.parse().ok()),
+        }
+    }
+
+    pub fn string_value(&self) -> Option<String> {
+        match &self.value {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            Some(Value::Bool(b)) => Some(b.to_string()),
+            Some(Value::Null) | None => self.text.clone(),
+            Some(other) => Some(other.to_string()),
+        }
     }
 }
 
@@ -442,6 +478,33 @@ pub struct Node {
     /// Popover / dropdown-menu trigger node (usually a `button`).
     #[serde(default)]
     pub trigger: Option<Box<Node>>,
+    /// Sheet slide edge: `left`, `right`, `top`, `bottom`.
+    #[serde(default)]
+    pub placement: Option<String>,
+    /// Notification auto-hide (default true).
+    #[serde(default)]
+    pub autohide: Option<bool>,
+    /// Code editor highlighter language (`rust`, `clojure`, …).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// OTP masked cells.
+    #[serde(default)]
+    pub masked: bool,
+    /// Sidebar collapsed chrome.
+    #[serde(default)]
+    pub collapsed: bool,
+    /// Sidebar / dock side: `left` or `right`.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Date display format, or markdown vs `html`.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Date picker range mode.
+    #[serde(default)]
+    pub range: bool,
+    /// Sheet footer node.
+    #[serde(default)]
+    pub footer: Option<Box<Node>>,
 }
 
 impl Node {
@@ -478,6 +541,10 @@ impl Node {
             || self.options.iter().any(|item| item_contains(item, needle))
             || self
                 .trigger
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .footer
                 .as_ref()
                 .is_some_and(|node| node.contains_text(needle))
     }
@@ -895,7 +962,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 5);
+        assert_eq!(PROTOCOL_VERSION, 6);
     }
 
     #[test]
@@ -1043,7 +1110,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 5);
+        assert_eq!(PROTOCOL_VERSION, 6);
     }
 
     #[test]
@@ -1063,5 +1130,47 @@ mod tests {
         .unwrap();
         assert!(node.items[1].is_separator());
         assert_eq!(node.items[2].items[0].id_or_label(), "paste");
+    }
+
+    #[test]
+    fn decodes_v6_product_nodes() {
+        let sheet: Node = serde_json::from_value(json!({
+            "type": "sheet",
+            "open": true,
+            "placement": "left",
+            "title": "Inspect",
+            "footer": {"type": "button", "text": "Done"}
+        }))
+        .unwrap();
+        assert_eq!(sheet.placement.as_deref(), Some("left"));
+        assert!(sheet.contains_text("Done"));
+
+        let note: Node = serde_json::from_value(json!({
+            "type": "notification",
+            "variant": "success",
+            "title": "Saved",
+            "message": "ok",
+            "autohide": false
+        }))
+        .unwrap();
+        assert_eq!(note.autohide, Some(false));
+        assert_eq!(note.message.as_deref(), Some("ok"));
+
+        let chart: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "line",
+            "items": [{"id": "a", "label": "A", "value": 3.5}]
+        }))
+        .unwrap();
+        assert_eq!(chart.items[0].number_value(), Some(3.5));
+
+        let date: Node = serde_json::from_value(json!({
+            "type": "date-picker",
+            "value": "2026-09-02",
+            "range": true
+        }))
+        .unwrap();
+        assert!(date.range);
+        assert_eq!(date.string_value().as_deref(), Some("2026-09-02"));
     }
 }
