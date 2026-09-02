@@ -196,10 +196,16 @@
      (when batch-shift?
        [(ui/button "shifted-a" (fn []))
         (ui/button "shifted-b" (fn []))])
-     (mapcat (fn [i]
-               [(ui/button (str "tbl-canary-" i "-a") (fn []))
-                (ui/button (str "tbl-canary-" i "-b") (fn []))])
-             (range (or table-shift 0)))
+     ;; Fixed-height slot so inserting 0-arg canaries shifts callback ids
+     ;; without moving the table (needed for a real click_count=2).
+     (ui/scroll
+      {:height 52}
+      (if (pos? (or table-shift 0))
+        (mapcat (fn [i]
+                  [(ui/button (str "tbl-canary-" i "-a") (fn []))
+                   (ui/button (str "tbl-canary-" i "-b") (fn []))])
+                (range table-shift))
+        (ui/label "tbl-canary slot")))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "List A→B" #(swap! !state assoc :list-sel :beta))

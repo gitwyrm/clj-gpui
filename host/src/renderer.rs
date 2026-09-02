@@ -1659,7 +1659,9 @@ impl RootView {
         if matches!(decision, SelectionSync::Keep) {
             return;
         }
-        // `set_selected_row` emits SelectRow; `clear_selection` does not.
+        // `set_selected_row` only queues `Effect::Emit`. Clearing suppress
+        // here would let the subscriber treat programmatic select as a
+        // user click. Drop the flag at the end of this effect cycle.
         if let Some(slot) = self.tables.get_mut(key) {
             slot.suppress_select = true;
         }
@@ -1668,9 +1670,15 @@ impl RootView {
             SelectionSync::Clear => table.clear_selection(cx),
             SelectionSync::Keep => {}
         });
-        if let Some(slot) = self.tables.get_mut(key) {
-            slot.suppress_select = false;
-        }
+        let key = key.to_string();
+        let entity = cx.entity();
+        cx.defer(move |app| {
+            let _ = entity.update(app, |this, _cx| {
+                if let Some(slot) = this.tables.get_mut(&key) {
+                    slot.suppress_select = false;
+                }
+            });
+        });
     }
 
     /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
