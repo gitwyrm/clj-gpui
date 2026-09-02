@@ -1684,12 +1684,18 @@ impl RootView {
         let items = node.items.clone();
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
-        apply_style(div().id(eid(&key)), node, cx)
-            .context_menu(move |menu, window, cx| {
-                overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
-            })
-            .children(self.render_children(node, path, window, cx))
-            .into_any_element()
+        // Flex column, not a block `div`. A `:flex 1` list/table/tree skips
+        // default viewport height and uses crate `size_full()`; inside a
+        // non-flex host that `flex_1` is ignored and the listing collapses.
+        let mut el = apply_style(v_flex().id(eid(&key)).min_h_0(), node, cx);
+        if context_menu_flex_fill(node) && node.flex.unwrap_or(0.0) < 1.0 {
+            el = el.flex_1().min_w_0().min_h_0();
+        }
+        el.context_menu(move |menu, window, cx| {
+            overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
+        })
+        .children(self.render_children(node, path, window, cx))
+        .into_any_element()
     }
 
     fn render_list(
@@ -3367,6 +3373,40 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
+/// Layout contract for `ui/context-menu`.
+///
+/// The host is a flex column (`v_flex` + `min_h_0`), never a block `div`.
+/// If the menu omitted `:flex`, leftover column height is inherited from any
+/// flex-fill child so wrapping a `:flex 1` table/list/tree does not drop it.
+fn context_menu_flex_fill(node: &Node) -> bool {
+    node.flex.unwrap_or(0.0) >= 1.0
+        || node
+            .children
+            .iter()
+            .any(|child| child.flex.unwrap_or(0.0) >= 1.0)
+}
+
+/// Testable layout contract for `ui/context-menu`.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+struct ContextMenuWrap {
+    flex_column: bool,
+    flex_fill: bool,
+    shrink_width: bool,
+    shrink_height: bool,
+}
+
+#[cfg(test)]
+fn context_menu_wrap(node: &Node) -> ContextMenuWrap {
+    let flex_fill = context_menu_flex_fill(node);
+    ContextMenuWrap {
+        flex_column: true,
+        flex_fill,
+        shrink_width: flex_fill,
+        shrink_height: true,
+    }
+}
+
 fn emit_list_change(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
     let Some(slot) = this.lists.get(key) else {
         return;
@@ -4168,7 +4208,7 @@ mod accordion_control_tests {
 
 #[cfg(test)]
 mod widget_wrap_tests {
-    use super::{content_wrap, outer_layout, viewport_wrap, Node};
+    use super::{content_wrap, context_menu_wrap, outer_layout, viewport_wrap, Node};
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {
@@ -4272,6 +4312,59 @@ mod widget_wrap_tests {
         assert!(wrap.flex_fill);
         assert!(wrap.fill_width);
         assert_eq!(wrap.default_height, None);
+    }
+
+    #[test]
+    fn context_menu_is_flex_column_not_block_div() {
+        let node = Node {
+            kind: "context-menu".into(),
+            children: vec![Node {
+                kind: "label".into(),
+                ..Node::default()
+            }],
+            ..Node::default()
+        };
+        let wrap = context_menu_wrap(&node);
+        assert!(wrap.flex_column);
+        assert!(!wrap.flex_fill);
+        assert!(!wrap.shrink_width);
+        assert!(wrap.shrink_height);
+    }
+
+    #[test]
+    fn context_menu_inherits_flex_from_table_child() {
+        let node = Node {
+            kind: "context-menu".into(),
+            children: vec![Node {
+                kind: "table".into(),
+                flex: Some(1.0),
+                ..Node::default()
+            }],
+            ..Node::default()
+        };
+        let wrap = context_menu_wrap(&node);
+        assert!(wrap.flex_column);
+        assert!(wrap.flex_fill);
+        assert!(wrap.shrink_width);
+        assert!(wrap.shrink_height);
+    }
+
+    #[test]
+    fn context_menu_own_flex_fills_without_flex_child() {
+        let node = Node {
+            kind: "context-menu".into(),
+            flex: Some(1.0),
+            children: vec![Node {
+                kind: "label".into(),
+                ..Node::default()
+            }],
+            ..Node::default()
+        };
+        let wrap = context_menu_wrap(&node);
+        assert!(wrap.flex_column);
+        assert!(wrap.flex_fill);
+        assert!(wrap.shrink_width);
+        assert!(wrap.shrink_height);
     }
 
     #[test]

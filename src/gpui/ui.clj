@@ -1022,9 +1022,13 @@
   Same selection batch as `dropdown-menu`: item `:on-click` then menu
   `:on-change`, one tree fetch.
 
+  The host is a flex column. Wrapping a `:flex 1` list/table/tree keeps
+  leftover height (a block wrapper would collapse those viewports). Put
+  `:flex 1` on the child, the menu, or both.
+
   (ui/context-menu [{:id :copy :label \"Copy\"} {:id :paste :label \"Paste\"}]
                    {:on-change handle!}
-                   (ui/label \"Right-click me\"))"
+                   (ui/table {:columns cols :rows rows :flex 1}))"
   ([items child]
    (context-menu items nil child))
   ([items opts child]

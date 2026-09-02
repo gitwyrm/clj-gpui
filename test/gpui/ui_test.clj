@@ -512,6 +512,14 @@
       (is (= :button (get-in drop [:trigger :type])))
       (is (= :context-menu (:type ctx)))
       (is (= :label (get-in ctx [:children 0 :type])))))
+  (testing "context-menu wraps a flex table"
+    (let [tbl (ui/table {:columns [{:id :n :label "N"}]
+                         :rows [{:id :a :cells ["A"]}]
+                         :flex 1})
+          ctx (ui/context-menu [{:id :copy :label "Copy"}] {:flex 1} tbl)]
+      (is (= 1 (:flex ctx)))
+      (is (= :table (get-in ctx [:children 0 :type])))
+      (is (= 1 (get-in ctx [:children 0 :flex])))))
   (testing "list selected alias and searchable"
     (let [n (ui/list [{:id :alpha :label "Alpha"} :beta]
                      {:selected :alpha :searchable true :height 180})]
