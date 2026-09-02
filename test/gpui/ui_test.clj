@@ -483,6 +483,9 @@
       (is (= "Delete?" (:title n)))
       (is (= :confirm (:variant n)))
       (is (= :label (get-in n [:children 0 :type])))))
+  (testing "overlay-closable passes through"
+    (let [n (ui/dialog true {:overlay-closable false} (ui/label "x"))]
+      (is (false? (:overlay-closable n)))))
   (testing "dialog map-first form"
     (let [n (ui/dialog {:open? true :title "Hi"} (ui/label "x"))]
       (is (true? (:open n)))

@@ -230,6 +230,10 @@ pub struct Node {
     pub on_confirm: Option<String>,
     #[serde(default, rename = "on-open-change")]
     pub on_open_change: Option<String>,
+    /// Dialog: click the dimmed overlay to dismiss. Default true.
+    /// Crate `confirm()` / `alert()` turn this off; the host restores the default.
+    #[serde(default, rename = "overlay-closable")]
+    pub overlay_closable: Option<bool>,
     /// Popover / dropdown-menu trigger node (usually a `button`).
     #[serde(default)]
     pub trigger: Option<Box<Node>>,
@@ -603,6 +607,7 @@ mod tests {
         assert_eq!(dialog.open, Some(true));
         assert_eq!(dialog.on_ok.as_deref(), Some("cb-2"));
         assert_eq!(dialog.on_cancel.as_deref(), Some("cb-3"));
+        assert_eq!(dialog.overlay_closable, None);
         assert!(dialog.contains_text("Undo?"));
 
         let popover: Node = serde_json::from_value(json!({

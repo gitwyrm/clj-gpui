@@ -250,11 +250,30 @@ pub fn configure_dialog(
         Some(name) if name == "alert" => dialog = dialog.alert(),
         _ => {}
     }
+    // confirm()/alert() set overlay_closable(false). Overlay dismiss is the
+    // default for Dialog::new and for this host unless Clojure opts out.
+    dialog = dialog.overlay_closable(overlay_closable(node));
     if let Some(width) = node.width {
         dialog = dialog.width(px(width));
     }
     dialog.extend(children);
     dialog
+}
+
+/// Click-outside (and Escape) dismiss. Omitted means true.
+pub fn overlay_closable(node: &Node) -> bool {
+    node.overlay_closable.unwrap_or(true)
+}
+
+/// Crate closed the dialog (overlay / Escape / X) while Clojure still has
+/// `:open? true`. Re-opening on the next `RootView::render` would make
+/// dismiss look like a no-op until the callback tree arrives.
+pub fn crate_dismiss_waiting_for_clojure(
+    wanted_keys: &[String],
+    dialog_keys: &[String],
+    crate_open: bool,
+) -> bool {
+    !crate_open && !wanted_keys.is_empty() && wanted_keys == dialog_keys
 }
 
 pub fn bind_dialog_callbacks(
@@ -363,5 +382,22 @@ mod tests {
         assert!(sep.is_separator());
         assert!(dash.is_separator());
         assert!(!copy.is_separator());
+    }
+
+    #[test]
+    fn overlay_closable_defaults_true_and_can_opt_out() {
+        let omitted = node(json!({"type": "dialog", "open": true}));
+        let off = node(json!({"type": "dialog", "open": true, "overlay-closable": false}));
+        assert!(overlay_closable(&omitted));
+        assert!(!overlay_closable(&off));
+    }
+
+    #[test]
+    fn crate_dismiss_waits_when_keys_still_match() {
+        let keys = vec!["ask".to_string()];
+        assert!(crate_dismiss_waiting_for_clojure(&keys, &keys, false));
+        assert!(!crate_dismiss_waiting_for_clojure(&keys, &[], false));
+        assert!(!crate_dismiss_waiting_for_clojure(&keys, &keys, true));
+        assert!(!crate_dismiss_waiting_for_clojure(&[], &keys, false));
     }
 }

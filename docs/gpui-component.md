@@ -57,7 +57,7 @@ Classification:
 | `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
 | `table::Table` / `DataTable` | `ui/table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate` |
 | `tree::Tree` | `ui/tree` | ✅ | C | Nested `{id, label, items}`; `:expanded` is initial. Click sends original id. Expand state is host-local until item identity changes |
-| `dialog::Dialog` | `ui/dialog` | ✅ | C | Controlled `:open?`; overlay via `WindowExt`. `:variant` `:confirm` / `:alert` |
+| `dialog::Dialog` | `ui/dialog` | ✅ | C | Controlled `:open?`; overlay via `WindowExt`. `:variant` `:confirm` / `:alert`. Overlay click dismisses unless `:overlay-closable false` |
 | `popover::Popover` | `ui/popover` | ✅ | C | Controlled `:open?`; trigger must be a button; content rebuilt from child nodes |
 | `menu::PopupMenu` / context / dropdown | `ui/dropdown-menu`, `ui/context-menu` | ✅ | C | `{id, label}` items, nested `:items` submenus, `-` separators. No GPUI Action required |
 | `VirtualList` | — | ❌ | C | Measured variable-height lists |
@@ -93,7 +93,7 @@ Sheet, notification, and the OS app menu bar still need overlay-stack work. Virt
 
 ### Overlay family (implemented for dialog, popover, menus)
 
-gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder uses a cloned Clojure node (no `RootView` read/update) because the layer is painted during `RootView::render`. Title/body therefore update on the next open, not live while the crate dialog is already showing. `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg and then the crate closes. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus.
+gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder uses a cloned Clojure node (no `RootView` read/update) because the layer is painted during `RootView::render`. Title/body therefore update on the next open, not live while the crate dialog is already showing. `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg and then the crate closes. Clicking the overlay dismisses the dialog (`:overlay-closable` defaults true even for `:variant :confirm`, which the crate otherwise locks). After a crate-side dismiss the host does not re-open until Clojure’s tree drops `:open?`. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus.
 
 Sheet and notification are still deferred.
 

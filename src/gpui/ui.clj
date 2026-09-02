@@ -858,9 +858,11 @@
   "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
 
   Not painted inline — the host opens it through gpui-component `Root`.
-  `:on-close` is 0-arg (also after OK/Cancel). `:on-ok` / `:on-cancel` are
+  `:on-close` is 0-arg (also after OK/Cancel/overlay). `:on-ok` / `:on-cancel` are
   0-arg. `:variant` is `:confirm` (OK+Cancel), `:alert` (OK only), or
-  omitted (content + close button). `:on-open-change` receives `false`
+  omitted (content + close button). Clicking the dimmed overlay dismisses
+  the dialog (crate `confirm`/`alert` turn that off; this host keeps it on
+  unless `:overlay-closable false`). `:on-open-change` receives `false`
   when the crate dismisses the dialog.
 
   (ui/dialog open?

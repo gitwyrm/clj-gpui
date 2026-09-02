@@ -1779,7 +1779,9 @@ impl RootView {
         let wanted_keys = overlay::dialog_keys(&wanted);
         let crate_open = window.has_active_dialog(cx);
         let keys_changed = wanted_keys != self.dialog_keys;
-        let should_open = !wanted_keys.is_empty() && !crate_open;
+        let waiting =
+            overlay::crate_dismiss_waiting_for_clojure(&wanted_keys, &self.dialog_keys, crate_open);
+        let should_open = !wanted_keys.is_empty() && !crate_open && !waiting;
         let should_close = wanted_keys.is_empty() && crate_open;
         self.dialogs = wanted;
         if self.dialog_pending {

@@ -155,6 +155,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `outline` | bool | `tag` |
 | `searchable` | bool | `select`: show a filter field; host uses `SearchableVec` so typing actually filters. `list`: filter rows by label |
 | `open` | bool | `dialog`, `popover`: controlled open (`:open?` in Clojure). Omitted/false dialogs are not shown |
+| `overlay-closable` | bool | `dialog`: click the dimmed overlay to dismiss (default true). Crate `confirm()`/`alert()` turn this off; the host restores the default unless this is `false` |
 | `multiple` | bool | `accordion` |
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
@@ -184,7 +185,7 @@ A `scroll` node is a vertical overflow viewport. Without `height`, the host give
 
 `list`, `table`, and `tree` fill leftover height only when `:flex 1` (or an explicit `:height`) is set; otherwise the host gives them a ~200px viewport so crate `size_full()` does not collapse or steal the column.
 
-gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder reads cloned Clojure nodes (no `RootView::update`) because the layer is painted during `RootView::render`. `popover` is in-tree; its trigger must be a button (`Selectable`). Menu item clicks send the original Clojure id.
+gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder reads cloned Clojure nodes (no `RootView::update`) because the layer is painted during `RootView::render`. Overlay click dismisses the dialog by default even when `:variant` is `confirm` (crate `confirm()` turns that off; `:overlay-closable false` restores the crate lock). After overlay/Escape dismiss the host does not re-open until Clojure’s tree drops `open`. `popover` is in-tree; its trigger must be a button (`Selectable`). Menu item clicks send the original Clojure id.
 
 `spinner`, `badge`, and `clipboard` are not gpui-component `Styled` types. The host wraps them in a `div` that receives the usual layout and visual keys (`width`, `height`, `size`, `flex`, `padding`, `bg`, …). `accordion` and `description-list` use the same outer-owns-layout pattern, but the wrapper defaults to `flex-none` and full width so crate `size_full()` cannot steal leftover column height. Inner chrome is not styled twice.
 
