@@ -18,7 +18,7 @@ use gpui_component::{
 };
 use serde_json::json;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -83,12 +83,161 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
     live.borrow().iter().find(|spec| spec.key == key).cloned()
 }
 
+/// Retained native overlay handlers carry identity/intent, never callback ids.
+/// Resolve against the installed tree immediately before sending the existing
+/// Callback/CallbackBatch command. An overlay round-trip must finish before
+/// another overlay action can use the replacement callback registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OverlayAction {
+    DialogClose { key: String, ok: Option<bool> },
+    PopoverOpen { key: String, open: bool },
+    MenuSelect { key: String, item_path: Vec<String> },
+}
+
+pub type OverlayEmitter = Rc<dyn Fn(OverlayAction, &mut App)>;
+
+#[derive(Default)]
+pub struct OverlayCallbacks {
+    pending: VecDeque<OverlayAction>,
+    wait_for_seq: Option<u64>,
+}
+
+impl OverlayCallbacks {
+    pub fn push(&mut self, action: OverlayAction) {
+        self.pending.push_back(action);
+    }
+
+    pub fn next(&mut self, tree: &Node) -> Option<Vec<protocol::CallbackCall>> {
+        if self.wait_for_seq.is_some() {
+            return None;
+        }
+        while let Some(action) = self.pending.pop_front() {
+            let calls = action.resolve(tree);
+            if !calls.is_empty() {
+                return Some(calls);
+            }
+        }
+        None
+    }
+
+    pub fn sent(&mut self, seq: u64) {
+        self.wait_for_seq = Some(seq);
+    }
+
+    pub fn tree_installed(&mut self, seq: Option<u64>) {
+        // An unrelated render must not release an action whose own batch
+        // (and registry replacement) is still queued behind that render.
+        if seq.is_some() && seq == self.wait_for_seq {
+            self.wait_for_seq = None;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.wait_for_seq = None;
+    }
+}
+
+impl OverlayAction {
+    fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
+        let key = match self {
+            Self::DialogClose { key, .. }
+            | Self::PopoverOpen { key, .. }
+            | Self::MenuSelect { key, .. } => key,
+        };
+        let mut found = None;
+        walk_nodes(tree, "root", &mut |node, path| {
+            let kind_matches = match self {
+                Self::DialogClose { .. } => node.kind == "dialog",
+                Self::PopoverOpen { .. } => node.kind == "popover",
+                Self::MenuSelect { .. } => {
+                    node.kind == "dropdown-menu" || node.kind == "context-menu"
+                }
+            };
+            if found.is_none() && kind_matches && node_key(node, path) == *key {
+                found = Some(node.clone());
+            }
+        });
+        let Some(node) = found else { return Vec::new() };
+        match self {
+            Self::DialogClose { ok, .. } if node.open.unwrap_or(false) => {
+                let first = match ok {
+                    Some(true) => node.on_ok,
+                    Some(false) => node.on_cancel,
+                    None => None,
+                };
+                protocol::dialog_action_calls(first, node.on_close, node.on_open_change)
+            }
+            Self::PopoverOpen { open, .. } if node.open.unwrap_or(false) != *open => node
+                .on_open_change
+                .map(|id| vec![protocol::CallbackCall::with_value(id, json!(*open))])
+                .unwrap_or_default(),
+            Self::MenuSelect { item_path, .. } => {
+                let mut items = node.items.as_slice();
+                let mut selected = None;
+                for identity in item_path {
+                    let Some(item) = items.iter().find(|item| item.id_or_label() == *identity)
+                    else {
+                        return Vec::new();
+                    };
+                    if item.disabled || item.is_separator() {
+                        return Vec::new();
+                    }
+                    selected = Some(item);
+                    items = &item.items;
+                }
+                let Some(item) = selected.filter(|item| item.items.is_empty()) else {
+                    return Vec::new();
+                };
+                protocol::menu_selection_calls(
+                    item.on_click.clone(),
+                    node.on_change,
+                    item.id_or_label(),
+                )
+            }
+            // Removed/closed overlays and controlled-state echoes do not
+            // represent a new semantic action and must not invoke anything.
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// One instance per native dialog opening, shared across live-spec repaints.
+/// A second native mouse-down can reach the removed dialog before repaint.
+#[derive(Default)]
+pub struct DialogClose {
+    ok: Option<bool>,
+    dismissed: bool,
+}
+
+impl DialogClose {
+    pub fn action(&mut self, ok: bool) -> bool {
+        if self.dismissed {
+            return false;
+        }
+        self.ok = Some(ok);
+        true
+    }
+
+    pub fn take(&mut self, key: &str) -> Option<OverlayAction> {
+        if self.dismissed {
+            return None;
+        }
+        self.dismissed = true;
+        Some(OverlayAction::DialogClose {
+            key: key.into(),
+            ok: self.ok,
+        })
+    }
+}
+
 /// Fill a popup menu from Clojure `{id, label}` rows (nested `:items` are submenus).
 pub fn fill_popup_menu(
     mut menu: PopupMenu,
     items: &[Item],
-    cmd_tx: mpsc::Sender<Cmd>,
-    on_change: Option<String>,
+    key: &str,
+    item_path: &[String],
+    emit: OverlayEmitter,
     window: &mut Window,
     cx: &mut App,
 ) -> PopupMenu {
@@ -99,15 +248,17 @@ pub fn fill_popup_menu(
         }
         if !item.items.is_empty() {
             let nested = item.items.clone();
-            let cmd_tx = cmd_tx.clone();
-            let on_change = on_change.clone();
+            let emit = emit.clone();
+            let key = key.to_string();
+            let mut item_path = item_path.to_vec();
+            item_path.push(item.id_or_label());
             let label = item.label_or_id();
             let mut entry = PopupMenuItem::submenu(
                 label,
                 PopupMenu::build(window, cx, {
                     let nested = nested.clone();
                     move |menu, window, cx| {
-                        fill_popup_menu(menu, &nested, cmd_tx, on_change, window, cx)
+                        fill_popup_menu(menu, &nested, &key, &item_path, emit, window, cx)
                     }
                 }),
             );
@@ -132,13 +283,17 @@ pub fn fill_popup_menu(
         if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
             entry = entry.icon(icon);
         }
-        let cmd_tx = cmd_tx.clone();
-        let on_change = on_change.clone();
-        let item_click = item.on_click.clone();
-        entry = entry.on_click(move |_, _, _| {
-            protocol::send_callbacks(
-                &cmd_tx,
-                protocol::menu_selection_calls(item_click.clone(), on_change.clone(), id.clone()),
+        let emit = emit.clone();
+        let key = key.to_string();
+        let mut item_path = item_path.to_vec();
+        item_path.push(id);
+        entry = entry.on_click(move |_, _, cx| {
+            emit(
+                OverlayAction::MenuSelect {
+                    key: key.clone(),
+                    item_path: item_path.clone(),
+                },
+                cx,
             );
         });
         menu = menu.item(entry);
@@ -280,51 +435,26 @@ pub fn crate_dismiss_waiting_for_clojure(
 /// * OK: `on_ok` (false keeps the dialog open), then `on_close`
 /// * Cancel, Escape, close button, overlay click: `on_cancel`, then `on_close`
 ///
-/// Those closures run synchronously for one user action. This host buffers
-/// their callback ids and sends **one** batch from `on_close` so `:on-ok`
-/// cannot render and rewire `:on-close`. Then `:on-open-change false`.
+/// Those closures run synchronously for one user action. Record the action
+/// and emit once from `on_close`; its current ids form one CallbackBatch.
 pub fn bind_dialog_callbacks(
     dialog: gpui_component::dialog::Dialog,
-    node: &Node,
-    cmd_tx: mpsc::Sender<Cmd>,
+    key: String,
+    emit: OverlayEmitter,
+    close: Rc<RefCell<DialogClose>>,
 ) -> gpui_component::dialog::Dialog {
-    let on_ok = node.on_ok.clone();
-    let on_cancel = node.on_cancel.clone();
-    let on_close = node.on_close.clone();
-    let on_open_change = node.on_open_change.clone();
-    let pending = Rc::new(RefCell::new(Vec::<protocol::CallbackCall>::new()));
     dialog
         .on_ok({
-            let pending = pending.clone();
-            move |_, _, _| {
-                if let Some(id) = on_ok.clone() {
-                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
-                }
-                true
-            }
+            let close = close.clone();
+            move |_, _, _| close.borrow_mut().action(true)
         })
         .on_cancel({
-            let pending = pending.clone();
-            move |_, _, _| {
-                if let Some(id) = on_cancel.clone() {
-                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
-                }
-                true
-            }
+            let close = close.clone();
+            move |_, _, _| close.borrow_mut().action(false)
         })
-        .on_close({
-            let pending = pending.clone();
-            move |_, _, _| {
-                if let Some(id) = on_close.clone() {
-                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
-                }
-                if let Some(id) = on_open_change.clone() {
-                    pending
-                        .borrow_mut()
-                        .push(protocol::CallbackCall::with_value(id, json!(false)));
-                }
-                let calls = pending.replace(Vec::new());
-                protocol::send_callbacks(&cmd_tx, calls);
+        .on_close(move |_, _, cx| {
+            if let Some(action) = close.borrow_mut().take(&key) {
+                emit(action, cx);
             }
         })
 }

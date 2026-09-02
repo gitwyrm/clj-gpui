@@ -442,3 +442,7 @@ pub fn protocol_test() -> Result<()> {
     println!("[host] protocol test passed");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "overlay_regression_tests.rs"]
+mod overlay_regression_tests;

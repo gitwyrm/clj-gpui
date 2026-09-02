@@ -284,6 +284,7 @@ pub struct RootView {
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_keys: Vec<String>,
     dialog_pending: bool,
+    overlay_callbacks: overlay::OverlayCallbacks,
     sheet: Option<overlay::SheetSpec>,
     sheet_live: Rc<RefCell<Option<overlay::SheetSpec>>>,
     sheet_key: Option<String>,
@@ -350,6 +351,8 @@ impl RootView {
                             catalog::install_clojure_sets(themes);
                             view.tree = Some(tree);
                             view.tree_seq = seq;
+                            view.overlay_callbacks.tree_installed(seq);
+                            view.flush_overlay_callbacks();
                             view.error = None;
                             view.status = format!(
                                 "nREPL 127.0.0.1:{} · live · hot reload on",
@@ -357,6 +360,7 @@ impl RootView {
                             );
                         }
                         HostEvent::Error(err) => {
+                            view.overlay_callbacks.clear();
                             for slot in view.inputs.values_mut() {
                                 slot.wait_for_seq = None;
                                 slot.submitted = None;
@@ -407,6 +411,7 @@ impl RootView {
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_keys: Vec::new(),
             dialog_pending: false,
+            overlay_callbacks: overlay::OverlayCallbacks::default(),
             sheet: None,
             sheet_live: Rc::new(RefCell::new(None)),
             sheet_key: None,
@@ -576,6 +581,31 @@ impl RootView {
             value: Some(value),
             seq: None,
         });
+    }
+
+    fn overlay_emitter(cx: &Context<Self>) -> overlay::OverlayEmitter {
+        let entity = cx.weak_entity();
+        Rc::new(move |action, cx| {
+            let _ = entity.update(cx, |this, _| {
+                this.overlay_callbacks.push(action);
+                this.flush_overlay_callbacks();
+            });
+        })
+    }
+
+    fn flush_overlay_callbacks(&mut self) {
+        let Some(tree) = self.tree.as_ref() else {
+            return;
+        };
+        let Some(calls) = self.overlay_callbacks.next(tree) else {
+            return;
+        };
+        // Share the existing sequence allocator with input-submit responses.
+        // The matching Tree is the barrier, not a timer or an arbitrary paint.
+        self.next_submit_seq = self.next_submit_seq.saturating_add(1);
+        let seq = self.next_submit_seq;
+        self.overlay_callbacks.sent(seq);
+        protocol::send_callbacks_seq(&self.cmd_tx, calls, Some(seq));
     }
 
     fn schedule_input_change_flush(
@@ -1587,7 +1617,7 @@ impl RootView {
         content_sized(list, node, cx)
     }
 
-    fn render_popover(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+    fn render_popover(&self, node: &Node, key: &str, cx: &Context<Self>) -> AnyElement {
         let open = node.open.unwrap_or(false);
         let content = node.children.clone();
         let cmd_tx = self.cmd_tx.clone();
@@ -1596,14 +1626,17 @@ impl RootView {
             .open(open)
             .trigger(overlay::trigger_button(node.trigger.as_deref(), key))
             .content(move |_, _, _| overlay::paint_static(&content, cmd_tx.clone(), &content_path));
-        if let Some(callback_id) = node.on_open_change.clone() {
-            let cmd_tx = self.cmd_tx.clone();
-            popover = popover.on_open_change(move |open, _, _| {
-                let _ = cmd_tx.send(Cmd::Callback {
-                    id: callback_id.clone(),
-                    value: Some(json!(*open)),
-                    seq: None,
-                });
+        if node.on_open_change.is_some() {
+            let emit = Self::overlay_emitter(cx);
+            let key = key.to_string();
+            popover = popover.on_open_change(move |open, _, cx| {
+                emit(
+                    overlay::OverlayAction::PopoverOpen {
+                        key: key.clone(),
+                        open: *open,
+                    },
+                    cx,
+                );
             });
         }
         apply_style(popover, node, cx).into_any_element()
@@ -1617,23 +1650,16 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
-        let cmd_tx = self.cmd_tx.clone();
-        let on_change = node.on_change.clone();
+        let emit = Self::overlay_emitter(cx);
+        let key = key.to_string();
         let button = apply_style(
-            overlay::trigger_button(node.trigger.as_deref(), key),
+            overlay::trigger_button(node.trigger.as_deref(), &key),
             node,
             cx,
         );
         button
             .dropdown_menu(move |menu, window, cx| {
-                overlay::fill_popup_menu(
-                    menu,
-                    &items,
-                    cmd_tx.clone(),
-                    on_change.clone(),
-                    window,
-                    cx,
-                )
+                overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
             })
             .into_any_element()
     }
@@ -1647,18 +1673,11 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
-        let cmd_tx = self.cmd_tx.clone();
-        let on_change = node.on_change.clone();
-        apply_style(div().id(eid(key)), node, cx)
+        let emit = Self::overlay_emitter(cx);
+        let key = key.to_string();
+        apply_style(div().id(eid(&key)), node, cx)
             .context_menu(move |menu, window, cx| {
-                overlay::fill_popup_menu(
-                    menu,
-                    &items,
-                    cmd_tx.clone(),
-                    on_change.clone(),
-                    window,
-                    cx,
-                )
+                overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
             })
             .children(self.render_children(node, path, window, cx))
             .into_any_element()
@@ -2007,6 +2026,7 @@ impl RootView {
         }
         self.dialog_pending = true;
         let entity = cx.entity();
+        let emit = Self::overlay_emitter(cx);
         window.on_next_frame(move |window, cx| {
             window.close_all_dialogs(cx);
             let (keys, live, cmd_tx) = entity.update(cx, |this, _| {
@@ -2018,6 +2038,8 @@ impl RootView {
             for key in keys {
                 let live = live.clone();
                 let cmd_tx = cmd_tx.clone();
+                let emit = emit.clone();
+                let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                 window.open_dialog(cx, move |dialog, _, _cx| {
                     let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                         return dialog;
@@ -2028,7 +2050,7 @@ impl RootView {
                         &format!("{}/content", spec.key),
                     )];
                     let dialog = overlay::configure_dialog(dialog, &spec.node, children);
-                    overlay::bind_dialog_callbacks(dialog, &spec.node, cmd_tx.clone())
+                    overlay::bind_dialog_callbacks(dialog, key.clone(), emit.clone(), close.clone())
                 });
             }
         });
