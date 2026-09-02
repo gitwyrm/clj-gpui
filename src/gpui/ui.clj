@@ -1013,10 +1013,11 @@
   description-list `:columns` count). `:rows` are `{id, cells [...]}`.
   `on-change` receives the selected row's original id. `:on-confirm` (or
   `:on-double-click`) fires on double-click with that same original id.
-  gpui-component 0.5.1 emits `SelectRow` on every left click, then
-  `DoubleClickedRow` from the same click when `click_count` is 2. The host
-  batches those as `:on-change` then `:on-confirm` against one callback
-  generation, then one tree fetch. A single click is only `:on-change`.
+  gpui-component 0.5.1 `on_row_left_click` always emits `SelectRow`; when
+  `click_count` is 2 it then emits `DoubleClickedRow` from that same call.
+  A count-1 click is only `:on-change`. A count-2 click is `:on-change`
+  then `:on-confirm` as one batch against one callback generation, then
+  one tree fetch. Programmatic `:selected` does not emit `:on-change`.
 
   (ui/table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
              :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]

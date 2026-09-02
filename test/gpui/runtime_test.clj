@@ -309,6 +309,10 @@
       (runtime/invoke-callback! id-confirm "ada")
       (is (= 1 @confirm-fired) "stale confirm id no longer invokes confirm"))))
 
+(deftest table-empty-batch-is-ok
+  (runtime/reset-callbacks!)
+  (is (= {:ok true :results []} (runtime/invoke-callback-batch! []))))
+
 (deftest table-single-click-is-only-on-change
   (runtime/reset-callbacks!)
   (let [log (atom [])

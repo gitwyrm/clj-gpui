@@ -128,12 +128,14 @@ pub fn table_activation_calls(
 /// `DoubleClickedRow` from one `on_row_left_click`.
 ///
 /// Crate order in `TableState::on_row_left_click`:
-/// `set_selected_row` (always emits `SelectRow`), then if
-/// `click_count() == 2`, `DoubleClickedRow`. Subscribers run
-/// synchronously, so `SelectRow` is recorded, `DoubleClickedRow`
-/// consumes it in the same native event, and a deferred flush at the
-/// end of the effect cycle sends a lone `:on-change` when no double
-/// click followed. No timers.
+/// `set_selected_row` (always `cx.emit(SelectRow)` then `cx.notify()`),
+/// then if `click_count() == 2`, `cx.emit(DoubleClickedRow)`.
+/// `Context::emit` queues `Effect::Emit`; subscribers run in
+/// `flush_effects`. A count-1 click is only `SelectRow`. A count-2
+/// click is `SelectRow` then `DoubleClickedRow` from that same call.
+/// The host records the select, lets `DoubleClickedRow` consume it for
+/// one `:on-change` + `:on-confirm` batch, and flushes a lone
+/// `:on-change` only after that emit has had a chance to run. No timers.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TableClickCoalesce {
     pending_row: Option<usize>,
@@ -152,9 +154,15 @@ impl TableClickCoalesce {
 
     /// `true` when `SelectRow` for this row is already pending, so the
     /// activation batch should include `:on-change`. Consumes the pending
-    /// row so a deferred single-select flush is a no-op.
+    /// row so a deferred single-select flush is a no-op. A double-click
+    /// for a different row leaves the pending select in place.
     pub fn on_double_clicked_row(&mut self, row_ix: usize) -> bool {
-        self.pending_row.take() == Some(row_ix)
+        if self.pending_row == Some(row_ix) {
+            self.pending_row = None;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn take_pending_select(&mut self) -> Option<usize> {
@@ -799,7 +807,26 @@ mod tests {
 
         assert!(c.on_select_row(1, false));
         assert!(!c.on_double_clicked_row(2));
-        assert!(c.take_pending_select().is_none());
+        assert_eq!(
+            c.take_pending_select(),
+            Some(1),
+            "mismatched DoubleClickedRow must not drop the pending select"
+        );
+
+        // A Defer that runs before DoubleClickedRow splits one native
+        // click into two cmds (the generation-crossing bug). Nested
+        // defer lets DoubleClickedRow consume first.
+        let mut premature = TableClickCoalesce::default();
+        assert!(premature.on_select_row(0, false));
+        assert_eq!(premature.take_pending_select(), Some(0));
+        assert!(
+            !premature.on_double_clicked_row(0),
+            "too-early flush leaves confirm as a second standalone callback"
+        );
+        let mut nested = TableClickCoalesce::default();
+        assert!(nested.on_select_row(0, false));
+        assert!(nested.on_double_clicked_row(0));
+        assert!(nested.take_pending_select().is_none());
 
         let (tx, rx) = std::sync::mpsc::channel();
         send_callbacks(

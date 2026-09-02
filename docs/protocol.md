@@ -90,7 +90,7 @@ Optional `value` is a JSON value (string, number, boolean, array, or `null`):
 
 When `value` is present (including `""`, `false`, `0`, and `null`), Clojure calls `(f value)`. Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments.
 
-A native user action that fires several handlers (list click/Enter, dialog OK/Cancel, menu item with both item `:on-click` and menu `:on-change`) is one host-internal batch. The worker sends the existing `"callback"` op once per handler, in order, against the **same** callback registry generation, then issues **one** `"render"`. There is no new Clojure wire op. Intermediate callback requests set `"defer-render": true` so an `r/atom` watch cannot enqueue `request-render` (which would `export-tree` and rebuild `cb-N` ids) before the rest of the batch and the host's following `render`.
+A native user action that fires several handlers (list click/Enter, table double-click `SelectRow`+`DoubleClickedRow`, dialog OK/Cancel, menu item with both item `:on-click` and menu `:on-change`) is one host-internal batch. The worker sends the existing `"callback"` op once per handler, in order, against the **same** callback registry generation, then issues **one** `"render"`. There is no new Clojure wire op. Intermediate callback requests set `"defer-render": true` so an `r/atom` watch cannot enqueue `request-render` (which would `export-tree` and rebuild `cb-N` ids) before the rest of the batch and the host's following `render`.
 
 Failure policy: **stop remaining callbacks on the first failure** (unknown id, thrown handler, or `ok: false`). Earlier atom mutations still paint because the worker fetches a tree after the stop. The error is not swallowed (`HostEvent::Error` after that tree). Prefer this over continuing so a failed prerequisite cannot invoke a later action.
 
@@ -141,7 +141,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-escape` | string callback id | `text-field` (0-arg) |
 | `on-close` | string callback id | `alert`, `dialog` (0-arg) |
 | `on-ok` / `on-cancel` | string callback id | `dialog` (0-arg; crate then closes and fires `on-close`) |
-| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `table` double-click: `SelectRow` then `DoubleClickedRow` from one native click are `:on-change` then `:on-confirm` (or `:on-double-click`) as one batch |
+| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `table`: count-1 click is only `on-change`. Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
 | `on-open-change` | string callback id | `popover` (boolean); `dialog` (`false` on dismiss) |
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `text-field`: request keyboard focus |

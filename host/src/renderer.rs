@@ -1605,17 +1605,7 @@ impl RootView {
                 if !defer {
                     return;
                 }
-                // Crate may emit DoubleClickedRow from the same
-                // on_row_left_click after this SelectRow subscriber
-                // returns. Defer the lone :on-change until that event
-                // has had a chance to consume the pending row.
-                let entity = cx.entity();
-                let key = key_owned.clone();
-                cx.defer(move |app| {
-                    let _ = entity.update(app, |this, cx| {
-                        this.flush_pending_table_select(&key, cx);
-                    });
-                });
+                Self::schedule_pending_table_select_flush(cx, key_owned.clone());
             }
             TableEvent::DoubleClickedRow(ix) => {
                 let include_change = this
@@ -1672,6 +1662,27 @@ impl RootView {
         if let Some(slot) = self.tables.get_mut(key) {
             slot.suppress_select = false;
         }
+    }
+
+    /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
+    /// not follow from the same `on_row_left_click`.
+    ///
+    /// `Context::emit` queues `Effect::Emit`. `on_row_left_click` may
+    /// push `DoubleClickedRow` *after* `set_selected_row` returns. If
+    /// `SelectRow` is delivered before that second emit is queued, one
+    /// trailing `Defer` runs too early, `:on-change` renders, and
+    /// `:on-confirm`'s `cb-N` is rewired. Re-defer once so a
+    /// `DoubleClickedRow` queued after this subscriber still consumes
+    /// the pending row in the same effect cycle. No timers.
+    fn schedule_pending_table_select_flush(cx: &mut Context<Self>, key: String) {
+        let entity = cx.entity();
+        cx.defer(move |app| {
+            app.defer(move |app| {
+                let _ = entity.update(app, |this, cx| {
+                    this.flush_pending_table_select(&key, cx);
+                });
+            });
+        });
     }
 
     fn flush_pending_table_select(&mut self, key: &str, cx: &App) {
