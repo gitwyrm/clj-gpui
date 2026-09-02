@@ -1,7 +1,7 @@
 //! Exercise the real bridge worker/RPC/batch path against a peer that replaces
 //! its callback registry on every render, just like runtime/export-tree.
 use super::*;
-use crate::overlay::{DialogClose, OverlayAction, OverlayCallbacks};
+use crate::overlay::{CallbackQueue, DialogClose, QueuedAction};
 use crate::protocol::{send_callbacks_seq, CallbackCall};
 use std::net::{Shutdown, TcpListener};
 
@@ -37,7 +37,9 @@ impl RegistryPeer {
              "items": [{"id": "copy", "label": "Copy", "on-click": self.id("copy")},
                        {"id": "share", "items": [{"id": "link", "on-click": self.id("link")}]}]},
             {"type": "context-menu", "id": "context", "on-change": self.id("context"),
-             "items": [{"id": "inspect", "label": "Inspect"}]}
+             "items": [{"id": "inspect", "label": "Inspect"}]},
+            {"type": "button", "id": "rerender", "text": "Rerender",
+             "on-click": self.id("rerender")}
         ]})
     }
 
@@ -129,10 +131,10 @@ impl Fixture {
         self.tree().0
     }
 
-    fn send(&self, queue: &mut OverlayCallbacks, tree: &Node, seq: u64) -> Vec<CallbackCall> {
+    fn send(&self, queue: &mut CallbackQueue, tree: &Node, seq: u64) -> Vec<CallbackCall> {
         let calls = queue
             .next(tree)
-            .expect("expected a semantic overlay action");
+            .expect("expected a semantic button/overlay action");
         queue.sent(seq);
         send_callbacks_seq(&self.host.cmd_tx, calls.clone(), Some(seq));
         calls
@@ -151,7 +153,7 @@ fn dialog_then_popover_waits_for_generation_and_suppresses_native_echoes() {
     let fixture = Fixture::new();
     let tree_a = fixture.initial_tree();
     let old_popover_id = tree_a.children[1].on_open_change.clone().unwrap();
-    let mut queue = OverlayCallbacks::default();
+    let mut queue = CallbackQueue::default();
     let mut dialog = DialogClose::default();
     assert!(dialog.action(false));
     queue.push(dialog.take("ask").unwrap());
@@ -162,7 +164,7 @@ fn dialog_then_popover_waits_for_generation_and_suppresses_native_echoes() {
     assert!(!dialog.action(false));
     assert!(dialog.take("ask").is_none());
     // The next interaction arrives before the dialog Tree is installed.
-    let open = OverlayAction::PopoverOpen {
+    let open = QueuedAction::PopoverOpen {
         key: "hint".into(),
         open: true,
     };
@@ -222,20 +224,20 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
     let tree_a = fixture.initial_tree();
     let old_copy_id = tree_a.children[2].items[0].on_click.clone().unwrap();
     let retained_actions = [
-        OverlayAction::MenuSelect {
+        QueuedAction::MenuSelect {
             key: "edit".into(),
             item_path: vec!["copy".into()],
         },
-        OverlayAction::MenuSelect {
+        QueuedAction::MenuSelect {
             key: "edit".into(),
             item_path: vec!["share".into(), "link".into()],
         },
-        OverlayAction::MenuSelect {
+        QueuedAction::MenuSelect {
             key: "context".into(),
             item_path: vec!["inspect".into()],
         },
     ];
-    let mut queue = OverlayCallbacks::default();
+    let mut queue = CallbackQueue::default();
     for (index, action) in retained_actions.into_iter().enumerate() {
         // The native menu remains open while an unrelated render replaces ids.
         fixture.host.cmd_tx.send(Cmd::Render).unwrap();
@@ -259,4 +261,160 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
             ("context".into(), json!("inspect"), false),
         ]
     );
+}
+
+#[test]
+fn raw_button_replay_still_fails_closed_after_registry_replacement() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let old_id = tree_a.children[4].on_click.clone().unwrap();
+    // The pre-fix button closure enqueued this raw id for both clicks.
+    for seq in [1, 2] {
+        send_callbacks_seq(
+            &fixture.host.cmd_tx,
+            vec![CallbackCall::fire(old_id.clone())],
+            Some(seq),
+        );
+        assert_eq!(fixture.tree().1, Some(seq));
+    }
+    let error = fixture.host.event_rx.recv_blocking().unwrap();
+    assert!(matches!(error, HostEvent::Error(message)
+        if message == format!("unknown callback {old_id}")));
+    let peer = fixture.peer.lock().unwrap();
+    assert_eq!(peer.unknown, vec![old_id]);
+    assert_eq!(peer.fired.len(), 1);
+}
+
+#[test]
+fn button_clicks_wait_for_generation_without_losing_distinct_activations() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let old_id = tree_a.children[4].on_click.clone().unwrap();
+    let click = QueuedAction::ButtonClick {
+        key: "rerender".into(),
+    };
+    let mut queue = CallbackQueue::default();
+    queue.push(click.clone());
+    assert_eq!(fixture.send(&mut queue, &tree_a, 1)[0].id, old_id);
+
+    // A second genuine click arrives before the first response is installed.
+    queue.push(click.clone());
+    assert!(queue.next(&tree_a).is_none());
+    let (tree_b, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    let second = fixture.send(&mut queue, &tree_b, 2);
+    assert_ne!(second[0].id, old_id);
+    assert_eq!(second[0].id, tree_b.children[4].on_click.clone().unwrap());
+    let (_, seq) = fixture.tree();
+    queue.tree_installed(seq);
+
+    // A retained painted handler also resolves against an unrelated new tree.
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    let (tree_d, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    queue.push(click);
+    let third = fixture.send(&mut queue, &tree_d, 3);
+    assert_eq!(third[0].id, tree_d.children[4].on_click.clone().unwrap());
+    let (tree_e, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    assert!(queue.next(&tree_e).is_none());
+    let peer = fixture.peer.lock().unwrap();
+    assert!(peer.unknown.is_empty());
+    assert_eq!(peer.fired, vec![("rerender".into(), Value::Null, false); 3]);
+}
+
+#[test]
+fn dialog_then_button_shares_the_same_generation_barrier() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let mut queue = CallbackQueue::default();
+    queue.push(QueuedAction::DialogClose {
+        key: "ask".into(),
+        ok: Some(false),
+    });
+    fixture.send(&mut queue, &tree_a, 1);
+    queue.push(QueuedAction::ButtonClick {
+        key: "rerender".into(),
+    });
+    assert!(queue.next(&tree_a).is_none());
+    let (tree_b, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    fixture.send(&mut queue, &tree_b, 2);
+    fixture.tree();
+    let peer = fixture.peer.lock().unwrap();
+    assert!(peer.unknown.is_empty());
+    assert_eq!(
+        peer.fired,
+        vec![
+            ("cancel".into(), Value::Null, true),
+            ("close".into(), Value::Null, true),
+            ("dialog-open".into(), json!(false), true),
+            ("rerender".into(), Value::Null, false),
+        ]
+    );
+}
+
+#[test]
+fn queued_button_skips_removed_disabled_or_replaced_controls() {
+    for tree in [
+        json!({"type": "window", "children": []}),
+        json!({"type": "button", "id": "rerender", "disabled": true, "on-click": "cb-new"}),
+        json!({"type": "label", "id": "rerender", "on-click": "cb-other"}),
+        json!({"type": "button", "id": "rerender"}),
+    ] {
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::ButtonClick {
+            key: "rerender".into(),
+        });
+        assert!(queue.next(&serde_json::from_value(tree).unwrap()).is_none());
+    }
+}
+
+#[test]
+fn queued_button_paths_match_normal_and_accordion_rendering() {
+    let tree: Node = serde_json::from_value(json!({"type": "window", "children": [
+        {"type": "button", "on-click": "cb-normal"},
+        {"type": "accordion", "items": [{"id": "item", "content": {
+            "type": "vstack", "children": [{"type": "button", "on-click": "cb-nested"}]
+        }}]}
+    ]}))
+    .unwrap();
+    for (key, expected) in [("root-0", "cb-normal"), ("root-1-acc-0-0", "cb-nested")] {
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::ButtonClick { key: key.into() });
+        assert_eq!(queue.next(&tree).unwrap()[0].id, expected);
+    }
+}
+
+#[test]
+fn dialog_close_acknowledgement_survives_a_skipped_paint_before_reopen() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let mut mounted = crate::overlay::dialog_keys(&crate::overlay::collect_open_dialogs(&tree_a));
+    crate::overlay::acknowledge_dialog_tree(&mut mounted, &tree_a);
+    assert!(crate::overlay::crate_dismiss_waiting_for_clojure(
+        &mounted, &mounted, false
+    ));
+
+    let mut queue = CallbackQueue::default();
+    queue.push(QueuedAction::DialogClose {
+        key: "ask".into(),
+        ok: Some(false),
+    });
+    fixture.send(&mut queue, &tree_a, 1);
+    let (tree_b, _) = fixture.tree();
+    crate::overlay::acknowledge_dialog_tree(&mut mounted, &tree_b);
+    assert!(mounted.is_empty());
+
+    // Native paint was skipped for B; the next received tree reopens the key.
+    fixture.peer.lock().unwrap().dialog_open = true;
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    let (tree_c, _) = fixture.tree();
+    crate::overlay::acknowledge_dialog_tree(&mut mounted, &tree_c);
+    let wanted = crate::overlay::dialog_keys(&crate::overlay::collect_open_dialogs(&tree_c));
+    assert_eq!(wanted, vec!["ask"]);
+    assert!(!crate::overlay::crate_dismiss_waiting_for_clojure(
+        &wanted, &mounted, false
+    ));
+    assert!(fixture.peer.lock().unwrap().unknown.is_empty());
 }

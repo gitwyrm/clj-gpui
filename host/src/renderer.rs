@@ -284,7 +284,7 @@ pub struct RootView {
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_keys: Vec<String>,
     dialog_pending: bool,
-    overlay_callbacks: overlay::OverlayCallbacks,
+    callback_queue: overlay::CallbackQueue,
     sheet: Option<overlay::SheetSpec>,
     sheet_live: Rc<RefCell<Option<overlay::SheetSpec>>>,
     sheet_key: Option<String>,
@@ -349,10 +349,11 @@ impl RootView {
                         }
                         HostEvent::Tree(tree, seq, themes) => {
                             catalog::install_clojure_sets(themes);
+                            overlay::acknowledge_dialog_tree(&mut view.dialog_keys, &tree);
                             view.tree = Some(tree);
                             view.tree_seq = seq;
-                            view.overlay_callbacks.tree_installed(seq);
-                            view.flush_overlay_callbacks();
+                            view.callback_queue.tree_installed(seq);
+                            view.flush_callback_queue();
                             view.error = None;
                             view.status = format!(
                                 "nREPL 127.0.0.1:{} · live · hot reload on",
@@ -360,7 +361,7 @@ impl RootView {
                             );
                         }
                         HostEvent::Error(err) => {
-                            view.overlay_callbacks.clear();
+                            view.callback_queue.clear();
                             for slot in view.inputs.values_mut() {
                                 slot.wait_for_seq = None;
                                 slot.submitted = None;
@@ -411,7 +412,7 @@ impl RootView {
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_keys: Vec::new(),
             dialog_pending: false,
-            overlay_callbacks: overlay::OverlayCallbacks::default(),
+            callback_queue: overlay::CallbackQueue::default(),
             sheet: None,
             sheet_live: Rc::new(RefCell::new(None)),
             sheet_key: None,
@@ -583,28 +584,28 @@ impl RootView {
         });
     }
 
-    fn overlay_emitter(cx: &Context<Self>) -> overlay::OverlayEmitter {
+    fn action_emitter(cx: &Context<Self>) -> overlay::ActionEmitter {
         let entity = cx.weak_entity();
         Rc::new(move |action, cx| {
             let _ = entity.update(cx, |this, _| {
-                this.overlay_callbacks.push(action);
-                this.flush_overlay_callbacks();
+                this.callback_queue.push(action);
+                this.flush_callback_queue();
             });
         })
     }
 
-    fn flush_overlay_callbacks(&mut self) {
+    fn flush_callback_queue(&mut self) {
         let Some(tree) = self.tree.as_ref() else {
             return;
         };
-        let Some(calls) = self.overlay_callbacks.next(tree) else {
+        let Some(calls) = self.callback_queue.next(tree) else {
             return;
         };
         // Share the existing sequence allocator with input-submit responses.
         // The matching Tree is the barrier, not a timer or an arbitrary paint.
         self.next_submit_seq = self.next_submit_seq.saturating_add(1);
         let seq = self.next_submit_seq;
-        self.overlay_callbacks.sent(seq);
+        self.callback_queue.sent(seq);
         protocol::send_callbacks_seq(&self.cmd_tx, calls, Some(seq));
     }
 
@@ -1028,8 +1029,12 @@ impl RootView {
                 if node.disabled {
                     button = button.disabled(true);
                 }
-                if let Some(callback_id) = node.on_click.clone() {
-                    button = button.on_click(self.click(callback_id));
+                if node.on_click.is_some() {
+                    let emit = Self::action_emitter(cx);
+                    let key = key.clone();
+                    button = button.on_click(move |_, _, cx| {
+                        emit(overlay::QueuedAction::ButtonClick { key: key.clone() }, cx);
+                    });
                 }
                 apply_style(button, node, cx).into_any_element()
             }
@@ -1627,11 +1632,11 @@ impl RootView {
             .trigger(overlay::trigger_button(node.trigger.as_deref(), key))
             .content(move |_, _, _| overlay::paint_static(&content, cmd_tx.clone(), &content_path));
         if node.on_open_change.is_some() {
-            let emit = Self::overlay_emitter(cx);
+            let emit = Self::action_emitter(cx);
             let key = key.to_string();
             popover = popover.on_open_change(move |open, _, cx| {
                 emit(
-                    overlay::OverlayAction::PopoverOpen {
+                    overlay::QueuedAction::PopoverOpen {
                         key: key.clone(),
                         open: *open,
                     },
@@ -1650,7 +1655,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
-        let emit = Self::overlay_emitter(cx);
+        let emit = Self::action_emitter(cx);
         let key = key.to_string();
         let button = apply_style(
             overlay::trigger_button(node.trigger.as_deref(), &key),
@@ -1673,7 +1678,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
-        let emit = Self::overlay_emitter(cx);
+        let emit = Self::action_emitter(cx);
         let key = key.to_string();
         apply_style(div().id(eid(&key)), node, cx)
             .context_menu(move |menu, window, cx| {
@@ -2026,7 +2031,7 @@ impl RootView {
         }
         self.dialog_pending = true;
         let entity = cx.entity();
-        let emit = Self::overlay_emitter(cx);
+        let emit = Self::action_emitter(cx);
         window.on_next_frame(move |window, cx| {
             window.close_all_dialogs(cx);
             let (keys, live, cmd_tx) = entity.update(cx, |this, _| {

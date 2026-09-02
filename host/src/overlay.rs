@@ -62,7 +62,13 @@ fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
     }
     for (index, item) in node.items.iter().enumerate() {
         if let Some(content) = item.content.as_ref() {
-            walk_nodes(content, &format!("{path}-item-{index}"), visit);
+            // Match RootView::render_accordion for children without explicit ids.
+            let content_path = if node.kind == "accordion" {
+                format!("{path}-acc-{index}")
+            } else {
+                format!("{path}-item-{index}")
+            };
+            walk_nodes(content, &content_path, visit);
         }
         for (child_ix, child) in item.children.iter().enumerate() {
             walk_nodes(child, &format!("{path}-item-{index}-{child_ix}"), visit);
@@ -83,27 +89,28 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
     live.borrow().iter().find(|spec| spec.key == key).cloned()
 }
 
-/// Retained native overlay handlers carry identity/intent, never callback ids.
+/// Queued native button/overlay handlers carry identity/intent, never callback ids.
 /// Resolve against the installed tree immediately before sending the existing
-/// Callback/CallbackBatch command. An overlay round-trip must finish before
-/// another overlay action can use the replacement callback registry.
+/// Callback/CallbackBatch command. A queued round-trip must finish before
+/// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OverlayAction {
+pub enum QueuedAction {
+    ButtonClick { key: String },
     DialogClose { key: String, ok: Option<bool> },
     PopoverOpen { key: String, open: bool },
     MenuSelect { key: String, item_path: Vec<String> },
 }
 
-pub type OverlayEmitter = Rc<dyn Fn(OverlayAction, &mut App)>;
+pub type ActionEmitter = Rc<dyn Fn(QueuedAction, &mut App)>;
 
 #[derive(Default)]
-pub struct OverlayCallbacks {
-    pending: VecDeque<OverlayAction>,
+pub struct CallbackQueue {
+    pending: VecDeque<QueuedAction>,
     wait_for_seq: Option<u64>,
 }
 
-impl OverlayCallbacks {
-    pub fn push(&mut self, action: OverlayAction) {
+impl CallbackQueue {
+    pub fn push(&mut self, action: QueuedAction) {
         self.pending.push_back(action);
     }
 
@@ -138,16 +145,18 @@ impl OverlayCallbacks {
     }
 }
 
-impl OverlayAction {
+impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
         let key = match self {
-            Self::DialogClose { key, .. }
+            Self::ButtonClick { key }
+            | Self::DialogClose { key, .. }
             | Self::PopoverOpen { key, .. }
             | Self::MenuSelect { key, .. } => key,
         };
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
+                Self::ButtonClick { .. } => node.kind == "button",
                 Self::DialogClose { .. } => node.kind == "dialog",
                 Self::PopoverOpen { .. } => node.kind == "popover",
                 Self::MenuSelect { .. } => {
@@ -160,6 +169,10 @@ impl OverlayAction {
         });
         let Some(node) = found else { return Vec::new() };
         match self {
+            Self::ButtonClick { .. } if !node.disabled => node
+                .on_click
+                .map(|id| vec![protocol::CallbackCall::fire(id)])
+                .unwrap_or_default(),
             Self::DialogClose { ok, .. } if node.open.unwrap_or(false) => {
                 let first = match ok {
                     Some(true) => node.on_ok,
@@ -219,12 +232,12 @@ impl DialogClose {
         true
     }
 
-    pub fn take(&mut self, key: &str) -> Option<OverlayAction> {
+    pub fn take(&mut self, key: &str) -> Option<QueuedAction> {
         if self.dismissed {
             return None;
         }
         self.dismissed = true;
-        Some(OverlayAction::DialogClose {
+        Some(QueuedAction::DialogClose {
             key: key.into(),
             ok: self.ok,
         })
@@ -237,7 +250,7 @@ pub fn fill_popup_menu(
     items: &[Item],
     key: &str,
     item_path: &[String],
-    emit: OverlayEmitter,
+    emit: ActionEmitter,
     window: &mut Window,
     cx: &mut App,
 ) -> PopupMenu {
@@ -289,7 +302,7 @@ pub fn fill_popup_menu(
         item_path.push(id);
         entry = entry.on_click(move |_, _, cx| {
             emit(
-                OverlayAction::MenuSelect {
+                QueuedAction::MenuSelect {
                     key: key.clone(),
                     item_path: item_path.clone(),
                 },
@@ -430,6 +443,14 @@ pub fn crate_dismiss_waiting_for_clojure(
     !crate_open && !wanted_keys.is_empty() && wanted_keys == dialog_keys
 }
 
+/// Acknowledge closed dialogs on every installed tree, even if that tree is
+/// superseded before paint. Otherwise a quick close -> reopen can leave the
+/// same key waiting forever for a closed state that the renderer skipped.
+pub fn acknowledge_dialog_tree(dialog_keys: &mut Vec<String>, tree: &Node) {
+    let open = collect_open_dialogs(tree);
+    dialog_keys.retain(|key| open.iter().any(|spec| &spec.key == key));
+}
+
 /// Bind 0.5.1 Dialog callbacks. The crate itself sequences them:
 ///
 /// * OK: `on_ok` (false keeps the dialog open), then `on_close`
@@ -440,7 +461,7 @@ pub fn crate_dismiss_waiting_for_clojure(
 pub fn bind_dialog_callbacks(
     dialog: gpui_component::dialog::Dialog,
     key: String,
-    emit: OverlayEmitter,
+    emit: ActionEmitter,
     close: Rc<RefCell<DialogClose>>,
 ) -> gpui_component::dialog::Dialog {
     dialog
