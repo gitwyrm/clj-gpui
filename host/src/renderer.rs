@@ -279,6 +279,7 @@ pub struct RootView {
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
     docks: HashMap<String, DockSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
+    used_resizables: HashSet<String>,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_keys: Vec<String>,
@@ -401,6 +402,7 @@ impl RootView {
             vlists: HashMap::new(),
             docks: HashMap::new(),
             resizables: HashMap::new(),
+            used_resizables: HashSet::new(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_keys: Vec::new(),
@@ -612,14 +614,9 @@ impl RootView {
             slot.change.clear();
             return;
         };
-        let payload = if slot.as_number {
-            let Some(n) = extra::number_from_input(&value) else {
-                slot.change.clear();
-                return;
-            };
-            json!(n)
-        } else {
-            json!(value)
+        let Some(payload) = extra::input_change_payload(slot.as_number, &value) else {
+            slot.change.clear();
+            return;
         };
         self.emit_value(id, payload);
     }
@@ -639,6 +636,13 @@ impl RootView {
             slot.on_submit = node.on_submit.clone();
             slot.on_blur = node.on_blur.clone();
             slot.on_escape = node.on_escape.clone();
+            // Text-field owns this slot this frame. number_slot sets
+            // as_number back when the node is a number-input. Keep
+            // number_stepped so a later number-input does not double-subscribe.
+            slot.as_number = false;
+            slot.number_min = None;
+            slot.number_max = None;
+            slot.number_step = None;
             let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
             let force = matches!(
@@ -1087,7 +1091,7 @@ impl RootView {
             "date-picker" => self.render_date_picker(node, &key, window, cx),
             "editor" => self.render_editor(node, &key, window, cx),
             "virtual-list" => self.render_virtual_list(node, &key, window, cx),
-            "chart" => extra::paint_chart(node, &key, cx),
+            "chart" => viewport_sized(extra::paint_chart(node, &key, cx), node, 180.0, cx),
             "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
                 .child(extra::paint_markdown(node, &key, window, cx))
                 .into_any_element(),
@@ -2184,13 +2188,23 @@ impl RootView {
             .id1::<CljNotification>(SharedString::from(key.clone()))
             .autohide(overlay::notification_autohide(&spec.node));
         let on_click = spec.node.on_click.clone();
-        if let Some(callback) = on_click.clone() {
-            let cmd_tx = self.cmd_tx.clone();
-            note = note.on_click(move |_, _, _| {
-                let _ = cmd_tx.send(Cmd::Callback {
-                    id: callback.clone(),
-                    value: None,
-                    seq: None,
+        if on_click.is_some() {
+            let cmd_key = key.clone();
+            let weak = cx.weak_entity();
+            note = note.on_click(move |_, _, app| {
+                let _ = weak.update(app, |this, _cx| {
+                    let ids: HashMap<String, Option<String>> = this
+                        .notes
+                        .iter()
+                        .map(|(k, slot)| (k.clone(), slot.on_click.clone()))
+                        .collect();
+                    if let Some(id) = overlay::live_notification_click(&ids, &cmd_key) {
+                        let _ = this.cmd_tx.send(Cmd::Callback {
+                            id,
+                            value: None,
+                            seq: None,
+                        });
+                    }
                 });
             });
         }
@@ -2292,6 +2306,9 @@ impl RootView {
                     let Some(slot) = this.inputs.get(&key_owned) else {
                         return;
                     };
+                    if !slot.as_number {
+                        return;
+                    }
                     let mut bounds = Node::default();
                     bounds.min = slot.number_min;
                     bounds.max = slot.number_max;
@@ -2422,18 +2439,18 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Entity<ColorPickerState> {
         self.used_colors.insert(key.to_string());
-        let wanted = node
-            .string_value()
-            .or_else(|| node.text.clone())
-            .and_then(|s| extra::parse_hex_color(&s));
-        if let Some(slot) = self.colors.get_mut(key) {
+        let wanted = extra::color_from_node(node);
+        let recreate = self.colors.get(key).is_some_and(|slot| {
+            extra::color_sync(wanted, slot.state.read(cx).value())
+                == extra::ColorSync::RecreateClear
+        });
+        if recreate {
+            self.colors.remove(key);
+        } else if let Some(slot) = self.colors.get_mut(key) {
             slot.on_change = node.on_change.clone();
             let state = slot.state.clone();
-            if let Some(color) = wanted {
-                let current = state.read(cx).value();
-                let same =
-                    current.map(extra::format_hex_color) == Some(extra::format_hex_color(color));
-                if !same {
+            if extra::color_sync(wanted, state.read(cx).value()) == extra::ColorSync::Set {
+                if let Some(color) = wanted {
                     state.update(cx, |picker, cx| picker.set_value(color, window, cx));
                 }
             }
@@ -2454,8 +2471,8 @@ impl RootView {
                 .get(&key_owned)
                 .and_then(|s| s.on_change.clone())
             {
-                let value = color.map(extra::format_hex_color);
-                this.emit_value(id, json!(value));
+                let value = extra::color_event_payload(*color);
+                this.emit_value(id, value);
             }
         })
         .detach();
@@ -2839,6 +2856,7 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.used_resizables.insert(key.to_string());
         let vertical = mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical;
         let state = self
             .resizables
@@ -2998,6 +3016,7 @@ impl Render for RootView {
         self.used_editors.clear();
         self.used_vlists.clear();
         self.used_docks.clear();
+        self.used_resizables.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
 
@@ -3042,6 +3061,9 @@ impl Render for RootView {
         self.vlists.retain(|key, _| used_vlists.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
         self.docks.retain(|key, _| used_docks.contains(key));
+        let used_resizables = std::mem::take(&mut self.used_resizables);
+        self.resizables
+            .retain(|key, _| used_resizables.contains(key));
 
         self.sync_dialogs(window, cx);
         self.sync_sheet(window, cx);

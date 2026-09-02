@@ -33,15 +33,22 @@
            :dialog-open nil
            :sheet? false
            :toasts []
+           :sticky-toast? false
+           :toast-hit nil
            :qty 4
            :otp ""
            :color "#3366ff"
            :date "2026-09-02"
            :src "(defn hi [] \n  :ok)"
+           :field-kind :number
+           :field-val 4
            :vlist-sel :r0
            :nav :home
            :sidebar-collapsed false
            :setting-notify true
+           :setting-theme :dark
+           :setting-accent :blue
+           :split-id "split-a"
            :split-sizes nil}))
 
 (defn- set-key [k]
@@ -126,14 +133,15 @@
    (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts]}]
+(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
                   " · tick " tick
                   " · close-hit " (pr-str close-hit)
                   " · dialog-open " (pr-str dialog-open)
-                  " · shift " (pr-str batch-shift?)))
+                  " · shift " (pr-str batch-shift?)
+                  " · toast-hit " (pr-str toast-hit)))
    (when batch-shift?
      [(ui/button "shifted-a" (fn []))
       (ui/button "shifted-b" (fn []))])
@@ -179,7 +187,9 @@
                                   {:id (str "t-" tick) :variant :success :title "Saved" :message "ok"})
                {:variant :primary})
     (ui/button "Toast err" #(swap! !state update :toasts conj
-                                   {:id (str "e-" tick) :variant :error :title "Failed" :message "nope"})))
+                                   {:id (str "e-" tick) :variant :error :title "Failed" :message "nope"}))
+    (ui/button (if sticky-toast? "Hide sticky" "Sticky toast")
+               #(swap! !state update :sticky-toast? not)))
    (ui/sheet sheet?
              {:title "Inspector"
               :placement :right
@@ -194,7 +204,15 @@
                             :autohide true
                             :on-close #(swap! !state update :toasts
                                               (fn [xs] (vec (remove (fn [t] (= id (:id t))) xs))))}))
-        toasts)))
+        toasts)
+   (when sticky-toast?
+     (ui/notification {:id "sticky"
+                       :variant :info
+                       :title "Sticky"
+                       :message (str "click me · tick " tick)
+                       :autohide false
+                       :on-click #(swap! !state assoc :toast-hit tick)
+                       :on-close #(swap! !state assoc :sticky-toast? false)}))))
 
 (defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift tree-sel list-rev batch-shift? vlist-sel]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
@@ -288,14 +306,27 @@
                        :height 160
                        :on-change (set-key :vlist-sel)}))))
 
-(defn- forms-panel [{:keys [qty otp color date src]}]
+(defn- forms-panel [{:keys [qty otp color date src field-kind field-val]}]
   (ui/vstack
    {:gap 12}
-   (ui/label (str "qty " qty " · otp " (pr-str otp) " · " color " · " date))
+   (ui/label (str "qty " qty " · otp " (pr-str otp) " · " (pr-str color) " · " date
+                  " · field " (pr-str field-kind) " " (pr-str field-val)))
    (ui/number-input qty {:id "qty" :min 0 :max 20 :step 1 :on-change (set-key :qty)})
    (ui/otp-input otp {:id "otp" :count 6 :on-change (set-key :otp)})
-   (ui/color-picker color {:on-change (set-key :color)})
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/color-picker color {:on-change (set-key :color)})
+    (ui/button "Clear color" #(swap! !state assoc :color nil))
+    (ui/button "Pink" #(swap! !state assoc :color "#ff00aa")))
    (ui/date-picker date {:on-change (set-key :date)})
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button (if (= field-kind :number) "Field as text" "Field as number")
+               #(swap! !state assoc :field-kind (if (= field-kind :number) :text :number)
+                       :field-val (if (= field-kind :number) (str field-val) qty)))
+    (if (= field-kind :number)
+      (ui/number-input field-val {:id "field" :min 0 :max 20 :step 1 :on-change (set-key :field-val)})
+      (ui/text-field (str field-val) {:id "field" :on-change (set-key :field-val)})))
    (ui/editor src {:id "src" :language "clojure" :height 160 :on-change (set-key :src)})))
 
 (defn- docs-panel [_]
@@ -305,7 +336,7 @@
                     {:id :b :label "Tue" :value 8}
                     {:id :c :label "Wed" :value 6}
                     {:id :d :label "Thu" :value 10}]
-             {:height 160})
+             {:height 160 :flex 1})
    (ui/bar-chart [{:id :a :label "A" :value 3}
                   {:id :b :label "B" :value 7}]
                  {:width 220 :height 140})
@@ -315,14 +346,20 @@
    (ui/markdown "# Markdown\n\nSelectable **gpui-component** `TextView`.\n\n- sheet\n- notification\n- charts"
                 {:height 140})))
 
-(defn- shell-panel [{:keys [nav sidebar-collapsed setting-notify]}]
+(defn- shell-panel [{:keys [nav sidebar-collapsed setting-notify setting-theme setting-accent split-id]}]
   (ui/vstack
    {:gap 12 :flex 1}
-   (ui/label (str "nav " (pr-str nav) " · notify " (pr-str setting-notify)))
+   (ui/label (str "nav " (pr-str nav)
+                  " · notify " (pr-str setting-notify)
+                  " · theme " (pr-str setting-theme)
+                  " · accent " (pr-str setting-accent)
+                  " · split " split-id))
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button (if sidebar-collapsed "Expand" "Collapse")
                #(swap! !state update :sidebar-collapsed not))
+    (ui/button "Remount split"
+               #(swap! !state assoc :split-id (if (= split-id "split-a") "split-b" "split-a")))
     (ui/label "Sidebar + settings + dock + resizable"))
    (ui/sidebar [{:id :home :label "Home" :icon :check}
                 {:id :files :label "Files" :icon :folder}
@@ -334,12 +371,24 @@
                 :on-change (set-key :nav)})
    (ui/settings [{:id :general :label "General"
                   :items [{:id :notify :label "Notifications"
-                           :variant :switch :checked setting-notify}]}]
-                {:height 180
+                           :variant :switch :checked setting-notify}
+                          {:id :theme :label "Theme"
+                           :variant :dropdown :value setting-theme
+                           :items [{:id :dark :label "Dark"}
+                                   {:id :light :label "Light"}]}
+                          {:label "Advanced"
+                           :items [{:id :accent :label "Accent"
+                                    :variant :dropdown :value setting-accent
+                                    :items [{:id :blue :label "Blue"}
+                                            {:id :pink :label "Pink"}]}]}]}]
+                {:height 220
                  :on-change (fn [{:keys [id value]}]
-                              (when (= id :notify)
-                                (swap! !state assoc :setting-notify value)))})
-   (ui/resizable {:orientation :horizontal :height 140}
+                              (case id
+                                :notify (swap! !state assoc :setting-notify value)
+                                :theme (swap! !state assoc :setting-theme value)
+                                :accent (swap! !state assoc :setting-accent value)
+                                nil))})
+   (ui/resizable {:id split-id :orientation :horizontal :height 140}
                  (ui/markdown "Left pane" {:width 160})
                  (ui/markdown "Right pane"))
    (ui/dock {:height 320

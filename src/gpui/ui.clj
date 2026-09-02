@@ -213,27 +213,52 @@
   [opts xs]
   (with-id-callbacks opts xs [:on-change]))
 
+(def ^:private settings-field-variants
+  #{:switch :checkbox :number :dropdown :select :input
+    "switch" "checkbox" "number" "dropdown" "select" "input"})
+
+(defn- settings-field-row?
+  [row]
+  (and (map? row) (contains? settings-field-variants (:variant row))))
+
+(defn- settings-group-row?
+  "Nested `:items` without a field `:variant` is a group wrapper.
+
+  A `:variant :dropdown` / `:select` field also has option `:items`."
+  [row]
+  (and (map? row) (seq (:items row)) (not (settings-field-row? row))))
+
 (defn- flatten-settings-fields
   "Pages may be a flat field list or groups with nested `:items`."
   [pages]
   (mapcat
    (fn [page]
      (let [rows (or (and (map? page) (:items page)) [])]
-       (if (some #(and (map? %) (seq (:items %))) rows)
-         (mapcat #(or (:items %) []) rows)
-         rows)))
+       (mapcat
+        (fn [row]
+          (if (settings-group-row? row)
+            (or (:items row) [])
+            [row]))
+        rows)))
    pages))
+
+(defn- settings-callback-identities
+  "Page ids, field ids, and dropdown option ids for callback restore."
+  [pages]
+  (let [fields (flatten-settings-fields pages)
+        options (mapcat #(when (map? %) (or (:items %) [])) fields)]
+    (concat pages fields options)))
 
 (defn- wrap-settings-callback
   "Restore original Clojure field ids from `{:id … :value …}` payloads."
   [on-change pages]
   (if (fn? on-change)
-    (let [fields (flatten-settings-fields pages)
-          id-map (option-id-map (concat pages fields))]
+    (let [id-map (option-id-map (settings-callback-identities pages))]
       (fn [payload]
         (let [wire (if (map? payload) (:id payload) payload)
               value (if (map? payload) (:value payload) payload)]
-          (on-change {:id (resolve-option-id id-map wire) :value value}))))
+          (on-change {:id (resolve-option-id id-map wire)
+                      :value (resolve-option-id id-map value)}))))
     on-change))
 
 (declare option-items)
@@ -1347,10 +1372,12 @@
 (defn settings
   "Settings pages. Each page is `{id, label, items}` where `items` are
   fields or groups (`{:label \"Alerts\" :items [fields]}`). Field
-  `:variant` is `:switch`, `:checkbox`, `:number`, `:dropdown`, or
-  `:input` (inferred from `:checked` / nested `:items` / numeric
-  `:value`). `:on-change` receives `{:id field-id :value …}` with the
-  original Clojure field id.
+  `:variant` is `:switch`, `:checkbox`, `:number`, `:dropdown`,
+  `:select`, or `:input`. A dropdown's option `:items` do **not** make
+  it a group — set `:variant :dropdown` (or `:select`). Groups are
+  wrappers without a field variant. `:on-change` receives
+  `{:id field-id :value …}` with original field ids and dropdown
+  option ids.
 
   (ui/settings pages {:on-change (fn [{:keys [id value]}])})"
   ([pages]

@@ -693,6 +693,54 @@
                                      {:id "notify" :value true})))
     (is (= {:id :notify :value true} @got))))
 
+(deftest settings-flat-dropdown-restores-field-and-option-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/settings
+                   [{:id :general
+                     :label "General"
+                     :items [{:id :theme
+                              :label "Theme"
+                              :variant :dropdown
+                              :value :dark
+                              :items [{:id :dark :label "Dark"}
+                                      {:id :light :label "Light"}]}]}]
+                   {:on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "theme" :value "light"})))
+    (is (= {:id :theme :value :light} @got))))
+
+(deftest settings-grouped-dropdown-restores-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/settings
+                   [{:id :general
+                     :label "General"
+                     :items [{:label "Appearance"
+                              :items [{:id :theme
+                                       :label "Theme"
+                                       :variant :dropdown
+                                       :value :dark
+                                       :items [{:id :dark :label "Dark"}
+                                               {:id :light :label "Light"}]}]}
+                             {:label "Advanced"
+                              :items [{:id :debug
+                                       :label "Debug"
+                                       :variant :switch
+                                       :checked false}]}]}]
+                   {:on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "theme" :value "light"})))
+    (is (= {:id :theme :value :light} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "debug" :value true})))
+    (is (= {:id :debug :value true} @got))))
+
 (deftest later-export-invalidates-prior-callback-ids
   (runtime/reset-callbacks!)
   (let [gen1 (atom 0)

@@ -46,6 +46,51 @@ pub fn format_hex_color(color: Hsla) -> String {
     color.to_hex()
 }
 
+pub fn color_from_node(node: &Node) -> Option<Hsla> {
+    node.string_value()
+        .or_else(|| node.text.clone())
+        .and_then(|s| parse_hex_color(&s))
+}
+
+pub fn color_event_payload(color: Option<Hsla>) -> Value {
+    match color.map(format_hex_color) {
+        Some(hex) => json!(hex),
+        None => Value::Null,
+    }
+}
+
+/// How to sync a reused `ColorPickerState` with Clojure's controlled value.
+///
+/// gpui-component 0.5.1 `set_value` takes a concrete `Hsla` (`update_value`
+/// is private). Clearing `Some(color)` → `None` recreates the state entity
+/// so we do not fake a transparent/black swatch. Recreate does not emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSync {
+    Keep,
+    Set,
+    RecreateClear,
+}
+
+pub fn color_sync(wanted: Option<Hsla>, current: Option<Hsla>) -> ColorSync {
+    match (wanted, current) {
+        (Some(wanted), Some(current)) if format_hex_color(wanted) == format_hex_color(current) => {
+            ColorSync::Keep
+        }
+        (Some(_), _) => ColorSync::Set,
+        (None, None) => ColorSync::Keep,
+        (None, Some(_)) => ColorSync::RecreateClear,
+    }
+}
+
+/// Text-field payload vs number-input payload for a reused `InputSlot`.
+pub fn input_change_payload(as_number: bool, text: &str) -> Option<Value> {
+    if as_number {
+        number_from_input(text).map(|n| json!(n))
+    } else {
+        Some(json!(text))
+    }
+}
+
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
     match value {
         Some(Value::String(s)) => {
@@ -105,10 +150,18 @@ pub fn chart_points(node: &Node) -> Vec<(String, f64)> {
         .collect()
 }
 
+/// Default chart viewport when Clojure omits `:width` / `:height` / `:size`
+/// / `:flex 1`. Outer layout is applied by the caller (`viewport_sized`).
+pub fn chart_viewport(node: &Node) -> (f32, f32) {
+    (
+        node.width.or(node.size).unwrap_or(320.0),
+        node.height.or(node.size).unwrap_or(180.0),
+    )
+}
+
 pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let points = chart_points(node);
-    let width = node.width.or(node.size).unwrap_or(320.0);
-    let height = node.height.or(node.size).unwrap_or(180.0);
+    let (width, height) = chart_viewport(node);
     let kind = node
         .variant
         .as_deref()
@@ -155,10 +208,11 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             .dot()
             .into_any_element(),
     };
+    // Inner chart fills the clj-gpui viewport wrapper (layout/style live
+    // on the outer `viewport_sized` / panel wrap, not here).
     v_flex()
         .id(SharedString::from(key.to_string()))
-        .w(px(width))
-        .h(px(height))
+        .size_full()
         .child(chart)
         .into_any_element()
 }
@@ -347,7 +401,15 @@ pub fn paint_panel_body(
 ) -> gpui::AnyElement {
     match node.kind.as_str() {
         "markdown" | "html" => paint_markdown(node, path, window, cx),
-        "chart" => paint_chart(node, path, cx),
+        "chart" => {
+            let (width, height) = chart_viewport(node);
+            v_flex()
+                .w(px(width))
+                .h(px(height))
+                .min_h_0()
+                .child(paint_chart(node, path, cx))
+                .into_any_element()
+        }
         _ if !node.children.is_empty() => {
             crate::overlay::paint_static(&node.children, cmd_tx, path)
         }
@@ -387,22 +449,55 @@ pub fn dock_side(item: &Item) -> &'static str {
     }
 }
 
+pub fn is_settings_field(item: &Item) -> bool {
+    matches!(
+        item.variant
+            .as_deref()
+            .map(crate::catalog::normalize)
+            .as_deref(),
+        Some("switch" | "checkbox" | "number" | "dropdown" | "select" | "input")
+    )
+}
+
+/// Group wrapper: nested `:items` and no field `:variant`.
+///
+/// A `:variant :dropdown` / `:select` field also has option `:items`; that
+/// stays a field. Do not treat `(seq :items)` alone as a group.
+pub fn is_settings_group(item: &Item) -> bool {
+    !item.items.is_empty() && !is_settings_field(item)
+}
+
+pub fn settings_groups(page: &Item) -> Vec<Item> {
+    if page.items.iter().any(is_settings_group) {
+        page.items
+            .iter()
+            .map(|row| {
+                if is_settings_group(row) {
+                    row.clone()
+                } else {
+                    Item {
+                        items: vec![row.clone()],
+                        ..Item::default()
+                    }
+                }
+            })
+            .collect()
+    } else {
+        vec![Item {
+            label: Some(page.label_or_id()),
+            items: page.items.clone(),
+            ..Item::default()
+        }]
+    }
+}
+
 pub fn settings_pages(node: &Node, cmd_tx: &mpsc::Sender<Cmd>) -> Vec<SettingPage> {
     node.collection()
         .iter()
         .map(|page| {
             let title = page.label_or_id();
             let mut setting_page = SettingPage::new(title).resettable(false);
-            let groups = if page.items.iter().any(|g| !g.items.is_empty()) {
-                page.items.clone()
-            } else {
-                vec![Item {
-                    label: Some(page.label_or_id()),
-                    items: page.items.clone(),
-                    ..Item::default()
-                }]
-            };
-            for group in groups {
+            for group in settings_groups(page) {
                 let mut setting_group = SettingGroup::new();
                 if let Some(label) = group.label.clone() {
                     setting_group = setting_group.title(label);
@@ -681,5 +776,141 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let view = VirtualListView::from_node(&horiz, tx);
         assert_eq!(view.axis, Axis::Horizontal);
+    }
+
+    #[test]
+    fn color_sync_clear_set_and_replace() {
+        let blue = parse_hex_color("#3366ff").unwrap();
+        let pink = parse_hex_color("#ff00aa").unwrap();
+        assert_eq!(color_sync(Some(blue), Some(blue)), ColorSync::Keep);
+        assert_eq!(color_sync(Some(pink), Some(blue)), ColorSync::Set);
+        assert_eq!(color_sync(Some(blue), None), ColorSync::Set);
+        assert_eq!(color_sync(None, Some(blue)), ColorSync::RecreateClear);
+        assert_eq!(color_sync(None, None), ColorSync::Keep);
+        assert_eq!(color_event_payload(None), json!(null));
+        assert_eq!(
+            color_event_payload(Some(blue)),
+            json!(format_hex_color(blue))
+        );
+        let empty: Node =
+            serde_json::from_value(json!({"type": "color-picker", "value": null})).unwrap();
+        assert_eq!(color_from_node(&empty), None);
+        let set: Node =
+            serde_json::from_value(json!({"type": "color-picker", "value": "#ff00aa"})).unwrap();
+        assert_eq!(
+            color_from_node(&set).map(format_hex_color),
+            Some(format_hex_color(pink))
+        );
+    }
+
+    #[test]
+    fn number_then_text_payload_is_string() {
+        assert_eq!(input_change_payload(true, "4"), Some(json!(4.0)));
+        assert_eq!(input_change_payload(true, "abc"), None);
+        assert_eq!(input_change_payload(false, "abc"), Some(json!("abc")));
+        assert_eq!(input_change_payload(false, "4"), Some(json!("4")));
+    }
+
+    #[test]
+    fn chart_viewport_uses_node_then_defaults() {
+        let def: Node = serde_json::from_value(json!({"type": "chart"})).unwrap();
+        assert_eq!(chart_viewport(&def), (320.0, 180.0));
+        let sized: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "width": 400.0,
+            "height": 90.0
+        }))
+        .unwrap();
+        assert_eq!(chart_viewport(&sized), (400.0, 90.0));
+        let square: Node = serde_json::from_value(json!({"type": "chart", "size": 120.0})).unwrap();
+        assert_eq!(chart_viewport(&square), (120.0, 120.0));
+        let flex: Node = serde_json::from_value(json!({"type": "chart", "flex": 1.0})).unwrap();
+        assert_eq!(
+            chart_viewport(&flex),
+            (320.0, 180.0),
+            "flex is owned by the outer wrapper; inner pie radius still needs a fallback span"
+        );
+    }
+
+    fn settings_page(value: serde_json::Value) -> Item {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn settings_dropdown_items_are_fields_not_groups() {
+        let page = settings_page(json!({
+            "id": "general",
+            "label": "General",
+            "items": [{
+                "id": "theme",
+                "label": "Theme",
+                "variant": "dropdown",
+                "value": "dark",
+                "items": [
+                    {"id": "dark", "label": "Dark"},
+                    {"id": "light", "label": "Light"}
+                ]
+            }]
+        }));
+        assert!(!is_settings_group(&page.items[0]));
+        assert!(is_settings_field(&page.items[0]));
+        let groups = settings_groups(&page);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].items.len(), 1);
+        assert_eq!(groups[0].items[0].id_or_label(), "theme");
+        assert_eq!(groups[0].items[0].items[0].id_or_label(), "dark");
+        assert_eq!(groups[0].items[0].items[1].id_or_label(), "light");
+    }
+
+    #[test]
+    fn settings_grouped_dropdown_stays_inside_the_group() {
+        let page = settings_page(json!({
+            "id": "general",
+            "label": "General",
+            "items": [
+                {
+                    "label": "Appearance",
+                    "items": [{
+                        "id": "theme",
+                        "label": "Theme",
+                        "variant": "dropdown",
+                        "value": "dark",
+                        "items": [
+                            {"id": "dark", "label": "Dark"},
+                            {"id": "light", "label": "Light"}
+                        ]
+                    }]
+                },
+                {
+                    "label": "Advanced",
+                    "items": [{
+                        "id": "debug",
+                        "label": "Debug",
+                        "variant": "switch",
+                        "checked": false
+                    }]
+                }
+            ]
+        }));
+        assert!(is_settings_group(&page.items[0]));
+        assert!(is_settings_group(&page.items[1]));
+        assert!(is_settings_field(&page.items[0].items[0]));
+        let groups = settings_groups(&page);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].label.as_deref(), Some("Appearance"));
+        assert_eq!(groups[0].items[0].id_or_label(), "theme");
+        assert_eq!(groups[1].label.as_deref(), Some("Advanced"));
+        assert_eq!(groups[1].items[0].id_or_label(), "debug");
+    }
+
+    #[test]
+    fn unused_resizable_keys_are_dropped() {
+        use std::collections::{HashMap, HashSet};
+        let mut slots = HashMap::from([("split-a".to_string(), 1u8), ("split-b".to_string(), 2u8)]);
+        let used = HashSet::from(["split-a".to_string()]);
+        slots.retain(|key, _| used.contains(key));
+        assert_eq!(slots.len(), 1);
+        assert!(slots.contains_key("split-a"));
+        assert!(!slots.contains_key("split-b"));
     }
 }

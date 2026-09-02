@@ -18,6 +18,7 @@ use gpui_component::{
 };
 use serde_json::json;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -426,6 +427,18 @@ pub fn notification_fingerprint(node: &Node) -> String {
     )
 }
 
+/// Current `:on-click` for a still-mounted notification.
+///
+/// Fingerprint ignores callback ids, so an unchanged toast stays mounted
+/// across `export-tree`. The crate `on_click` closure must call this at
+/// click time (keyed by notification id) instead of capturing `cb-N`.
+pub fn live_notification_click(
+    slots: &HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<String> {
+    slots.get(key).cloned().flatten()
+}
+
 pub fn notification_autohide(node: &Node) -> bool {
     node.autohide.unwrap_or(true)
 }
@@ -434,6 +447,7 @@ pub fn notification_autohide(node: &Node) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn node(value: serde_json::Value) -> Node {
         serde_json::from_value(value).unwrap()
@@ -552,6 +566,53 @@ mod tests {
         let spec = collect_open_sheet(&tree).unwrap();
         assert_eq!(spec.key, "second");
         assert!(spec.node.contains_text("B"));
+    }
+
+    #[test]
+    fn notification_fingerprint_ignores_callback_ids() {
+        let first = node(json!({
+            "type": "notification",
+            "id": "saved",
+            "title": "Saved",
+            "message": "ok",
+            "autohide": false,
+            "on-click": "cb-10",
+            "on-close": "cb-11"
+        }));
+        let later = node(json!({
+            "type": "notification",
+            "id": "saved",
+            "title": "Saved",
+            "message": "ok",
+            "autohide": false,
+            "on-click": "cb-44",
+            "on-close": "cb-45"
+        }));
+        assert_eq!(
+            notification_fingerprint(&first),
+            notification_fingerprint(&later)
+        );
+    }
+
+    #[test]
+    fn notification_click_uses_current_id_after_export() {
+        let mut slots = HashMap::new();
+        slots.insert("saved".into(), Some("cb-10".into()));
+        assert_eq!(
+            live_notification_click(&slots, "saved").as_deref(),
+            Some("cb-10")
+        );
+        slots.insert("saved".into(), Some("cb-44".into()));
+        assert_eq!(
+            live_notification_click(&slots, "saved").as_deref(),
+            Some("cb-44")
+        );
+        assert_ne!(
+            live_notification_click(&slots, "saved").as_deref(),
+            Some("cb-10")
+        );
+        slots.insert("saved".into(), None);
+        assert_eq!(live_notification_click(&slots, "saved"), None);
     }
 
     #[test]
