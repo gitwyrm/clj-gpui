@@ -141,7 +141,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-escape` | string callback id | `text-field` (0-arg) |
 | `on-close` | string callback id | `alert`, `dialog` (0-arg) |
 | `on-ok` / `on-cancel` | string callback id | `dialog` (0-arg; crate then closes and fires `on-close`) |
-| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `table`: count-1 click is only `on-change`. Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
+| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `table`: count-1 click is only `on-change` (next GPUI frame). Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
 | `on-open-change` | string callback id | `popover` (boolean); `dialog` (`false` on dismiss) |
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `text-field`: request keyboard focus |

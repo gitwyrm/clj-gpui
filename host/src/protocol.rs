@@ -130,31 +130,38 @@ pub fn table_activation_calls(
 /// Crate order in `TableState::on_row_left_click`:
 /// `set_selected_row` (always `cx.emit(SelectRow)` then `cx.notify()`),
 /// then if `click_count() == 2`, `cx.emit(DoubleClickedRow)`.
-/// `Context::emit` queues `Effect::Emit`; subscribers run in
-/// `flush_effects`. A count-1 click is only `SelectRow`. A count-2
-/// click is `SelectRow` then `DoubleClickedRow` from that same call.
-/// The host records the select, lets `DoubleClickedRow` consume it for
-/// one `:on-change` + `:on-confirm` batch, and flushes a lone
-/// `:on-change` only after that emit has had a chance to run. No timers.
+/// `Context::emit` queues `Effect::Emit`. A count-1 click is only
+/// `SelectRow`. A count-2 click is `SelectRow` then `DoubleClickedRow`
+/// from that same call. The host records the select and flushes a lone
+/// `:on-change` on the **next GPUI frame** so a same-click
+/// `DoubleClickedRow` can consume it first and send one
+/// `:on-change` + `:on-confirm` batch. No timers or debounce windows.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TableClickCoalesce {
     pending_row: Option<usize>,
+    frame_flush_scheduled: bool,
 }
 
 impl TableClickCoalesce {
-    /// Returns whether the caller should defer a single-select flush.
+    /// Returns whether the caller should schedule a next-frame
+    /// single-select flush. `false` when suppressed or a frame flush
+    /// is already pending for this table.
     pub fn on_select_row(&mut self, row_ix: usize, suppress: bool) -> bool {
         if suppress {
             self.pending_row = None;
             return false;
         }
         self.pending_row = Some(row_ix);
+        if self.frame_flush_scheduled {
+            return false;
+        }
+        self.frame_flush_scheduled = true;
         true
     }
 
     /// `true` when `SelectRow` for this row is already pending, so the
     /// activation batch should include `:on-change`. Consumes the pending
-    /// row so a deferred single-select flush is a no-op. A double-click
+    /// row so a next-frame single-select flush is a no-op. A double-click
     /// for a different row leaves the pending select in place.
     pub fn on_double_clicked_row(&mut self, row_ix: usize) -> bool {
         if self.pending_row == Some(row_ix) {
@@ -166,6 +173,7 @@ impl TableClickCoalesce {
     }
 
     pub fn take_pending_select(&mut self) -> Option<usize> {
+        self.frame_flush_scheduled = false;
         self.pending_row.take()
     }
 }
@@ -823,10 +831,14 @@ mod tests {
             !premature.on_double_clicked_row(0),
             "too-early flush leaves confirm as a second standalone callback"
         );
-        let mut nested = TableClickCoalesce::default();
-        assert!(nested.on_select_row(0, false));
-        assert!(nested.on_double_clicked_row(0));
-        assert!(nested.take_pending_select().is_none());
+        let mut scheduled = TableClickCoalesce::default();
+        assert!(scheduled.on_select_row(0, false));
+        assert!(
+            !scheduled.on_select_row(0, false),
+            "second SelectRow before the frame flush must not stack another callback"
+        );
+        assert!(scheduled.on_double_clicked_row(0));
+        assert!(scheduled.take_pending_select().is_none());
 
         let (tx, rx) = std::sync::mpsc::channel();
         send_callbacks(

@@ -1592,30 +1592,34 @@ impl RootView {
         // `set_selected_row` has no listener yet. Reuse uses suppress_select.
         self.sync_table_selection(key, &state, selected.as_deref(), cx);
         let key_owned = key.to_string();
-        cx.subscribe(&state, move |this, _, event: &TableEvent, cx| match event {
-            TableEvent::SelectRow(ix) => {
-                let suppress = this
-                    .tables
-                    .get(&key_owned)
-                    .is_some_and(|s| s.suppress_select);
-                let defer = this
-                    .tables
-                    .get_mut(&key_owned)
-                    .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
-                if !defer {
-                    return;
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _, event: &TableEvent, window, cx| match event {
+                TableEvent::SelectRow(ix) => {
+                    let suppress = this
+                        .tables
+                        .get(&key_owned)
+                        .is_some_and(|s| s.suppress_select);
+                    let defer = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
+                    if !defer {
+                        return;
+                    }
+                    Self::schedule_pending_table_select_flush(window, cx, key_owned.clone());
                 }
-                Self::schedule_pending_table_select_flush(cx, key_owned.clone());
-            }
-            TableEvent::DoubleClickedRow(ix) => {
-                let include_change = this
-                    .tables
-                    .get_mut(&key_owned)
-                    .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
-                emit_table_activation(this, &key_owned, *ix, include_change, cx);
-            }
-            _ => {}
-        })
+                TableEvent::DoubleClickedRow(ix) => {
+                    let include_change = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
+                    emit_table_activation(this, &key_owned, *ix, include_change, cx);
+                }
+                _ => {}
+            },
+        )
         .detach();
         self.tables.insert(
             key.to_string(),
@@ -1667,20 +1671,17 @@ impl RootView {
     /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
     /// not follow from the same `on_row_left_click`.
     ///
-    /// `Context::emit` queues `Effect::Emit`. `on_row_left_click` may
-    /// push `DoubleClickedRow` *after* `set_selected_row` returns. If
-    /// `SelectRow` is delivered before that second emit is queued, one
-    /// trailing `Defer` runs too early, `:on-change` renders, and
-    /// `:on-confirm`'s `cb-N` is rewired. Re-defer once so a
-    /// `DoubleClickedRow` queued after this subscriber still consumes
-    /// the pending row in the same effect cycle. No timers.
-    fn schedule_pending_table_select_flush(cx: &mut Context<Self>, key: String) {
+    /// A trailing `Defer` can still run before `DoubleClickedRow` if
+    /// `SelectRow` is flushed before that second emit is queued. The
+    /// next platform frame runs after the click's `on_row_left_click`
+    /// has finished, so a same-click `DoubleClickedRow` consumes the
+    /// pending row first. Count-1 `:on-change` is one frame later; that
+    /// is a GPUI frame boundary, not a timer.
+    fn schedule_pending_table_select_flush(window: &Window, cx: &mut Context<Self>, key: String) {
         let entity = cx.entity();
-        cx.defer(move |app| {
-            app.defer(move |app| {
-                let _ = entity.update(app, |this, cx| {
-                    this.flush_pending_table_select(&key, cx);
-                });
+        window.on_next_frame(move |_, app| {
+            let _ = entity.update(app, |this, cx| {
+                this.flush_pending_table_select(&key, cx);
             });
         });
     }
