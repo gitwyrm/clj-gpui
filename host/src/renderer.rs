@@ -1489,10 +1489,10 @@ fn parse_color(value: &str) -> Option<u32> {
 }
 
 /// Step is drag granularity. Clojure's controlled value is accepted as-is
-/// (then clamped to min/max). `SliderState::set_value` notifies without
-/// emitting `SliderEvent::Change`, so applying an unchanged tree cannot loop.
-const SLIDER_VALUE_EPS: f32 = 1.0e-4;
-
+/// (then clamped to min/max). Compare f32 values exactly so a tiny-range
+/// slider (e.g. 0 → 5e-5 with max 1e-4) is not discarded. `set_value`
+/// notifies without emitting `SliderEvent::Change`, so an unchanged tree
+/// cannot loop.
 fn slider_range(min: Option<f32>, max: Option<f32>) -> (f32, f32) {
     let min = min.unwrap_or(0.0);
     let max = max.unwrap_or(100.0);
@@ -1512,7 +1512,7 @@ fn slider_controlled_value(raw: Option<f32>, min: f32, max: f32) -> f32 {
 }
 
 fn slider_value_changed(current: f32, wanted: f32) -> bool {
-    (current - wanted).abs() > SLIDER_VALUE_EPS
+    current != wanted
 }
 
 /// Map crate `on_toggle_click` indices to ids. HashSet iteration order is
@@ -2224,9 +2224,7 @@ mod select_control_tests {
 
 #[cfg(test)]
 mod slider_control_tests {
-    use super::{
-        slider_controlled_value, slider_range, slider_step, slider_value_changed, SLIDER_VALUE_EPS,
-    };
+    use super::{slider_controlled_value, slider_range, slider_step, slider_value_changed};
 
     #[test]
     fn controlled_value_ignores_step_when_syncing() {
@@ -2243,8 +2241,20 @@ mod slider_control_tests {
     #[test]
     fn unchanged_value_does_not_need_set_value() {
         assert!(!slider_value_changed(40.0, 40.0));
-        assert!(!slider_value_changed(40.0, 40.0 + SLIDER_VALUE_EPS / 2.0));
         assert!(slider_value_changed(40.0, 40.1));
+    }
+
+    #[test]
+    fn tiny_range_controlled_value_is_applied() {
+        let (lo, hi) = slider_range(Some(0.0), Some(0.0001));
+        assert_eq!((lo, hi), (0.0, 0.0001));
+        let wanted = slider_controlled_value(Some(0.00005), lo, hi);
+        assert_eq!(wanted, 0.00005);
+        assert!(
+            slider_value_changed(0.0, wanted),
+            "0 → 5e-5 on a 0..1e-4 slider must update the host entity"
+        );
+        assert!(!slider_value_changed(wanted, wanted));
     }
 
     #[test]
