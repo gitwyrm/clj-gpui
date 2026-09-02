@@ -2,9 +2,9 @@ use crate::catalog;
 use crate::mapping;
 use crate::protocol::{Cmd, HostEvent, Item, Node};
 use gpui::{
-    div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context, Element,
-    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
-    PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
+    canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
+    Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke,
+    LayoutId, PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
     accordion::Accordion,
@@ -61,6 +61,9 @@ struct SliderSlot {
     max: f32,
     step: f32,
     on_change: Option<String>,
+    /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
+    /// track width changes we must re-render or they disagree by a few px.
+    bar_px: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
@@ -173,8 +176,6 @@ pub struct RootView {
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
     used_inputs: HashSet<String>,
-    used_sliders: HashSet<String>,
-    last_used_sliders: HashSet<String>,
     used_selects: HashSet<String>,
     _appearance: Subscription,
     _keystrokes: Subscription,
@@ -256,8 +257,6 @@ impl RootView {
             sliders: HashMap::new(),
             selects: HashMap::new(),
             used_inputs: HashSet::new(),
-            used_sliders: HashSet::new(),
-            last_used_sliders: HashSet::new(),
             used_selects: HashSet::new(),
             _appearance: appearance,
             _keystrokes: keystrokes,
@@ -565,13 +564,10 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SliderState> {
-        self.used_sliders.insert(key.to_string());
-        // gpui-component paints the fill from cached `bounds`. A fresh or
-        // unmounted entity has size 0, and left(0)+right(0) is a 100% bar
-        // until some later mouse-driven render. Keep the entity across tab
-        // switches and refresh one frame after remount so layout can write
-        // the real width.
-        let remounting = !self.last_used_sliders.contains(key);
+        // gpui-component paints fill/thumb from cached `bounds`. Size 0 is a
+        // 100% bar; a stale width leaves the fill a few px off the knob until
+        // the mouse moves. Keep the entity across tab switches; a canvas on
+        // the wrapper re-renders when the laid-out size changes.
         let min = node.min.unwrap_or(0.0);
         let max = node.max.unwrap_or(100.0);
         let step = if node.step.unwrap_or(1.0) <= 0.0 {
@@ -597,9 +593,6 @@ impl RootView {
                     slot.state.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
-                }
-                if remounting {
-                    refresh_slider_after_layout(window, cx);
                 }
                 return slot.state.clone();
             }
@@ -637,9 +630,9 @@ impl RootView {
                 max: hi,
                 step,
                 on_change: node.on_change.clone(),
+                bar_px: None,
             },
         );
-        refresh_slider_after_layout(window, cx);
         state
     }
 
@@ -957,7 +950,42 @@ impl RootView {
         if node.disabled {
             slider = slider.disabled(true);
         }
-        apply_style(slider, node, cx).into_any_element()
+        let mut inner = node.clone();
+        inner.flex = None;
+        inner.width = None;
+        inner.height = None;
+        inner.size = None;
+        let slider = apply_style(slider, &inner, cx);
+        let view = cx.weak_entity();
+        let key = key.to_string();
+        copy_outer_layout(div().relative().id(eid(&format!("{key}-track"))), node)
+            .child(slider)
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                        let _ = view.update(cx, |this, cx| {
+                            let Some(slot) = this.sliders.get_mut(&key) else {
+                                return;
+                            };
+                            let changed = match slot.bar_px {
+                                None => true,
+                                Some((w, h)) => {
+                                    (w - size.0).abs() > 0.5 || (h - size.1).abs() > 0.5
+                                }
+                            };
+                            if changed {
+                                slot.bar_px = Some(size);
+                                cx.notify();
+                            }
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .into_any_element()
     }
 
     fn render_progress(&self, node: &Node, cx: &App) -> AnyElement {
@@ -1382,7 +1410,6 @@ impl Render for RootView {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.used_inputs.clear();
-        self.last_used_sliders = std::mem::take(&mut self.used_sliders);
         self.used_selects.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
@@ -1407,7 +1434,7 @@ impl Render for RootView {
         // SliderState stores the last laid-out bar size. Dropping it on tab
         // switch recreates an entity whose bounds are 0, so the fill paints
         // at 100% until the mouse moves. Keep host slots while the window
-        // lives; `used_sliders` still tracks the current tree for remounts.
+        // lives.
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
 
@@ -1829,10 +1856,6 @@ impl Element for ThemeScope {
 
 fn eid(path: &str) -> SharedString {
     SharedString::from(path.to_string())
-}
-
-fn refresh_slider_after_layout(window: &mut Window, cx: &mut Context<RootView>) {
-    cx.on_next_frame(window, |_, _, cx| cx.notify());
 }
 
 fn quit_host(cx: &mut App) {
