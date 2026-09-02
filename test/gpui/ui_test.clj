@@ -72,6 +72,9 @@
   (is (= {:id "Rust" :label "Rust"} (ui/option-item "Rust")))
   (is (= {:id "clj" :label "Clojure"}
          (ui/option-item {:id :clj :label "Clojure"})))
+  (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
+  (is (true? (:checked (ui/option-item {:id :notify :label "N" :checked true}))))
+  (is (= "left" (:side (ui/option-item {:id :files :side :left :label "Files"}))))
   (is (= ["a" "b"] (mapv :id (ui/option-items [:a nil :b]))))
   (is (nil? (ui/option-item nil)))
   (is (= "ui/dark" (ui/wire-id :ui/dark)))
@@ -538,6 +541,74 @@
       (is (true? (get-in n [:items 0 :expanded])))
       (is (= "lib" (get-in n [:items 0 :items 0 :id]))))))
 
+(deftest product-widget-constructors
+  (testing "sheet rewrites :open? and keeps footer"
+    (let [n (ui/sheet true
+                      {:title "Inspect" :placement :right
+                       :footer (ui/button "Done" (fn []))}
+                      (ui/label "Body"))]
+      (is (= :sheet (:type n)))
+      (is (true? (:open n)))
+      (is (nil? (:open? n)))
+      (is (= :right (:placement n)))
+      (is (= :button (get-in n [:footer :type])))
+      (is (= :label (get-in n [:children 0 :type])))))
+  (testing "notification presence and variant"
+    (let [n (ui/notification {:variant :success :title "Saved" :message "ok" :autohide false})]
+      (is (= :notification (:type n)))
+      (is (= :success (:variant n)))
+      (is (false? (:autohide n)))
+      (is (nil? (:open n)))))
+  (testing "number otp color date editor"
+    (let [n (ui/number-input 42 {:min 0 :max 100 :step 1})]
+      (is (= :number-input (:type n)))
+      (is (= 42 (:value n)))
+      (is (= "42" (:text n))))
+    (let [n (ui/otp-input "123" {:count 6 :masked true})]
+      (is (= :otp-input (:type n)))
+      (is (= "123" (:value n)))
+      (is (true? (:masked n)))
+      (is (= 6 (:count n))))
+    (is (= "#3366ff" (:value (ui/color-picker "#3366ff"))))
+    (let [n (ui/date-picker ["2026-01-01" "2026-01-31"] {:range true})]
+      (is (= :date-picker (:type n)))
+      (is (true? (:range n))))
+    (is (= "rust" (:language (ui/editor "fn" {:language "rust"})))))
+  (testing "virtual-list chart markdown chrome"
+    (let [n (ui/virtual-list [{:id :a :label "A" :height 40}] {:selected :a :height 200})]
+      (is (= :virtual-list (:type n)))
+      (is (= "a" (:value n)))
+      (is (= 40 (get-in n [:items 0 :height]))))
+    (let [n (ui/chart :bar [{:id :a :label "A" :value 3.5}] {:height 180})]
+      (is (= :chart (:type n)))
+      (is (= "bar" (:variant n)))
+      (is (= 3.5 (get-in n [:items 0 :value]))))
+    (is (= :markdown (:type (ui/markdown "# Hi"))))
+    (is (= :html (:type (ui/html "<p>x</p>"))))
+    (let [n (ui/sidebar [{:id :home :label "Home" :icon :check}]
+                        {:selected :home :collapsed true :side :right})]
+      (is (= :sidebar (:type n)))
+      (is (= "home" (:value n)))
+      (is (true? (:collapsed n)))
+      (is (= :right (:side n))))
+    (let [n (ui/settings [{:id :general :label "General"
+                           :items [{:id :notify :label "N" :checked true :variant :switch}]}]
+                         {:on-change (fn [_])})]
+      (is (= :settings (:type n)))
+      (is (true? (get-in n [:items 0 :items 0 :checked])))
+      (is (= "switch" (get-in n [:items 0 :items 0 :variant]))))
+    (let [n (ui/dock {:items [{:id :files :side :left :label "Files"
+                               :content (ui/markdown "hi")}]})]
+      (is (= :dock (:type n)))
+      (is (= "left" (get-in n [:items 0 :side])))
+      (is (= :markdown (get-in n [:items 0 :content :type]))))
+    (let [n (ui/resizable {:orientation :vertical}
+                          (ui/label "a")
+                          (ui/label "b"))]
+      (is (= :resizable (:type n)))
+      (is (= :vertical (:orientation n)))
+      (is (= 2 (count (:children n)))))))
+
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
   (let [got (atom nil)
@@ -590,6 +661,85 @@
     (is (= {:ok true :id (get-in children [5 :on-change])}
            (runtime/invoke-callback! (get-in children [5 :on-change]) "lib")))
     (is (= :lib @got))))
+
+(deftest product-widget-callbacks-sanitize-and-restore-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/sheet true {:on-close #(reset! got :sheet)
+                                   :footer (ui/button "Done" #(reset! got :done))}
+                             (ui/label "Body"))
+                   (ui/notification {:message "ok" :on-close #(reset! got :note)})
+                   (ui/virtual-list [{:id :alpha :label "Alpha"}]
+                                    {:on-change #(reset! got %)})
+                   (ui/settings [{:id :general
+                                  :items [{:id :notify :label "N" :checked true}]}]
+                                {:on-change #(reset! got %)})))
+        children (:children exported)]
+    (is (string? (get-in children [0 :on-close])))
+    (is (string? (get-in children [0 :footer :on-click])))
+    (is (string? (get-in children [1 :on-close])))
+    (is (string? (get-in children [2 :on-change])))
+    (is (string? (get-in children [3 :on-change])))
+    (is (= {:ok true :id (get-in children [0 :footer :on-click])}
+           (runtime/invoke-callback! (get-in children [0 :footer :on-click]))))
+    (is (= :done @got))
+    (is (= {:ok true :id (get-in children [2 :on-change])}
+           (runtime/invoke-callback! (get-in children [2 :on-change]) "alpha")))
+    (is (= :alpha @got))
+    (is (= {:ok true :id (get-in children [3 :on-change])}
+           (runtime/invoke-callback! (get-in children [3 :on-change])
+                                     {:id "notify" :value true})))
+    (is (= {:id :notify :value true} @got))))
+
+(deftest settings-flat-dropdown-restores-field-and-option-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/settings
+                   [{:id :general
+                     :label "General"
+                     :items [{:id :theme
+                              :label "Theme"
+                              :variant :dropdown
+                              :value :dark
+                              :items [{:id :dark :label "Dark"}
+                                      {:id :light :label "Light"}]}]}]
+                   {:on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "theme" :value "light"})))
+    (is (= {:id :theme :value :light} @got))))
+
+(deftest settings-grouped-dropdown-restores-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/settings
+                   [{:id :general
+                     :label "General"
+                     :items [{:label "Appearance"
+                              :items [{:id :theme
+                                       :label "Theme"
+                                       :variant :dropdown
+                                       :value :dark
+                                       :items [{:id :dark :label "Dark"}
+                                               {:id :light :label "Light"}]}]}
+                             {:label "Advanced"
+                              :items [{:id :debug
+                                       :label "Debug"
+                                       :variant :switch
+                                       :checked false}]}]}]
+                   {:on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "theme" :value "light"})))
+    (is (= {:id :theme :value :light} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:id "debug" :value true})))
+    (is (= {:id :debug :value true} @got))))
 
 (deftest later-export-invalidates-prior-callback-ids
   (runtime/reset-callbacks!)

@@ -2,7 +2,7 @@ use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub const PROTOCOL_VERSION: u64 = 5;
+pub const PROTOCOL_VERSION: u64 = 6;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -181,6 +181,65 @@ impl TableClickCoalesce {
     }
 }
 
+/// Coalesce `InputEvent::Change` across one GPUI effect flush **and**
+/// across the Clojure callback round-trip.
+///
+/// gpui-component `InputState::undo` / `redo` applies every history item
+/// in a version group, and each `replace_text_in_range` emits `Change`.
+/// Fast typing does the same across consecutive frames. Sending one
+/// `Cmd::Callback` per emit lets the bridge `export-tree` after the
+/// first, so later callbacks are unknown ids (`cb-N` is monotonic).
+///
+/// Record the latest value, schedule at most one deferred flush, and
+/// after that send stay `in_flight` until the next tree assigns a new
+/// `:on-change` id. Further edits only update `pending`; the refreshed
+/// id flushes the final string. Same idea as `TableClickCoalesce`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct InputChangeCoalesce {
+    pending: Option<String>,
+    flush_scheduled: bool,
+    in_flight: bool,
+}
+
+impl InputChangeCoalesce {
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_change(&mut self, value: String) -> bool {
+        self.pending = Some(value);
+        if self.flush_scheduled || self.in_flight {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    /// Take the value to send. Marks the slot in-flight so another
+    /// callback is not scheduled until `on_ids_refreshed`.
+    pub fn take_pending(&mut self) -> Option<String> {
+        self.flush_scheduled = false;
+        let value = self.pending.take()?;
+        self.in_flight = true;
+        Some(value)
+    }
+
+    /// New export assigned a fresh `:on-change` id. Returns whether to
+    /// schedule a flush for edits that arrived during the round-trip.
+    pub fn on_ids_refreshed(&mut self) -> bool {
+        self.in_flight = false;
+        if self.pending.is_some() && !self.flush_scheduled {
+            self.flush_scheduled = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.pending = None;
+        self.flush_scheduled = false;
+        self.in_flight = false;
+    }
+}
+
 /// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
 pub fn menu_selection_calls(
     item_click: Option<String>,
@@ -263,6 +322,24 @@ pub struct Item {
     /// Tree item expanded on first paint.
     #[serde(default)]
     pub expanded: bool,
+    /// Chart y / settings field / numeric cell. JSON number, string, or bool.
+    #[serde(default)]
+    pub value: Option<Value>,
+    /// Virtual-list row height in pixels.
+    #[serde(default)]
+    pub height: Option<f32>,
+    /// Dock panel side: `left`, `right`, `bottom`, `center`.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Settings field type (`switch`, `input`, `number`, `dropdown`).
+    #[serde(default)]
+    pub variant: Option<String>,
+    #[serde(default)]
+    pub min: Option<f32>,
+    #[serde(default)]
+    pub max: Option<f32>,
+    #[serde(default)]
+    pub step: Option<f32>,
 }
 
 impl Item {
@@ -287,6 +364,24 @@ impl Item {
             || self.id.as_deref() == Some("-")
             || self.label.as_deref() == Some("-")
             || self.text.as_deref() == Some("-")
+    }
+
+    pub fn number_value(&self) -> Option<f32> {
+        match &self.value {
+            Some(Value::Number(n)) => n.as_f64().map(|n| n as f32),
+            Some(Value::String(s)) => s.parse().ok(),
+            _ => self.text.as_deref().and_then(|s| s.parse().ok()),
+        }
+    }
+
+    pub fn string_value(&self) -> Option<String> {
+        match &self.value {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            Some(Value::Bool(b)) => Some(b.to_string()),
+            Some(Value::Null) | None => self.text.clone(),
+            Some(other) => Some(other.to_string()),
+        }
     }
 }
 
@@ -442,6 +537,33 @@ pub struct Node {
     /// Popover / dropdown-menu trigger node (usually a `button`).
     #[serde(default)]
     pub trigger: Option<Box<Node>>,
+    /// Sheet slide edge: `left`, `right`, `top`, `bottom`.
+    #[serde(default)]
+    pub placement: Option<String>,
+    /// Notification auto-hide (default true).
+    #[serde(default)]
+    pub autohide: Option<bool>,
+    /// Code editor highlighter language (`rust`, `clojure`, …).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// OTP masked cells.
+    #[serde(default)]
+    pub masked: bool,
+    /// Sidebar collapsed chrome.
+    #[serde(default)]
+    pub collapsed: bool,
+    /// Sidebar / dock side: `left` or `right`.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// Date display format, or markdown vs `html`.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Date picker range mode.
+    #[serde(default)]
+    pub range: bool,
+    /// Sheet footer node.
+    #[serde(default)]
+    pub footer: Option<Box<Node>>,
 }
 
 impl Node {
@@ -478,6 +600,10 @@ impl Node {
             || self.options.iter().any(|item| item_contains(item, needle))
             || self
                 .trigger
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .footer
                 .as_ref()
                 .is_some_and(|node| node.contains_text(needle))
     }
@@ -881,6 +1007,50 @@ mod tests {
     }
 
     #[test]
+    fn input_change_coalesce_keeps_latest_value_and_one_flush() {
+        let mut c = InputChangeCoalesce::default();
+        assert!(c.on_change("a".into()));
+        assert!(
+            !c.on_change("ab".into()),
+            "grouped undo emits one Change per history item; only the first schedules a flush"
+        );
+        assert!(!c.on_change("".into()));
+        assert_eq!(c.take_pending(), Some("".into()));
+        assert!(c.take_pending().is_none());
+        assert!(
+            !c.on_change("x".into()),
+            "after send, further Changes wait for a new callback id"
+        );
+        assert!(
+            c.on_ids_refreshed(),
+            "tree apply with leftover text schedules one flush on the new id"
+        );
+        assert_eq!(c.take_pending(), Some("x".into()));
+        assert!(
+            !c.on_ids_refreshed(),
+            "a tree with no pending edits must not emit again"
+        );
+        assert!(
+            c.on_change("y".into()),
+            "after ids refresh with no leftover, a later Change can schedule"
+        );
+        assert_eq!(c.take_pending(), Some("y".into()));
+    }
+
+    #[test]
+    fn input_change_coalesce_clear_unsticks_in_flight() {
+        let mut c = InputChangeCoalesce::default();
+        assert!(c.on_change("a".into()));
+        assert_eq!(c.take_pending(), Some("a".into()));
+        c.clear();
+        assert!(
+            c.on_change("b".into()),
+            "clear drops in-flight so a new edit can flush"
+        );
+        assert_eq!(c.take_pending(), Some("b".into()));
+    }
+
+    #[test]
     fn decodes_accordion_with_nested_content() {
         let node: Node = serde_json::from_value(json!({
             "type": "accordion",
@@ -895,7 +1065,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 5);
+        assert_eq!(PROTOCOL_VERSION, 6);
     }
 
     #[test]
@@ -1043,7 +1213,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 5);
+        assert_eq!(PROTOCOL_VERSION, 6);
     }
 
     #[test]
@@ -1063,5 +1233,47 @@ mod tests {
         .unwrap();
         assert!(node.items[1].is_separator());
         assert_eq!(node.items[2].items[0].id_or_label(), "paste");
+    }
+
+    #[test]
+    fn decodes_v6_product_nodes() {
+        let sheet: Node = serde_json::from_value(json!({
+            "type": "sheet",
+            "open": true,
+            "placement": "left",
+            "title": "Inspect",
+            "footer": {"type": "button", "text": "Done"}
+        }))
+        .unwrap();
+        assert_eq!(sheet.placement.as_deref(), Some("left"));
+        assert!(sheet.contains_text("Done"));
+
+        let note: Node = serde_json::from_value(json!({
+            "type": "notification",
+            "variant": "success",
+            "title": "Saved",
+            "message": "ok",
+            "autohide": false
+        }))
+        .unwrap();
+        assert_eq!(note.autohide, Some(false));
+        assert_eq!(note.message.as_deref(), Some("ok"));
+
+        let chart: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "line",
+            "items": [{"id": "a", "label": "A", "value": 3.5}]
+        }))
+        .unwrap();
+        assert_eq!(chart.items[0].number_value(), Some(3.5));
+
+        let date: Node = serde_json::from_value(json!({
+            "type": "date-picker",
+            "value": "2026-09-02",
+            "range": true
+        }))
+        .unwrap();
+        assert!(date.range);
+        assert_eq!(date.string_value().as_deref(), Some("2026-09-02"));
     }
 }

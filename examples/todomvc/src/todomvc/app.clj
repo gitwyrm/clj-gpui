@@ -144,7 +144,7 @@
        :gap 8
        :align :center}
       (ui/label "todos" {:font-size 80
-                         :font-weight :light
+                         :font-weight :thin
                          :font-family ".SystemUIFont"
                          :color title-color})
       (ui/vstack

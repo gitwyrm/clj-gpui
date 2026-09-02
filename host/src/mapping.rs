@@ -4,7 +4,7 @@ use crate::catalog;
 use gpui::Axis;
 use gpui_component::{
     button::ToggleVariant, group_box::GroupBoxVariant, tab::TabVariant, tag::TagVariant, IconName,
-    Size,
+    Placement, Side, Size,
 };
 
 #[cfg(test)]
@@ -35,6 +35,17 @@ pub fn parse_axis(value: Option<&str>) -> Axis {
 /// jams two label/value pairs into a clipped three-column pill. Omitted
 /// orientation is vertical; pass `"horizontal"` plus `:columns` for a grid.
 pub fn parse_description_axis(value: Option<&str>) -> Axis {
+    match value.map(catalog::normalize) {
+        Some(name) if name == "horizontal" => Axis::Horizontal,
+        _ => Axis::Vertical,
+    }
+}
+
+/// Virtual lists default to a vertical column of rows.
+///
+/// `parse_axis` defaults to horizontal (sliders, dividers, resizable). A
+/// virtual-list without `:orientation` should still look like `ui/list`.
+pub fn parse_virtual_list_axis(value: Option<&str>) -> Axis {
     match value.map(catalog::normalize) {
         Some(name) if name == "horizontal" => Axis::Horizontal,
         _ => Axis::Vertical,
@@ -75,6 +86,24 @@ pub fn parse_tag_variant(value: Option<&str>) -> TagVariant {
             _ => TagVariant::Secondary,
         },
         None => TagVariant::Secondary,
+    }
+}
+
+pub fn parse_placement(value: Option<&str>, default: Placement) -> Placement {
+    match value.map(catalog::normalize) {
+        Some(name) if name == "left" => Placement::Left,
+        Some(name) if name == "top" => Placement::Top,
+        Some(name) if name == "bottom" => Placement::Bottom,
+        Some(name) if name == "right" => Placement::Right,
+        _ => default,
+    }
+}
+
+pub fn parse_side(value: Option<&str>, default: Side) -> Side {
+    match value.map(catalog::normalize) {
+        Some(name) if name == "right" => Side::Right,
+        Some(name) if name == "left" => Side::Left,
+        _ => default,
     }
 }
 
@@ -251,5 +280,22 @@ mod tests {
         assert!(matches!(parse_icon("loader"), Some(IconName::Loader)));
         assert!(matches!(parse_icon("star_off"), Some(IconName::StarOff)));
         assert!(parse_icon("not-an-icon").is_none());
+    }
+
+    #[test]
+    fn placement_and_side_from_kebab() {
+        assert_eq!(
+            parse_placement(Some("left"), Placement::Right),
+            Placement::Left
+        );
+        assert_eq!(parse_placement(None, Placement::Right), Placement::Right);
+        assert_eq!(parse_side(Some("right"), Side::Left), Side::Right);
+        assert_eq!(parse_side(None, Side::Left), Side::Left);
+        assert_eq!(parse_virtual_list_axis(None), Axis::Vertical);
+        assert_eq!(
+            parse_virtual_list_axis(Some("horizontal")),
+            Axis::Horizontal
+        );
+        assert_eq!(parse_virtual_list_axis(Some("vertical")), Axis::Vertical);
     }
 }

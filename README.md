@@ -126,7 +126,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
         :on-change #(swap! !state assoc :draft %)})))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, tabs, breadcrumb, accordion, list, table, tree, and menus pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts and dialogs is 0-arg. Popover `:on-open-change` receives a boolean.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders and number-inputs pass a number. Select, radio-group, tabs, breadcrumb, accordion, list, table, tree, virtual-list, sidebar, and menus pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields and the highlighter editor pass the current string to `:on-change` / `:on-submit`. OTP `:on-change` fires only when every cell is filled. Color-picker passes a hex string. Date-picker passes an ISO date or `[start end]`. Settings pass `{:id … :value …}`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts, dialogs, sheets, and notifications is 0-arg. Popover / dialog / sheet `:on-open-change` receives a boolean.
 
 ## Architecture
 
@@ -276,6 +276,22 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/tree [{:id :src :label "src" :expanded true
            :items [{:id :lib :label "lib.rs"}]}]
          {:on-change set-node!})
+(ui/sheet open? {:title "Inspect" :placement :right :on-close hide!}
+  (ui/label "Details"))
+(ui/notification {:variant :success :title "Saved" :message "ok"})
+(ui/number-input 42 {:min 0 :max 100 :step 1 :on-change set!})
+(ui/otp-input code {:count 6 :on-change set!})
+(ui/color-picker "#3366ff" {:on-change set!})
+(ui/date-picker "2026-09-02" {:on-change set!})
+(ui/editor src {:language "rust" :height 200 :on-change set!})
+(ui/virtual-list items {:selected id :on-change set! :height 200})
+(ui/chart :line [{:id :a :label "A" :value 10}] {:height 180})
+(ui/markdown "# Hello")
+(ui/sidebar items {:selected id :side :left :on-change set!})
+(ui/settings pages {:on-change (fn [{:keys [id value]}])})
+(ui/dock {:items [{:id :files :side :left :label "Files"
+                   :content (ui/markdown "…")}]})
+(ui/resizable {:orientation :horizontal} pane-a pane-b)
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 

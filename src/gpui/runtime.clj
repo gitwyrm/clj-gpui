@@ -153,7 +153,8 @@
           (update :children #(mapv sanitize (or % [])))
           (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
           (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
-          (cond-> (some? (:trigger node)) (update :trigger sanitize))))
+          (cond-> (some? (:trigger node)) (update :trigger sanitize))
+          (cond-> (some? (:footer node)) (update :footer sanitize))))
 
     (sequential? node)
     (mapv sanitize node)
