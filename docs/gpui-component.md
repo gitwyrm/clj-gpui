@@ -29,7 +29,7 @@ Classification:
 | `switch::Switch` | `ui/switch` | ✅ | B | `:on-change` receives boolean |
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean |
 | `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives the original Clojure id |
-| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives number |
+| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives number. Entity is kept across unmounts so the fill does not flash at 100% on tab switch |
 | `progress::Progress` | `ui/progress` | ✅ | B | 0–100 |
 | `divider::Divider` | `ui/divider` | ✅ | B | Horizontal default; `:orientation :vertical` |
 | `spinner::Spinner` | `ui/spinner` | ✅ | B | Needs bundled icons |

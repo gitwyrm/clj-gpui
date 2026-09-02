@@ -36,7 +36,8 @@
    (ui/hstack
     {:gap 12 :align :center}
     (ui/label (str "Volume " volume))
-    (ui/slider volume {:min 0 :max 100 :flex 1
+    (ui/slider volume {:id "volume"
+                       :min 0 :max 100 :flex 1
                        :tooltip "0–100"
                        :on-change (set-key :volume)}))
    (ui/progress volume {:tooltip "Mirrors the slider"})

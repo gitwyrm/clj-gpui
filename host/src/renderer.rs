@@ -174,6 +174,7 @@ pub struct RootView {
     selects: HashMap<String, SelectSlot>,
     used_inputs: HashSet<String>,
     used_sliders: HashSet<String>,
+    last_used_sliders: HashSet<String>,
     used_selects: HashSet<String>,
     _appearance: Subscription,
     _keystrokes: Subscription,
@@ -256,6 +257,7 @@ impl RootView {
             selects: HashMap::new(),
             used_inputs: HashSet::new(),
             used_sliders: HashSet::new(),
+            last_used_sliders: HashSet::new(),
             used_selects: HashSet::new(),
             _appearance: appearance,
             _keystrokes: keystrokes,
@@ -564,6 +566,12 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Entity<SliderState> {
         self.used_sliders.insert(key.to_string());
+        // gpui-component paints the fill from cached `bounds`. A fresh or
+        // unmounted entity has size 0, and left(0)+right(0) is a 100% bar
+        // until some later mouse-driven render. Keep the entity across tab
+        // switches and refresh one frame after remount so layout can write
+        // the real width.
+        let remounting = !self.last_used_sliders.contains(key);
         let min = node.min.unwrap_or(0.0);
         let max = node.max.unwrap_or(100.0);
         let step = if node.step.unwrap_or(1.0) <= 0.0 {
@@ -589,6 +597,9 @@ impl RootView {
                     slot.state.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
+                }
+                if remounting {
+                    refresh_slider_after_layout(window, cx);
                 }
                 return slot.state.clone();
             }
@@ -628,6 +639,7 @@ impl RootView {
                 on_change: node.on_change.clone(),
             },
         );
+        refresh_slider_after_layout(window, cx);
         state
     }
 
@@ -1370,7 +1382,7 @@ impl Render for RootView {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.used_inputs.clear();
-        self.used_sliders.clear();
+        self.last_used_sliders = std::mem::take(&mut self.used_sliders);
         self.used_selects.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
@@ -1392,8 +1404,10 @@ impl Render for RootView {
 
         let used = std::mem::take(&mut self.used_inputs);
         self.inputs.retain(|key, _| used.contains(key));
-        let used_sliders = std::mem::take(&mut self.used_sliders);
-        self.sliders.retain(|key, _| used_sliders.contains(key));
+        // SliderState stores the last laid-out bar size. Dropping it on tab
+        // switch recreates an entity whose bounds are 0, so the fill paints
+        // at 100% until the mouse moves. Keep host slots while the window
+        // lives; `used_sliders` still tracks the current tree for remounts.
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
 
@@ -1815,6 +1829,10 @@ impl Element for ThemeScope {
 
 fn eid(path: &str) -> SharedString {
     SharedString::from(path.to_string())
+}
+
+fn refresh_slider_after_layout(window: &mut Window, cx: &mut Context<RootView>) {
+    cx.on_next_frame(window, |_, _, cx| cx.notify());
 }
 
 fn quit_host(cx: &mut App) {
