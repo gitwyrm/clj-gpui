@@ -368,7 +368,7 @@ pub struct CljPanel {
     pub title: SharedString,
     pub live: Rc<RefCell<Node>>,
     pub path: String,
-    pub cmd_tx: mpsc::Sender<Cmd>,
+    pub emit: crate::overlay::ActionEmitter,
     focus: FocusHandle,
 }
 
@@ -377,14 +377,14 @@ impl CljPanel {
         title: impl Into<SharedString>,
         live: Rc<RefCell<Node>>,
         path: String,
-        cmd_tx: mpsc::Sender<Cmd>,
+        emit: crate::overlay::ActionEmitter,
         focus: FocusHandle,
     ) -> Self {
         Self {
             title: title.into(),
             live,
             path,
-            cmd_tx,
+            emit,
             focus,
         }
     }
@@ -401,14 +401,14 @@ impl Focusable for CljPanel {
 impl Render for CljPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let node = self.live.borrow().clone();
-        paint_panel_body(&node, &self.path, self.cmd_tx.clone(), window, cx)
+        paint_panel_body(&node, &self.path, self.emit.clone(), window, cx)
     }
 }
 
 pub fn paint_panel_body(
     node: &Node,
     path: &str,
-    cmd_tx: mpsc::Sender<Cmd>,
+    emit: crate::overlay::ActionEmitter,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
@@ -423,10 +423,8 @@ pub fn paint_panel_body(
                 .child(paint_chart(node, path, cx))
                 .into_any_element()
         }
-        _ if !node.children.is_empty() => {
-            crate::overlay::paint_static(&node.children, cmd_tx, path)
-        }
-        _ => crate::overlay::paint_static(std::slice::from_ref(node), cmd_tx, path),
+        _ if !node.children.is_empty() => crate::overlay::paint_static(&node.children, emit, path),
+        _ => crate::overlay::paint_static(std::slice::from_ref(node), emit, path),
     }
 }
 

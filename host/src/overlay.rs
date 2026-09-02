@@ -167,9 +167,14 @@ impl QueuedAction {
                 found = Some(node.clone());
             }
         });
+        if found.is_none() {
+            if let Self::ButtonClick { .. } = self {
+                found = node_at_static_path(tree, key);
+            }
+        }
         let Some(node) = found else { return Vec::new() };
         match self {
-            Self::ButtonClick { .. } if !node.disabled => node
+            Self::ButtonClick { .. } if node.kind == "button" && !node.disabled => node
                 .on_click
                 .map(|id| vec![protocol::CallbackCall::fire(id)])
                 .unwrap_or_default(),
@@ -319,15 +324,19 @@ pub fn fill_popup_menu(
 /// a small static tree (label / stack / button / divider) from cloned nodes.
 ///
 /// `path` is a stable element-id prefix (`dialog-key/content`). Nested
-/// children append `/index` so sibling stacks cannot collide.
-pub fn paint_static(nodes: &[Node], cmd_tx: mpsc::Sender<Cmd>, path: &str) -> gpui::AnyElement {
+/// children append `/index` so sibling stacks cannot collide. Button clicks
+/// enqueue `QueuedAction::ButtonClick` with that path; ids are resolved
+/// against the installed tree, never captured at paint.
+pub fn paint_static(nodes: &[Node], emit: ActionEmitter, path: &str) -> gpui::AnyElement {
     v_flex()
         .gap(px(8.))
         .p(px(8.))
         .min_w(px(160.))
-        .children(nodes.iter().enumerate().map(|(ix, node)| {
-            paint_static_node(node, &static_child_path(path, ix), cmd_tx.clone())
-        }))
+        .children(
+            nodes.iter().enumerate().map(|(ix, node)| {
+                paint_static_node(node, &static_child_path(path, ix), emit.clone())
+            }),
+        )
         .into_any_element()
 }
 
@@ -335,19 +344,88 @@ pub fn static_child_path(prefix: &str, index: usize) -> String {
     format!("{prefix}/{index}")
 }
 
-fn paint_static_node(node: &Node, path: &str, cmd_tx: mpsc::Sender<Cmd>) -> gpui::AnyElement {
+/// Relative path under a `paint_static` prefix (`0`, `0/1`, …).
+fn static_rel<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    path.strip_prefix(prefix)?
+        .strip_prefix('/')
+        .filter(|rel| !rel.is_empty())
+}
+
+fn node_at_static_rel<'a>(nodes: &'a [Node], rel: &str) -> Option<&'a Node> {
+    let mut current = nodes;
+    let mut parts = rel.split('/');
+    let last = parts.next_back()?;
+    for part in parts {
+        let index: usize = part.parse().ok()?;
+        let node = current.get(index)?;
+        if node.kind != "hstack" && node.kind != "vstack" {
+            return None;
+        }
+        current = node.children.as_slice();
+    }
+    let index: usize = last.parse().ok()?;
+    current.get(index)
+}
+
+/// Locate the node `paint_static` would paint at `path`.
+///
+/// Overlay content uses `{overlay-key}/content/{index}/…`; sheet footers use
+/// `{overlay-key}/footer/0/…`. Dock panels use `{dock-key}/panel/{index}/…`.
+fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
+    let mut found = None;
+    walk_nodes(tree, "root", &mut |node, walk_path| {
+        if found.is_some() {
+            return;
+        }
+        let key = node_key(node, walk_path);
+        match node.kind.as_str() {
+            "dialog" | "popover" | "sheet" => {
+                if let Some(rel) = static_rel(path, &format!("{key}/content")) {
+                    found = node_at_static_rel(&node.children, rel).cloned();
+                } else if node.kind == "sheet" {
+                    if let Some(footer) = node.footer.as_deref() {
+                        if let Some(rel) = static_rel(path, &format!("{key}/footer")) {
+                            found = node_at_static_rel(std::slice::from_ref(footer), rel).cloned();
+                        }
+                    }
+                }
+            }
+            "dock" => {
+                for (index, item) in node.collection().iter().enumerate() {
+                    let Some(content) = item.content.as_deref() else {
+                        continue;
+                    };
+                    let Some(rel) = static_rel(path, &format!("{key}/panel/{index}")) else {
+                        continue;
+                    };
+                    let nodes = if content.children.is_empty() {
+                        std::slice::from_ref(content)
+                    } else {
+                        content.children.as_slice()
+                    };
+                    found = node_at_static_rel(nodes, rel).cloned();
+                    if found.is_some() {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
+    found
+}
+
+fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyElement {
     match node.kind.as_str() {
         "button" => {
             let label = node.text.clone().unwrap_or_default();
             let mut button = Button::new(SharedString::from(path.to_string())).label(label);
             button = apply_button_chrome(button, node);
-            if let Some(callback_id) = node.on_click.clone() {
-                button = button.on_click(move |_, _, _| {
-                    let _ = cmd_tx.send(Cmd::Callback {
-                        id: callback_id.clone(),
-                        value: None,
-                        seq: None,
-                    });
+            if node.on_click.is_some() {
+                let emit = emit.clone();
+                let key = path.to_string();
+                button = button.on_click(move |_, _, cx| {
+                    emit(QueuedAction::ButtonClick { key: key.clone() }, cx);
                 });
             }
             button.into_any_element()
@@ -355,13 +433,13 @@ fn paint_static_node(node: &Node, path: &str, cmd_tx: mpsc::Sender<Cmd>) -> gpui
         "hstack" => h_flex()
             .gap(px(node.gap.unwrap_or(8.)))
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), cmd_tx.clone())
+                paint_static_node(child, &static_child_path(path, child_ix), emit.clone())
             }))
             .into_any_element(),
         "vstack" => v_flex()
             .gap(px(node.gap.unwrap_or(8.)))
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), cmd_tx.clone())
+                paint_static_node(child, &static_child_path(path, child_ix), emit.clone())
             }))
             .into_any_element(),
         "divider" => gpui_component::divider::Divider::horizontal().into_any_element(),
@@ -779,5 +857,34 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].key, "ok");
         assert!(notification_autohide(&notes[0].node));
+    }
+
+    #[test]
+    fn queued_static_overlay_buttons_resolve_content_and_footer_paths() {
+        let tree = node(json!({"type": "window", "children": [
+            {"type": "dialog", "id": "ask", "open": true, "children": [
+                {"type": "label", "text": "body"},
+                {"type": "button", "text": "Save", "on-click": "cb-dialog"}
+            ]},
+            {"type": "popover", "id": "hint", "open": true, "children": [
+                {"type": "hstack", "children": [
+                    {"type": "button", "on-click": "cb-nested-a"},
+                    {"type": "button", "on-click": "cb-nested-b"}
+                ]}
+            ]},
+            {"type": "sheet", "id": "inspect", "open": true,
+             "children": [{"type": "button", "text": "Ping", "on-click": "cb-sheet"}],
+             "footer": {"type": "button", "text": "Done", "on-click": "cb-footer"}}
+        ]}));
+        for (key, expected) in [
+            ("ask/content/1", "cb-dialog"),
+            ("hint/content/0/1", "cb-nested-b"),
+            ("inspect/content/0", "cb-sheet"),
+            ("inspect/footer/0", "cb-footer"),
+        ] {
+            let mut queue = CallbackQueue::default();
+            queue.push(QueuedAction::ButtonClick { key: key.into() });
+            assert_eq!(queue.next(&tree).unwrap()[0].id, expected, "{key}");
+        }
     }
 }

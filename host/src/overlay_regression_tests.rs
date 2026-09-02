@@ -30,16 +30,27 @@ impl RegistryPeer {
         json!({"type": "window", "children": [
             {"type": "dialog", "id": "ask", "open": self.dialog_open,
              "on-cancel": self.id("cancel"), "on-ok": self.id("ok"),
-             "on-close": self.id("close"), "on-open-change": self.id("dialog-open")},
+             "on-close": self.id("close"), "on-open-change": self.id("dialog-open"),
+             "children": [
+                {"type": "label", "text": "Really?"},
+                {"type": "button", "text": "Save", "on-click": self.id("dialog-save")}
+             ]},
             {"type": "popover", "id": "hint", "open": self.popover_open,
-             "on-open-change": self.id("popover-open")},
+             "on-open-change": self.id("popover-open"),
+             "children": [
+                {"type": "label", "text": "Anchored"},
+                {"type": "button", "text": "Close", "on-click": self.id("popover-close")}
+             ]},
             {"type": "dropdown-menu", "id": "edit", "on-change": self.id("menu"),
              "items": [{"id": "copy", "label": "Copy", "on-click": self.id("copy")},
                        {"id": "share", "items": [{"id": "link", "on-click": self.id("link")}]}]},
             {"type": "context-menu", "id": "context", "on-change": self.id("context"),
              "items": [{"id": "inspect", "label": "Inspect"}]},
             {"type": "button", "id": "rerender", "text": "Rerender",
-             "on-click": self.id("rerender")}
+             "on-click": self.id("rerender")},
+            {"type": "sheet", "id": "inspect", "open": true,
+             "children": [{"type": "button", "text": "Ping", "on-click": self.id("sheet-body")}],
+             "footer": {"type": "button", "text": "Done", "on-click": self.id("sheet-footer")}}
         ]})
     }
 
@@ -417,4 +428,100 @@ fn dialog_close_acknowledgement_survives_a_skipped_paint_before_reopen() {
         &wanted, &mounted, false
     ));
     assert!(fixture.peer.lock().unwrap().unknown.is_empty());
+}
+
+#[test]
+fn retained_static_overlay_buttons_use_replacement_registry() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let old_dialog = tree_a.children[0].children[1].on_click.clone().unwrap();
+    let old_popover = tree_a.children[1].children[1].on_click.clone().unwrap();
+    let old_sheet = tree_a.children[5].children[0].on_click.clone().unwrap();
+    let old_footer = tree_a.children[5]
+        .footer
+        .as_ref()
+        .unwrap()
+        .on_click
+        .clone()
+        .unwrap();
+    let old_ids = [
+        old_dialog.clone(),
+        old_popover.clone(),
+        old_sheet.clone(),
+        old_footer.clone(),
+    ];
+    let retained = [
+        ("ask/content/1", "dialog-save"),
+        ("hint/content/1", "popover-close"),
+        ("inspect/content/0", "sheet-body"),
+        ("inspect/footer/0", "sheet-footer"),
+    ];
+
+    let mut queue = CallbackQueue::default();
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    let (mut tree, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    assert!(!fixture
+        .peer
+        .lock()
+        .unwrap()
+        .registry
+        .contains_key(&old_dialog));
+
+    for (index, (key, role)) in retained.into_iter().enumerate() {
+        queue.push(QueuedAction::ButtonClick { key: key.into() });
+        let calls = fixture.send(&mut queue, &tree, index as u64 + 1);
+        assert_eq!(calls.len(), 1, "{key}");
+        assert!(!old_ids.contains(&calls[0].id), "{key} replayed a stale id");
+        let current = match key {
+            "ask/content/1" => tree.children[0].children[1].on_click.clone(),
+            "hint/content/1" => tree.children[1].children[1].on_click.clone(),
+            "inspect/content/0" => tree.children[5].children[0].on_click.clone(),
+            "inspect/footer/0" => tree.children[5].footer.as_ref().unwrap().on_click.clone(),
+            _ => None,
+        };
+        assert_eq!(calls[0].id, current.unwrap(), "{key} -> {role}");
+        let next = fixture.tree();
+        queue.tree_installed(next.1);
+        tree = next.0;
+    }
+
+    let peer = fixture.peer.lock().unwrap();
+    assert!(peer.unknown.is_empty());
+    assert_eq!(
+        peer.fired,
+        vec![
+            ("dialog-save".into(), Value::Null, false),
+            ("popover-close".into(), Value::Null, false),
+            ("sheet-body".into(), Value::Null, false),
+            ("sheet-footer".into(), Value::Null, false),
+        ]
+    );
+}
+
+#[test]
+fn queued_static_overlay_button_skips_removed_disabled_or_replaced() {
+    for tree in [
+        json!({"type": "window", "children": [
+            {"type": "dialog", "id": "ask", "open": true,
+             "children": [{"type": "label", "text": "gone"}]}
+        ]}),
+        json!({"type": "window", "children": [
+            {"type": "dialog", "id": "ask", "open": true,
+             "children": [{"type": "button", "disabled": true, "on-click": "cb-new"}]}
+        ]}),
+        json!({"type": "window", "children": [
+            {"type": "dialog", "id": "ask", "open": true,
+             "children": [{"type": "button"}]}
+        ]}),
+        json!({"type": "window", "children": [
+            {"type": "dialog", "id": "ask", "open": true, "children": []}
+        ]}),
+    ] {
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::ButtonClick {
+            key: "ask/content/0".into(),
+        });
+        assert!(queue.next(&serde_json::from_value(tree).unwrap()).is_none());
+    }
 }

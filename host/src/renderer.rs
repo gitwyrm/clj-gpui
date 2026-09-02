@@ -1625,14 +1625,16 @@ impl RootView {
     fn render_popover(&self, node: &Node, key: &str, cx: &Context<Self>) -> AnyElement {
         let open = node.open.unwrap_or(false);
         let content = node.children.clone();
-        let cmd_tx = self.cmd_tx.clone();
+        let emit = Self::action_emitter(cx);
         let content_path = format!("{key}/content");
         let mut popover = Popover::new(eid(key))
             .open(open)
             .trigger(overlay::trigger_button(node.trigger.as_deref(), key))
-            .content(move |_, _, _| overlay::paint_static(&content, cmd_tx.clone(), &content_path));
+            .content({
+                let emit = emit.clone();
+                move |_, _, _| overlay::paint_static(&content, emit.clone(), &content_path)
+            });
         if node.on_open_change.is_some() {
-            let emit = Self::action_emitter(cx);
             let key = key.to_string();
             popover = popover.on_open_change(move |open, _, cx| {
                 emit(
@@ -1643,6 +1645,8 @@ impl RootView {
                     cx,
                 );
             });
+        } else {
+            let _ = emit;
         }
         apply_style(popover, node, cx).into_any_element()
     }
@@ -2034,15 +2038,14 @@ impl RootView {
         let emit = Self::action_emitter(cx);
         window.on_next_frame(move |window, cx| {
             window.close_all_dialogs(cx);
-            let (keys, live, cmd_tx) = entity.update(cx, |this, _| {
+            let (keys, live) = entity.update(cx, |this, _| {
                 this.dialog_pending = false;
                 let keys = overlay::dialog_keys(&this.dialogs);
                 this.dialog_keys = keys.clone();
-                (keys, this.dialog_live.clone(), this.cmd_tx.clone())
+                (keys, this.dialog_live.clone())
             });
             for key in keys {
                 let live = live.clone();
-                let cmd_tx = cmd_tx.clone();
                 let emit = emit.clone();
                 let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                 window.open_dialog(cx, move |dialog, _, _cx| {
@@ -2051,7 +2054,7 @@ impl RootView {
                     };
                     let children = vec![overlay::paint_static(
                         &spec.node.children,
-                        cmd_tx.clone(),
+                        emit.clone(),
                         &format!("{}/content", spec.key),
                     )];
                     let dialog = overlay::configure_dialog(dialog, &spec.node, children);
@@ -2082,6 +2085,7 @@ impl RootView {
         }
         self.sheet_pending = true;
         let entity = cx.entity();
+        let emit = Self::action_emitter(cx);
         window.on_next_frame(move |window, cx| {
             window.close_sheet(cx);
             let (key, live, cmd_tx, placement) = entity.update(cx, |this, _| {
@@ -2104,13 +2108,13 @@ impl RootView {
                 };
                 let children = vec![overlay::paint_static(
                     &spec.node.children,
-                    cmd_tx.clone(),
+                    emit.clone(),
                     &format!("{}/content", spec.key),
                 )];
                 let footer = spec.node.footer.as_ref().map(|node| {
                     overlay::paint_static(
                         std::slice::from_ref(node.as_ref()),
-                        cmd_tx.clone(),
+                        emit.clone(),
                         &format!("{}/footer", spec.key),
                     )
                 });
@@ -2809,10 +2813,9 @@ impl RootView {
             let live = Rc::new(RefCell::new(content));
             let path = format!("{key}/panel/{ix}");
             let title = item.label_or_id();
-            let cmd_tx = self.cmd_tx.clone();
-            let panel = cx.new(|cx| {
-                extra::CljPanel::new(title.clone(), live, path, cmd_tx, cx.focus_handle())
-            });
+            let emit = Self::action_emitter(cx);
+            let panel = cx
+                .new(|cx| extra::CljPanel::new(title.clone(), live, path, emit, cx.focus_handle()));
             let side = extra::dock_side(item);
             by_side
                 .entry(side)
