@@ -161,7 +161,17 @@
                                      :description "Disk usage"
                                      :maintainer "a <b@c>"})]
     (is (str/includes? control "Package: cljdu"))
-    (is (str/includes? control "Architecture: amd64"))))
+    (is (str/includes? control (str "Architecture: " (:deb (pkg/linux-arch)))))))
+
+(deftest debian-control-uses-default-or-explicit-architecture
+  (doseq [default-arch ["amd64" "arm64"]]
+    (with-redefs [pkg/linux-arch (constantly {:deb default-arch})]
+      (let [cfg {:name "cljdu" :version "0.1.0"}]
+        (is (str/includes? (pkg/debian-control cfg)
+                           (str "Architecture: " default-arch)))
+        (doseq [explicit-arch ["amd64" "arm64"]]
+          (is (str/includes? (pkg/debian-control (assoc cfg :arch explicit-arch))
+                             (str "Architecture: " explicit-arch))))))))
 
 (deftest linux-arch-is-known
   (let [arch (pkg/linux-arch)]
