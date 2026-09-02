@@ -1,19 +1,42 @@
 use crate::catalog;
-use crate::protocol::{Cmd, HostEvent, Node};
+use crate::mapping;
+use crate::protocol::{Cmd, HostEvent, Item, Node};
 use gpui::{
-    div, prelude::*, px, rgb, size, AnyElement, App, Bounds, ClickEvent, Context, Element,
-    ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, LayoutId, PathPromptOptions,
-    Pixels, SharedString, Styled, Subscription, Window,
+    canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
+    Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke,
+    LayoutId, PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants as _},
+    accordion::Accordion,
+    alert::Alert,
+    avatar::Avatar,
+    badge::Badge,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
     checkbox::Checkbox,
+    clipboard::Clipboard,
+    description_list::DescriptionList,
+    divider::Divider,
+    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    kbd::Kbd,
+    link::Link,
+    progress::Progress,
+    radio::{Radio, RadioGroup},
     scroll::ScrollableElement as _,
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    skeleton::Skeleton,
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
+    spinner::Spinner,
+    switch::Switch,
+    tab::{Tab, TabBar},
+    tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
-    v_flex, ActiveTheme as _, Root,
+    tooltip::Tooltip,
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _,
 };
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
@@ -30,6 +53,44 @@ struct InputSlot {
     wait_for_seq: Option<u64>,
     /// Submitted string; a late `Change` echoing it must not restore the draft.
     submitted: Option<String>,
+}
+
+struct SliderSlot {
+    state: Entity<SliderState>,
+    min: f32,
+    max: f32,
+    step: f32,
+    on_change: Option<String>,
+    /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
+    /// track width changes we must re-render or they disagree by a few px.
+    bar_px: Option<(f32, f32)>,
+    /// Extra RootView frames after the size looks stable, so fill/thumb
+    /// rebuild against the crate canvas bounds from the previous prepaint.
+    settle: u8,
+}
+
+#[derive(Clone)]
+struct SelectOpt {
+    id: SharedString,
+    label: SharedString,
+}
+
+impl SelectItem for SelectOpt {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+struct SelectSlot {
+    state: Entity<SelectState<SearchableVec<SelectOpt>>>,
+    searchable: bool,
+    on_change: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,8 +176,14 @@ pub struct RootView {
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
     inputs: HashMap<String, InputSlot>,
+    /// Kept for the window lifetime. Crate `SliderState.bounds` is private;
+    /// dropping the entity on unmount remounts at size 0 (100% fill).
+    sliders: HashMap<String, SliderSlot>,
+    selects: HashMap<String, SelectSlot>,
     used_inputs: HashSet<String>,
+    used_selects: HashSet<String>,
     _appearance: Subscription,
+    _window_bounds: Subscription,
     _keystrokes: Subscription,
     next_submit_seq: u64,
     tree_seq: Option<u64>,
@@ -136,6 +203,13 @@ impl RootView {
             this.apply_theme(window, cx);
             // Always notify: nested nodes may use `:theme :system` even when
             // the root is pinned to light or dark.
+            cx.notify();
+        });
+        let window_bounds = cx.observe_window_bounds(window, |this, _, cx| {
+            for slot in this.sliders.values_mut() {
+                slot.bar_px = None;
+                slot.settle = 0;
+            }
             cx.notify();
         });
         let keystrokes = cx.observe_keystrokes(|this, event, window, cx| {
@@ -193,8 +267,12 @@ impl RootView {
             nrepl_port,
             cmd_tx,
             inputs: HashMap::new(),
+            sliders: HashMap::new(),
+            selects: HashMap::new(),
             used_inputs: HashSet::new(),
+            used_selects: HashSet::new(),
             _appearance: appearance,
+            _window_bounds: window_bounds,
             _keystrokes: keystrokes,
             next_submit_seq: 0,
             tree_seq: None,
@@ -339,6 +417,14 @@ impl RootView {
         }
     }
 
+    fn emit_value(&self, callback_id: String, value: Value) {
+        let _ = self.cmd_tx.send(Cmd::Callback {
+            id: callback_id,
+            value: Some(value),
+            seq: None,
+        });
+    }
+
     fn input_slot(
         &mut self,
         key: &str,
@@ -424,7 +510,7 @@ impl RootView {
                     };
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(value),
+                        value: Some(json!(value)),
                         seq: None,
                     });
                 }
@@ -444,7 +530,7 @@ impl RootView {
                     if let Some(id) = on_submit {
                         let _ = this.cmd_tx.send(Cmd::Callback {
                             id,
-                            value: Some(value),
+                            value: Some(json!(value)),
                             seq: Some(seq),
                         });
                     }
@@ -469,7 +555,7 @@ impl RootView {
                     let value = input.read(cx).value().to_string();
                     let _ = this.cmd_tx.send(Cmd::Callback {
                         id,
-                        value: Some(value),
+                        value: Some(json!(value)),
                         seq: None,
                     });
                 }
@@ -482,6 +568,140 @@ impl RootView {
             state.read(cx).focus_handle(cx).focus(window);
         }
 
+        state
+    }
+
+    fn slider_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SliderState> {
+        // gpui-component paints fill/thumb from cached `bounds`. Size 0 is a
+        // 100% bar; a stale width leaves the fill a few px off the knob until
+        // the mouse moves. Keep the entity across tab switches; a canvas on
+        // the wrapper re-renders when the laid-out size changes.
+        let (lo, hi) = slider_range(node.min, node.max);
+        let step = slider_step(node.step);
+        let value = slider_controlled_value(node.number_value(), lo, hi);
+
+        if let Some(slot) = self.sliders.get_mut(key) {
+            if (slot.min - lo).abs() <= f32::EPSILON
+                && (slot.max - hi).abs() <= f32::EPSILON
+                && (slot.step - step).abs() <= f32::EPSILON
+            {
+                slot.on_change = node.on_change.clone();
+                let current = match slot.state.read(cx).value() {
+                    SliderValue::Single(v) => v,
+                    SliderValue::Range(_, end) => end,
+                };
+                // `set_value` notifies without emitting Change, so applying
+                // Clojure's current value cannot loop. Step is drag granularity
+                // only; a 40→42 update with step 5 must still land on 42.
+                if slider_value_changed(current, value) {
+                    slot.state.update(cx, |s, cx| {
+                        s.set_value(value, window, cx);
+                    });
+                }
+                return slot.state.clone();
+            }
+        }
+
+        let state = cx.new(|_cx| {
+            SliderState::new()
+                .min(lo)
+                .max(hi)
+                .step(step)
+                .default_value(value)
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
+            let SliderEvent::Change(changed) = event;
+            let number = match changed {
+                SliderValue::Single(v) => *v,
+                SliderValue::Range(_, end) => *end,
+            };
+            let Some(id) = this
+                .sliders
+                .get(&key_owned)
+                .and_then(|slot| slot.on_change.clone())
+            else {
+                return;
+            };
+            this.emit_value(id, json!(number));
+        })
+        .detach();
+        self.sliders.insert(
+            key.to_string(),
+            SliderSlot {
+                state: state.clone(),
+                min: lo,
+                max: hi,
+                step,
+                on_change: node.on_change.clone(),
+                bar_px: None,
+                settle: 0,
+            },
+        );
+        state
+    }
+
+    fn select_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<SelectOpt>>> {
+        self.used_selects.insert(key.to_string());
+        let items = select_opts(node);
+        let selected_index = select_selected_index(&items, node.string_value().as_deref());
+        // SearchableVec implements perform_search; Vec<T> does not (0.5.1).
+
+        if let Some(slot) = self.selects.get_mut(key) {
+            if slot.searchable == node.searchable {
+                slot.on_change = node.on_change.clone();
+                slot.state.update(cx, |state, cx| {
+                    state.set_items(SearchableVec::new(items.clone()), window, cx);
+                    state.set_selected_index(selected_index, window, cx);
+                });
+                return slot.state.clone();
+            }
+        }
+
+        let searchable = node.searchable;
+        let state = cx.new(|cx| {
+            let built = SelectState::new(SearchableVec::new(items), selected_index, window, cx);
+            built.searchable(searchable)
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(
+            &state,
+            move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, _cx| {
+                let SelectEvent::Confirm(value) = event;
+                let Some(id) = this
+                    .selects
+                    .get(&key_owned)
+                    .and_then(|slot| slot.on_change.clone())
+                else {
+                    return;
+                };
+                match value {
+                    Some(selected) => this.emit_value(id, json!(selected.to_string())),
+                    None => this.emit_value(id, Value::Null),
+                }
+            },
+        )
+        .detach();
+        self.selects.insert(
+            key.to_string(),
+            SelectSlot {
+                state: state.clone(),
+                searchable,
+                on_change: node.on_change.clone(),
+            },
+        );
         state
     }
 
@@ -544,6 +764,9 @@ impl RootView {
                 if node.compact {
                     button = button.compact();
                 }
+                if node.disabled {
+                    button = button.disabled(true);
+                }
                 if let Some(callback_id) = node.on_click.clone() {
                     button = button.on_click(self.click(callback_id));
                 }
@@ -600,12 +823,36 @@ impl RootView {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(Input::new(&state), node, cx).into_any_element()
             }
+            "switch" => self.render_switch(node, &key, cx),
+            "toggle" => self.render_toggle(node, &key, cx),
+            "radio-group" => self.render_radio_group(node, &key, cx),
+            "slider" => self.render_slider(node, &key, window, cx),
+            "progress" => self.render_progress(node, cx),
+            "divider" => self.render_divider(node, cx),
+            "spinner" => self.render_spinner(node, cx),
+            "tag" => self.render_tag(node, cx),
+            "alert" => self.render_alert(node, &key, cx),
+            "skeleton" => self.render_skeleton(node, cx),
+            "kbd" => self.render_kbd(node, cx),
+            "link" => self.render_link(node, &key, cx),
+            "group-box" => self.render_group_box(node, path, &key, window, cx),
+            "badge" => self.render_badge(node, path, window, cx),
+            "tabs" => self.render_tabs(node, &key, cx),
+            "select" => self.render_select(node, &key, window, cx),
+            "icon" => self.render_icon(node, cx),
+            "clipboard" => self.render_clipboard(node, &key, cx),
+            "breadcrumb" => self.render_breadcrumb(node, &key, cx),
+            "avatar" => self.render_avatar(node, cx),
+            "accordion" => self.render_accordion(node, path, &key, window, cx),
+            "description-list" => self.render_description_list(node, cx),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
                 .child(format!("Unknown GPUI node: {other}"))
                 .into_any_element(),
         };
+
+        let element = with_tooltip(element, node, &key);
 
         if let Some(prev) = prev {
             *Theme::global_mut(cx) = prev;
@@ -614,6 +861,471 @@ impl RootView {
             Some(applied) => ThemeScope::new(applied, element).into_any_element(),
             None => element,
         }
+    }
+
+    fn render_switch(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let checked = node.checked.unwrap_or(false);
+        let mut el = Switch::new(eid(key)).checked(checked);
+        if let Some(text) = node.text.clone() {
+            el = el.label(text);
+        }
+        if node.disabled {
+            el = el.disabled(true);
+        }
+        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            el = el.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(el, node, cx).into_any_element()
+    }
+
+    fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let checked = node.checked.unwrap_or(false);
+        let mut el = Toggle::new(eid(key))
+            .checked(checked)
+            .with_variant(mapping::parse_toggle_variant(node.variant.as_deref()));
+        if let Some(text) = node.text.clone() {
+            el = el.label(text);
+        }
+        if node.disabled {
+            el = el.disabled(true);
+        }
+        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            el = el.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(el, node, cx).into_any_element()
+    }
+
+    fn render_radio_group(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let selected = node.string_value();
+        let items = node.collection();
+        let selected_index = selected
+            .as_ref()
+            .and_then(|id| items.iter().position(|item| &item.id_or_label() == id));
+        let mut group = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Horizontal {
+            RadioGroup::horizontal(eid(key))
+        } else {
+            RadioGroup::vertical(eid(key))
+        };
+        group = group
+            .selected_index(selected_index)
+            .disabled(node.disabled)
+            .children(items.iter().map(|item| {
+                Radio::new(SharedString::from(item.id_or_label())).label(item.label_or_id())
+            }));
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            group = group.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(group, node, cx).into_any_element()
+    }
+
+    fn render_slider(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.slider_slot(key, node, window, cx);
+        let mut slider = Slider::new(&state);
+        slider = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+            slider.vertical()
+        } else {
+            slider.horizontal()
+        };
+        if node.disabled {
+            slider = slider.disabled(true);
+        }
+        let mut inner = node.clone();
+        inner.flex = None;
+        inner.width = None;
+        inner.height = None;
+        inner.size = None;
+        let slider = apply_style(slider, &inner, cx);
+        let view = cx.weak_entity();
+        let key = key.to_string();
+        copy_outer_layout(div().relative().id(eid(&format!("{key}-track"))), node)
+            .child(
+                canvas(
+                    move |bounds, window, cx| {
+                        let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                        let mut refresh = false;
+                        let _ = view.update(cx, |this, _cx| {
+                            let Some(slot) = this.sliders.get_mut(&key) else {
+                                return;
+                            };
+                            let changed = match slot.bar_px {
+                                None => true,
+                                Some((w, h)) => {
+                                    (w - size.0).abs() > 0.5 || (h - size.1).abs() > 0.5
+                                }
+                            };
+                            if changed {
+                                slot.bar_px = Some(size);
+                                slot.settle = 0;
+                                refresh = true;
+                            } else if slot.settle < 4 {
+                                slot.settle += 1;
+                                refresh = true;
+                            }
+                        });
+                        if refresh {
+                            let view = view.clone();
+                            window.on_next_frame(move |_, cx| {
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(slider)
+            .into_any_element()
+    }
+
+    fn render_progress(&self, node: &Node, cx: &App) -> AnyElement {
+        let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
+        apply_style(Progress::new().value(value), node, cx).into_any_element()
+    }
+
+    fn render_divider(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut divider = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+            Divider::vertical()
+        } else {
+            Divider::horizontal()
+        };
+        if node.dashed {
+            divider = divider.dashed();
+        }
+        if let Some(label) = node.text.clone().filter(|s| !s.is_empty()) {
+            divider = divider.label(label);
+        }
+        apply_style(divider, node, cx).into_any_element()
+    }
+
+    fn render_spinner(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut spinner =
+            Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+            spinner = spinner.icon(icon);
+        }
+        // Spinner is not `Styled`; a host div owns Clojure layout/visual keys.
+        style_host(spinner, node, cx)
+    }
+
+    fn render_tag(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut tag = Tag::new().with_variant(mapping::parse_tag_variant(node.variant.as_deref()));
+        if node.outline {
+            tag = tag.outline();
+        }
+        tag = tag.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        let label = node.text.clone().unwrap_or_default();
+        apply_style(tag.child(label), node, cx).into_any_element()
+    }
+
+    fn render_alert(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let message = node
+            .message
+            .clone()
+            .or_else(|| node.text.clone())
+            .unwrap_or_default();
+        let variant = node.variant.as_deref().map(catalog::normalize);
+        let mut alert = match variant.as_deref() {
+            Some("info") => Alert::info(eid(key), message),
+            Some("success") => Alert::success(eid(key), message),
+            Some("warning") => Alert::warning(eid(key), message),
+            Some("error") | Some("danger") => Alert::error(eid(key), message),
+            _ => Alert::new(eid(key), message),
+        };
+        if let Some(title) = node.title.clone() {
+            alert = alert.title(title);
+        }
+        alert = alert.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(callback_id) = node.on_close.clone() {
+            alert = alert.on_close(self.click(callback_id));
+        }
+        apply_style(alert, node, cx).into_any_element()
+    }
+
+    fn render_skeleton(&self, node: &Node, cx: &App) -> AnyElement {
+        apply_style(Skeleton::new(), node, cx).into_any_element()
+    }
+
+    fn render_kbd(&self, node: &Node, cx: &App) -> AnyElement {
+        let text = node.text.clone().unwrap_or_default();
+        match Keystroke::parse(&text) {
+            Ok(stroke) => apply_style(Kbd::new(stroke), node, cx).into_any_element(),
+            Err(_) => apply_style(div().child(text), node, cx).into_any_element(),
+        }
+    }
+
+    fn render_link(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let mut link = Link::new(eid(key));
+        if let Some(href) = node.href.clone().filter(|s| !s.is_empty()) {
+            link = link.href(href);
+        }
+        if node.disabled {
+            link = link.disabled(true);
+        }
+        if let Some(callback_id) = node.on_click.clone() {
+            link = link.on_click(self.click(callback_id));
+        }
+        let label = node
+            .text
+            .clone()
+            .unwrap_or_else(|| node.href.clone().unwrap_or_default());
+        apply_style(link.child(label), node, cx).into_any_element()
+    }
+
+    fn render_group_box(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut box_ = GroupBox::new()
+            .id(eid(key))
+            .with_variant(mapping::parse_group_variant(node.variant.as_deref()));
+        if let Some(title) = node.title.clone() {
+            box_ = box_.title(title);
+        }
+        apply_style(box_, node, cx)
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
+    fn render_badge(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut badge = Badge::new();
+        if node.dot {
+            badge = badge.dot();
+        } else if let Some(count) = node.count {
+            badge = badge.count(count as usize);
+        } else if let Some(n) = node.number_value() {
+            badge = badge.count(n.max(0.0) as usize);
+        }
+        badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        // Badge is not `Styled`; wrapper owns :width/:height/:size/:flex.
+        style_host(
+            badge.children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
+    }
+
+    fn render_tabs(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let selected = node.string_value();
+        let selected_index = selected
+            .as_ref()
+            .and_then(|id| items.iter().position(|item| &item.id_or_label() == id))
+            .unwrap_or(0);
+        let mut bar = TabBar::new(eid(key))
+            .with_variant(mapping::parse_tab_variant(node.variant.as_deref()))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .selected_index(selected_index)
+            .children(items.iter().map(|item| Tab::from(item.label_or_id())));
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            bar = bar.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(bar, node, cx).into_any_element()
+    }
+
+    fn render_select(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.select_slot(key, node, window, cx);
+        let mut select = Select::new(&state);
+        if let Some(placeholder) = node.placeholder.clone() {
+            select = select.placeholder(placeholder);
+        }
+        if node.disabled {
+            select = select.disabled(true);
+        }
+        select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        apply_style(select, node, cx).into_any_element()
+    }
+
+    fn render_icon(&self, node: &Node, cx: &App) -> AnyElement {
+        let name = node
+            .icon
+            .as_deref()
+            .or(node.text.as_deref())
+            .unwrap_or("check");
+        let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+        apply_style(
+            Icon::new(icon).with_size(mapping::parse_scale(node.control_size.as_deref())),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn render_clipboard(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let mut clip = Clipboard::new(eid(key)).value(node.text.clone().unwrap_or_default());
+        if let Some(callback_id) = node.on_copied.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            clip = clip.on_copied(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(value.to_string())),
+                    seq: None,
+                });
+            });
+        }
+        // Clipboard is not `Styled`; wrapper owns Clojure layout keys.
+        style_host(clip, node, cx)
+    }
+
+    fn render_breadcrumb(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let last = items.len().saturating_sub(1);
+        let mut crumb = Breadcrumb::new();
+        for (ix, item) in items.iter().enumerate() {
+            let mut entry = BreadcrumbItem::new(item.label_or_id()).disabled(item.disabled);
+            if ix != last {
+                if let Some(callback_id) = item.on_click.clone().or_else(|| node.on_change.clone())
+                {
+                    let id = item.id_or_label();
+                    let cmd_tx = self.cmd_tx.clone();
+                    if node.on_change.is_some() && item.on_click.is_none() {
+                        entry = entry.on_click(move |_, _, _| {
+                            let _ = cmd_tx.send(Cmd::Callback {
+                                id: callback_id.clone(),
+                                value: Some(json!(id.clone())),
+                                seq: None,
+                            });
+                        });
+                    } else {
+                        entry = entry.on_click(self.click(callback_id));
+                    }
+                }
+            }
+            crumb = crumb.child(entry);
+        }
+        apply_style(crumb, node, cx).into_any_element()
+    }
+
+    fn render_avatar(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut avatar =
+            Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(name) = node.text.clone().or(node.title.clone()) {
+            avatar = avatar.name(name);
+        }
+        apply_style(avatar, node, cx).into_any_element()
+    }
+
+    fn render_accordion(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = node.collection();
+        let open_ids = node.string_values();
+        let mut accordion = Accordion::new(eid(key)).multiple(node.multiple);
+        if node.disabled {
+            accordion = accordion.disabled(true);
+        }
+        accordion = accordion.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        for (ix, item) in items.iter().enumerate() {
+            let id = item.id_or_label();
+            let title = item.label_or_id();
+            let is_open = open_ids.iter().any(|open| open == &id);
+            let content = if let Some(child) = item.content.as_ref() {
+                self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
+            } else {
+                div().into_any_element()
+            };
+            accordion = accordion.item(move |acc| acc.title(title).open(is_open).child(content));
+        }
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let multiple = node.multiple;
+            let cmd_tx = self.cmd_tx.clone();
+            accordion = accordion.on_toggle_click(move |open_ixs, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(accordion_callback_value(&ids, open_ixs, multiple)),
+                    seq: None,
+                });
+            });
+        }
+        // Accordion::render uses size_full(); as a flex child that steals the
+        // leftover viewport and squeezes every sibling below it. Outer wrapper
+        // owns :width/:height/:size/:flex; inner stays content-sized.
+        content_sized(accordion, node, cx)
+    }
+
+    fn render_description_list(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut list =
+            if mapping::parse_description_axis(node.orientation.as_deref()) == Axis::Vertical {
+                DescriptionList::vertical()
+            } else {
+                DescriptionList::horizontal()
+            };
+        list = list.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        list = list.columns(mapping::parse_columns(node.columns));
+        for item in node.collection() {
+            let label = item
+                .label
+                .clone()
+                .or_else(|| item.id.clone())
+                .unwrap_or_default();
+            let value = item.text.clone().unwrap_or_default();
+            list = list.item(label, value, mapping::parse_span(item.span));
+        }
+        content_sized(list, node, cx)
     }
 
     fn render_scroll(
@@ -713,6 +1425,7 @@ impl Render for RootView {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.used_inputs.clear();
+        self.used_selects.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
 
@@ -733,6 +1446,12 @@ impl Render for RootView {
 
         let used = std::mem::take(&mut self.used_inputs);
         self.inputs.retain(|key, _| used.contains(key));
+        // SliderState stores the last laid-out bar size. Dropping it on tab
+        // switch recreates an entity whose bounds are 0, so the fill paints
+        // at 100% until the mouse moves. Bounds are crate-private, so slots
+        // stay for the window lifetime (see docs/gpui-component.md).
+        let used_selects = std::mem::take(&mut self.used_selects);
+        self.selects.retain(|key, _| used_selects.contains(key));
 
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
@@ -767,6 +1486,53 @@ fn widget_key(node: &Node, path: &str) -> String {
 fn parse_color(value: &str) -> Option<u32> {
     let value = value.trim().trim_start_matches('#');
     u32::from_str_radix(value, 16).ok()
+}
+
+/// Step is drag granularity. Clojure's controlled value is accepted as-is
+/// (then clamped to min/max). Compare f32 values exactly so a tiny-range
+/// slider (e.g. 0 → 5e-5 with max 1e-4) is not discarded. `set_value`
+/// notifies without emitting `SliderEvent::Change`, so an unchanged tree
+/// cannot loop.
+fn slider_range(min: Option<f32>, max: Option<f32>) -> (f32, f32) {
+    let min = min.unwrap_or(0.0);
+    let max = max.unwrap_or(100.0);
+    (min.min(max), min.max(max))
+}
+
+fn slider_step(step: Option<f32>) -> f32 {
+    if step.unwrap_or(1.0) <= 0.0 {
+        1.0
+    } else {
+        step.unwrap_or(1.0)
+    }
+}
+
+fn slider_controlled_value(raw: Option<f32>, min: f32, max: f32) -> f32 {
+    raw.unwrap_or(min).clamp(min, max)
+}
+
+fn slider_value_changed(current: f32, wanted: f32) -> bool {
+    current != wanted
+}
+
+/// Map crate `on_toggle_click` indices to ids. HashSet iteration order is
+/// not stable, so multiple open ids follow original item order.
+fn accordion_callback_value(ids: &[String], open_ixs: &[usize], multiple: bool) -> Value {
+    if multiple {
+        let open: HashSet<usize> = open_ixs.iter().copied().collect();
+        json!(ids
+            .iter()
+            .enumerate()
+            .filter(|(ix, _)| open.contains(ix))
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>())
+    } else {
+        open_ixs
+            .first()
+            .and_then(|ix| ids.get(*ix))
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null)
+    }
 }
 
 /// One axis of a `scroll` viewport: a pixel size, or fill the parent.
@@ -814,6 +1580,132 @@ fn apply_button_variant(button: Button, node: &Node) -> Button {
         _ if node.primary => button.primary(),
         _ => button,
     }
+}
+
+fn select_opts(node: &Node) -> Vec<SelectOpt> {
+    node.collection()
+        .iter()
+        .map(|item| SelectOpt {
+            id: SharedString::from(item.id_or_label()),
+            label: SharedString::from(item.label_or_id()),
+        })
+        .collect()
+}
+
+fn select_selected_index(
+    items: &[SelectOpt],
+    selected: Option<&str>,
+) -> Option<gpui_component::IndexPath> {
+    selected.and_then(|id| {
+        items
+            .iter()
+            .position(|item| item.id.as_ref() == id)
+            .map(|ix| gpui_component::IndexPath::default().row(ix))
+    })
+}
+
+/// Titles that `SearchableVec::perform_search` filters on (gpui-component 0.5.1).
+#[cfg(test)]
+fn select_search_matches(items: &[SelectOpt], query: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    items
+        .iter()
+        .filter(|item| item.title().to_lowercase().contains(&q))
+        .map(|item| item.id.to_string())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OuterLayout {
+    width: Option<f32>,
+    height: Option<f32>,
+    size: Option<f32>,
+    flex_fill: bool,
+    /// Scroll viewports fill parent width when `:width` / `:size` are omitted.
+    full_width: bool,
+}
+
+fn outer_layout(node: &Node) -> OuterLayout {
+    OuterLayout {
+        width: node.width,
+        height: node.height,
+        size: node.size,
+        flex_fill: node.flex.unwrap_or(0.0) >= 1.0,
+        full_width: node.kind == "scroll" && node.width.is_none() && node.size.is_none(),
+    }
+}
+
+fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+    let layout = outer_layout(node);
+    if let Some(width) = layout.width {
+        el = el.w(px(width));
+    }
+    if let Some(height) = layout.height {
+        el = el.h(px(height));
+    }
+    if let Some(size) = layout.size {
+        el = el.size(px(size));
+    }
+    if layout.flex_fill {
+        el = el.flex_1().min_h_0();
+    }
+    if layout.full_width {
+        el = el.w_full();
+    }
+    el
+}
+
+/// Crate widgets that are not `Styled` (spinner, badge, clipboard): a host
+/// `div` owns Clojure layout and visual keys. The inner control is unchanged.
+fn style_host(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
+    apply_style(div(), node, cx).child(el).into_any_element()
+}
+
+/// Keep a crate widget from filling leftover column height (`size_full` /
+/// `overflow_hidden` inside a flex-1 scroll). The outer wrapper owns
+/// `:width` / `:height` / `:size` / `:flex`; the inner widget stays
+/// content-sized. Omitted width still stretches to the column.
+fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
+    let mut wrap = v_flex().flex_none();
+    if node.width.is_none() && node.size.is_none() {
+        wrap = wrap.w_full();
+    }
+    apply_style(wrap, node, cx).child(el).into_any_element()
+}
+
+/// Testable layout contract for `content_sized` wrappers.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+struct ContentWrap {
+    width: Option<f32>,
+    height: Option<f32>,
+    size: Option<f32>,
+    flex_fill: bool,
+    fill_width: bool,
+    flex_none: bool,
+}
+
+#[cfg(test)]
+fn content_wrap(node: &Node) -> ContentWrap {
+    let layout = outer_layout(node);
+    ContentWrap {
+        width: layout.width,
+        height: layout.height,
+        size: layout.size,
+        flex_fill: layout.flex_fill,
+        fill_width: layout.width.is_none() && layout.size.is_none(),
+        flex_none: !layout.flex_fill,
+    }
+}
+
+fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
+    let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
+        return el;
+    };
+    copy_outer_layout(div().id(eid(&format!("{key}-tip"))), node)
+        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        .child(el)
+        .into_any_element()
 }
 
 fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
@@ -894,7 +1786,7 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         if node.bg.is_none()
             && matches!(
                 node.kind.as_str(),
-                "window" | "vstack" | "hstack" | "scroll"
+                "window" | "vstack" | "hstack" | "scroll" | "group-box"
             )
         {
             el = el.bg(cx.theme().background);
@@ -1202,5 +2094,285 @@ mod scroll_viewport_tests {
         let v = scroll_viewport(&node_with(Some(300.0), Some(220.0), Some(180.0)));
         assert_eq!(v.width, ScrollExtent::Px(180.0));
         assert_eq!(v.height, ScrollExtent::Px(180.0));
+    }
+}
+
+#[cfg(test)]
+mod select_control_tests {
+    use super::{
+        outer_layout, select_opts, select_search_matches, select_selected_index, Node, SelectOpt,
+    };
+    use crate::protocol::Item;
+    use gpui::SharedString;
+
+    fn select_node(value: Option<serde_json::Value>, ids: &[&str]) -> Node {
+        Node {
+            kind: "select".into(),
+            value,
+            options: ids
+                .iter()
+                .map(|id| Item {
+                    id: Some((*id).into()),
+                    label: Some((*id).into()),
+                    ..Item::default()
+                })
+                .collect(),
+            ..Node::default()
+        }
+    }
+
+    fn opt(id: &str, label: &str) -> SelectOpt {
+        SelectOpt {
+            id: SharedString::from(id.to_string()),
+            label: SharedString::from(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn nil_and_missing_values_clear_selection() {
+        let items = select_opts(&select_node(None, &["clj", "rs"]));
+        assert_eq!(select_selected_index(&items, None), None);
+        let items = select_opts(&select_node(Some(serde_json::Value::Null), &["clj"]));
+        assert_eq!(select_selected_index(&items, None), None);
+    }
+
+    #[test]
+    fn value_a_to_b_updates_index() {
+        let items = select_opts(&select_node(None, &["clj", "rs", "go"]));
+        let a = select_selected_index(&items, Some("clj")).unwrap();
+        let b = select_selected_index(&items, Some("rs")).unwrap();
+        assert_eq!(a.row, 0);
+        assert_eq!(b.row, 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn disappeared_option_clears_selection() {
+        let items = select_opts(&select_node(None, &["rs", "go"]));
+        assert_eq!(select_selected_index(&items, Some("clj")), None);
+    }
+
+    #[test]
+    fn searchable_matches_filter_on_title_not_id() {
+        let items = vec![opt("clj", "Clojure"), opt("rs", "Rust"), opt("go", "Go")];
+        assert_eq!(
+            select_search_matches(&items, "clo"),
+            vec!["clj".to_string()]
+        );
+        assert!(
+            select_search_matches(&items, "clj").is_empty(),
+            "filter is on title, not id"
+        );
+        assert_eq!(select_search_matches(&items, "ust"), vec!["rs".to_string()]);
+        assert!(select_search_matches(&items, "python").is_empty());
+    }
+
+    #[test]
+    fn tooltip_wrapper_copies_width_height_flex_and_scroll_fill() {
+        let button = Node {
+            kind: "button".into(),
+            width: Some(200.0),
+            tooltip: Some("Save".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&button);
+        assert_eq!(layout.width, Some(200.0));
+        assert!(!layout.flex_fill);
+        assert!(!layout.full_width);
+
+        let column = Node {
+            kind: "vstack".into(),
+            flex: Some(1.0),
+            tooltip: Some("col".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&column);
+        assert!(layout.flex_fill);
+        assert!(!layout.full_width);
+
+        let label = Node {
+            kind: "label".into(),
+            width: Some(300.0),
+            tooltip: Some("hint".into()),
+            ..Node::default()
+        };
+        assert_eq!(outer_layout(&label).width, Some(300.0));
+
+        let scroll = Node {
+            kind: "scroll".into(),
+            flex: Some(1.0),
+            tooltip: Some("list".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&scroll);
+        assert!(layout.flex_fill);
+        assert!(layout.full_width);
+        assert_eq!(layout.height, None);
+
+        let fixed = Node {
+            kind: "scroll".into(),
+            height: Some(220.0),
+            tooltip: Some("box".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&fixed);
+        assert_eq!(layout.height, Some(220.0));
+        assert!(!layout.flex_fill);
+        assert!(layout.full_width);
+    }
+}
+
+#[cfg(test)]
+mod slider_control_tests {
+    use super::{slider_controlled_value, slider_range, slider_step, slider_value_changed};
+
+    #[test]
+    fn controlled_value_ignores_step_when_syncing() {
+        let (lo, hi) = slider_range(Some(0.0), Some(100.0));
+        assert_eq!(slider_step(Some(5.0)), 5.0);
+        let wanted = slider_controlled_value(Some(42.0), lo, hi);
+        assert_eq!(wanted, 42.0);
+        assert!(
+            slider_value_changed(40.0, wanted),
+            "40 → 42 with step 5 must update the host entity"
+        );
+    }
+
+    #[test]
+    fn unchanged_value_does_not_need_set_value() {
+        assert!(!slider_value_changed(40.0, 40.0));
+        assert!(slider_value_changed(40.0, 40.1));
+    }
+
+    #[test]
+    fn tiny_range_controlled_value_is_applied() {
+        let (lo, hi) = slider_range(Some(0.0), Some(0.0001));
+        assert_eq!((lo, hi), (0.0, 0.0001));
+        let wanted = slider_controlled_value(Some(0.00005), lo, hi);
+        assert_eq!(wanted, 0.00005);
+        assert!(
+            slider_value_changed(0.0, wanted),
+            "0 → 5e-5 on a 0..1e-4 slider must update the host entity"
+        );
+        assert!(!slider_value_changed(wanted, wanted));
+    }
+
+    #[test]
+    fn min_max_clamping() {
+        assert_eq!(slider_range(Some(100.0), Some(0.0)), (0.0, 100.0));
+        assert_eq!(slider_controlled_value(Some(150.0), 0.0, 100.0), 100.0);
+        assert_eq!(slider_controlled_value(Some(-5.0), 0.0, 100.0), 0.0);
+        assert_eq!(slider_controlled_value(None, 10.0, 20.0), 10.0);
+        assert_eq!(slider_step(Some(0.0)), 1.0);
+        assert_eq!(slider_step(None), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod accordion_control_tests {
+    use super::accordion_callback_value;
+    use serde_json::json;
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn multiple_open_ids_follow_item_order_not_hashset_order() {
+        let items = ids(&["audio", "display", "network"]);
+        // Crate HashSet iteration can yield any order; 2 then 0 is the
+        // reverse of item order.
+        let value = accordion_callback_value(&items, &[2, 0], true);
+        assert_eq!(value, json!(["audio", "network"]));
+        let shuffled = accordion_callback_value(&items, &[1, 0], true);
+        assert_eq!(shuffled, json!(["audio", "display"]));
+    }
+
+    #[test]
+    fn comma_in_id_stays_one_array_entry() {
+        let items = ids(&["audio,advanced", "display"]);
+        let value = accordion_callback_value(&items, &[1, 0], true);
+        assert_eq!(value, json!(["audio,advanced", "display"]));
+    }
+
+    #[test]
+    fn single_select_sends_one_id_or_null() {
+        let items = ids(&["audio", "display"]);
+        assert_eq!(
+            accordion_callback_value(&items, &[1], false),
+            json!("display")
+        );
+        assert_eq!(accordion_callback_value(&items, &[], false), json!(null));
+    }
+}
+
+#[cfg(test)]
+mod widget_wrap_tests {
+    use super::{content_wrap, outer_layout, Node};
+
+    #[test]
+    fn accordion_default_is_full_width_flex_none() {
+        let node = Node {
+            kind: "accordion".into(),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&node);
+        assert!(wrap.fill_width);
+        assert!(wrap.flex_none);
+        assert!(!wrap.flex_fill);
+        assert_eq!(wrap.width, None);
+        assert_eq!(wrap.height, None);
+    }
+
+    #[test]
+    fn accordion_outer_owns_width_height_size_flex() {
+        let sized = Node {
+            kind: "accordion".into(),
+            width: Some(240.0),
+            height: Some(80.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&sized);
+        assert_eq!(wrap.width, Some(240.0));
+        assert_eq!(wrap.height, Some(80.0));
+        assert!(!wrap.fill_width);
+        assert!(wrap.flex_none);
+
+        let square = Node {
+            kind: "description-list".into(),
+            size: Some(180.0),
+            width: Some(300.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&square);
+        assert_eq!(wrap.size, Some(180.0));
+        assert!(!wrap.fill_width);
+
+        let grow = Node {
+            kind: "accordion".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let wrap = content_wrap(&grow);
+        assert!(wrap.flex_fill);
+        assert!(!wrap.flex_none);
+        assert!(wrap.fill_width);
+    }
+
+    #[test]
+    fn spinner_badge_clipboard_layout_keys_are_on_the_node() {
+        for kind in ["spinner", "badge", "clipboard"] {
+            let node = Node {
+                kind: kind.into(),
+                width: Some(24.0),
+                height: Some(24.0),
+                flex: Some(1.0),
+                ..Node::default()
+            };
+            let layout = outer_layout(&node);
+            assert_eq!(layout.width, Some(24.0), "{kind}");
+            assert_eq!(layout.height, Some(24.0), "{kind}");
+            assert!(layout.flex_fill, "{kind}");
+        }
     }
 }

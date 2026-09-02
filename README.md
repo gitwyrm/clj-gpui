@@ -31,6 +31,9 @@ clojure -M:protocol-test
 # Example native window (plain counter)
 cd examples/counter && clj -M:dev
 
+# Widget gallery (switch, slider, select, tabs, …)
+cd examples/widgets && clj -M:dev
+
 # Classic TodoMVC (light card, Enter to add)
 cd examples/todomvc && clj -M:dev
 
@@ -123,7 +126,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
         :on-change #(swap! !state assoc :draft %)})))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, tabs, breadcrumb, and accordion pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts is 0-arg.
 
 ## Architecture
 
@@ -200,11 +203,13 @@ src/gpui/package.clj          ; `clj -X:build package`
 host/                         ; native GPUI + gpui-component host
 host/themes/                  ; bundled gpui-component palettes (Tokyo Night, Ayu, …)
 examples/counter/             ; plain counter
+examples/widgets/             ; gallery of newly supported widgets
 examples/todomvc/             ; classic TodoMVC layout
 examples/themes/              ; custom ThemeSet (Catppuccin Violet)
 template/                     ; copyable app skeleton
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
+docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 ```
 
 ## Clojure UI API
@@ -224,7 +229,43 @@ docs/protocol.md
 (ui/scroll {:height 220} ...)      ; fixed viewport
 (ui/scroll {:width 300} ...)       ; constrain viewport width
 (ui/text-field value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
+(ui/switch on? {:on-change #(swap! !state assoc :on %)})
+(ui/toggle bold? {:on-change set-bold! :text "Bold"})
+(ui/radio-group selected {:options [{:id :light :label "Light"} :dark]
+                          :on-change set-mode! :orientation :horizontal})
+(ui/slider volume {:min 0 :max 100 :on-change set-volume!})
+(ui/progress 45)
+(ui/select selected {:options [{:id :clj :label "Clojure"} "Rust"]
+                     :placeholder "Language"
+                     :searchable true
+                     :on-change set-lang!})
+(ui/tabs tab {:items [{:id :general :label "General"}]
+              :variant :underline
+              :on-change set-tab!})
+(ui/divider)
+(ui/divider "or")
+(ui/tag "Beta" {:variant :info})
+(ui/alert "Saved" {:variant :success :title "Done" :on-close hide!})
+(ui/spinner {:size :small})
+(ui/skeleton {:width 200 :height 12})
+(ui/kbd "ctrl-s")
+(ui/link "https://clojure.org" "Clojure")
+(ui/icon :check)
+(ui/badge 3 (ui/icon :bell))
+(ui/clipboard "copy me")
+(ui/avatar "Ada Lovelace")
+(ui/breadcrumb [{:id :home :label "Home"} "Project"])
+(ui/group-box {:title "Audio" :variant :outline} …)
+(ui/accordion open-id {:items [{:id :a :title "One" :content (ui/label "…")}]
+                       :on-change set-open!})
+(ui/description-list [{:label "Host" :value "GPUI"}])
+(ui/description-list items {:orientation :horizontal :columns 2})
+(ui/button "Save" save! {:tooltip "Write the file"})
 ```
+
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` clears the selection. `:searchable true` filters select options by label.
+
+gpui-component 0.5.1 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
 

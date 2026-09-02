@@ -1,5 +1,6 @@
 mod bridge;
 mod catalog;
+mod mapping;
 mod protocol;
 mod renderer;
 
@@ -16,10 +17,12 @@ fn main() -> Result<()> {
     let cmd_tx = host.cmd_tx.clone();
     let event_rx = host.event_rx.clone();
 
-    gpui::Application::new().run(move |cx| {
-        gpui_component::init(cx);
-        renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
-    });
+    gpui::Application::new()
+        .with_assets(gpui_component_assets::Assets)
+        .run(move |cx| {
+            gpui_component::init(cx);
+            renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
+        });
 
     drop(host);
     Ok(())

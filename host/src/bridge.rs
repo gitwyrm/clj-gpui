@@ -240,10 +240,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                         .map(|(node, themes)| HostEvent::Tree(node, None, themes))
                                 }
                                 Cmd::Callback { id, value, seq } => {
-                                    let mut request = json!({"op": "callback", "callback-id": id});
-                                    if let Some(value) = value {
-                                        request["value"] = json!(value);
-                                    }
+                                    let request = crate::protocol::callback_request(id, value);
                                     // Always fetch a tree here: text-field submit attaches
                                     // `seq` to this response, and handlers that do not
                                     // touch an r/atom still need a paint. Clojure suppresses
