@@ -1247,7 +1247,9 @@ impl RootView {
                 }
             });
         }
-        accordion.into_any_element()
+        // Accordion::render uses size_full(); as a flex child that steals the
+        // leftover viewport and squeezes every sibling below it.
+        content_sized(accordion)
     }
 
     fn render_description_list(&self, node: &Node, _cx: &App) -> AnyElement {
@@ -1268,7 +1270,7 @@ impl RootView {
             let value = item.text.clone().unwrap_or_default();
             list = list.item(label, value, mapping::parse_span(item.span));
         }
-        list.into_any_element()
+        content_sized(list)
     }
 
     fn render_scroll(
@@ -1548,6 +1550,12 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.w_full();
     }
     el
+}
+
+/// Keep a crate widget from filling leftover column height (`size_full` /
+/// `overflow_hidden` inside a flex-1 scroll). Width still stretches.
+fn content_sized(el: impl IntoElement) -> AnyElement {
+    v_flex().w_full().flex_none().child(el).into_any_element()
 }
 
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
