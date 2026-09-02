@@ -2685,14 +2685,14 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.used_vlists.insert(key.to_string());
-        let view = extra::VirtualListView::from_node(node, self.cmd_tx.clone());
         if let Some(entity) = self.vlists.get(key) {
             entity.update(cx, |list, cx| {
-                *list = view;
+                list.sync_from_node(node, self.cmd_tx.clone());
                 cx.notify();
             });
             return viewport_sized(self.vlists[key].clone(), node, 200.0, cx);
         }
+        let view = extra::VirtualListView::from_node(node, self.cmd_tx.clone());
         let entity = cx.new(|_| view);
         self.vlists.insert(key.to_string(), entity.clone());
         viewport_sized(entity, node, 200.0, cx)
@@ -2740,7 +2740,7 @@ impl RootView {
         sidebar = sidebar
             .collapsed(collapsed)
             .child(SidebarMenu::new().children(items));
-        if let Some(title) = node.title.clone() {
+        if let Some(title) = sidebar_header_title(node) {
             sidebar = sidebar.header(div().px_2().py_1().child(title));
         }
         viewport_sized(sidebar, node, 280.0, cx)
@@ -3251,6 +3251,14 @@ fn select_selected_index(
     })
 }
 
+fn sidebar_header_title(node: &Node) -> Option<String> {
+    if node.collapsed {
+        None
+    } else {
+        node.title.clone()
+    }
+}
+
 /// Titles that `SearchableVec::perform_search` filters on (gpui-component 0.5.1).
 #[cfg(test)]
 fn select_search_matches(items: &[SelectOpt], query: &str) -> Vec<String> {
@@ -3268,16 +3276,23 @@ struct OuterLayout {
     height: Option<f32>,
     size: Option<f32>,
     flex_fill: bool,
+    /// Flex children must be allowed to shrink on both axes. GPUI's default
+    /// min-size is content-sized, which otherwise lets long rows overflow.
+    shrink_width: bool,
+    shrink_height: bool,
     /// Scroll viewports fill parent width when `:width` / `:size` are omitted.
     full_width: bool,
 }
 
 fn outer_layout(node: &Node) -> OuterLayout {
+    let flex_fill = node.flex.unwrap_or(0.0) >= 1.0;
     OuterLayout {
         width: node.width,
         height: node.height,
         size: node.size,
-        flex_fill: node.flex.unwrap_or(0.0) >= 1.0,
+        flex_fill,
+        shrink_width: flex_fill,
+        shrink_height: flex_fill,
         full_width: node.kind == "scroll" && node.width.is_none() && node.size.is_none(),
     }
 }
@@ -3294,7 +3309,13 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.size(px(size));
     }
     if layout.flex_fill {
-        el = el.flex_1().min_h_0();
+        el = el.flex_1();
+    }
+    if layout.shrink_width {
+        el = el.min_w_0();
+    }
+    if layout.shrink_height {
+        el = el.min_h_0();
     }
     if layout.full_width {
         el = el.w_full();
@@ -3528,11 +3549,17 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
     if let Some(size) = node.size {
         el = el.size(px(size));
     }
-    if node.flex.unwrap_or(0.0) >= 1.0 {
-        // Flex items default to min-height: auto (content size), so a
-        // flex-1 child will not shrink below its contents. That prevents
-        // nested overflow scroll from ever getting a bounded viewport.
-        el = el.flex_1().min_h_0();
+    let layout = outer_layout(node);
+    if layout.flex_fill {
+        // Flex items default to content-sized minimums. Allow shrinking on
+        // both axes so long rows stay bounded and nested scrolling works.
+        el = el.flex_1();
+    }
+    if layout.shrink_width {
+        el = el.min_w_0();
+    }
+    if layout.shrink_height {
+        el = el.min_h_0();
     }
     if let Some(font_size) = node.font_size {
         el = el.text_size(px(font_size));
@@ -3904,7 +3931,8 @@ mod scroll_viewport_tests {
 #[cfg(test)]
 mod select_control_tests {
     use super::{
-        outer_layout, select_opts, select_search_matches, select_selected_index, Node, SelectOpt,
+        outer_layout, select_opts, select_search_matches, select_selected_index,
+        sidebar_header_title, Node, SelectOpt,
     };
     use crate::protocol::Item;
     use gpui::SharedString;
@@ -3972,6 +4000,22 @@ mod select_control_tests {
     }
 
     #[test]
+    fn collapsed_sidebar_omits_text_header() {
+        let expanded = Node {
+            kind: "sidebar".into(),
+            title: Some("Demo".into()),
+            ..Node::default()
+        };
+        assert_eq!(sidebar_header_title(&expanded).as_deref(), Some("Demo"));
+
+        let collapsed = Node {
+            collapsed: true,
+            ..expanded
+        };
+        assert_eq!(sidebar_header_title(&collapsed), None);
+    }
+
+    #[test]
     fn tooltip_wrapper_copies_width_height_flex_and_scroll_fill() {
         let button = Node {
             kind: "button".into(),
@@ -3992,6 +4036,8 @@ mod select_control_tests {
         };
         let layout = outer_layout(&column);
         assert!(layout.flex_fill);
+        assert!(layout.shrink_width);
+        assert!(layout.shrink_height);
         assert!(!layout.full_width);
 
         let label = Node {
@@ -4022,6 +4068,8 @@ mod select_control_tests {
         let layout = outer_layout(&fixed);
         assert_eq!(layout.height, Some(220.0));
         assert!(!layout.flex_fill);
+        assert!(!layout.shrink_width);
+        assert!(!layout.shrink_height);
         assert!(layout.full_width);
     }
 }

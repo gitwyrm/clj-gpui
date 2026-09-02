@@ -367,7 +367,7 @@
                {:selected nav
                 :collapsed sidebar-collapsed
                 :title "Demo"
-                :height 140
+                :height 180
                 :on-change (set-key :nav)})
    (ui/settings [{:id :general :label "General"
                   :items [{:id :notify :label "Notifications"

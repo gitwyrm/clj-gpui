@@ -20,6 +20,7 @@ use gpui_component::{
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     text::TextView,
     v_flex, v_virtual_list, ActiveTheme as _, Colorize as _, Placement, Side,
+    VirtualListScrollHandle,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -260,6 +261,7 @@ pub struct VirtualListView {
     pub selected: Option<String>,
     pub on_change: Option<String>,
     pub cmd_tx: mpsc::Sender<Cmd>,
+    pub scroll_handle: VirtualListScrollHandle,
 }
 
 impl VirtualListView {
@@ -279,7 +281,14 @@ impl VirtualListView {
             selected: node.string_value(),
             on_change: node.on_change.clone(),
             cmd_tx,
+            scroll_handle: VirtualListScrollHandle::new(),
         }
+    }
+
+    pub fn sync_from_node(&mut self, node: &Node, cmd_tx: mpsc::Sender<Cmd>) {
+        let scroll_handle = self.scroll_handle.clone();
+        *self = Self::from_node(node, cmd_tx);
+        self.scroll_handle = scroll_handle;
     }
 
     fn paint_rows(
@@ -340,9 +349,13 @@ impl Render for VirtualListView {
                 .collect(),
         );
         if self.axis == Axis::Vertical {
-            v_virtual_list(cx.entity(), "vlist", sizes, Self::paint_rows).into_any_element()
+            v_virtual_list(cx.entity(), "vlist", sizes, Self::paint_rows)
+                .track_scroll(&self.scroll_handle)
+                .into_any_element()
         } else {
-            h_virtual_list(cx.entity(), "hlist", sizes, Self::paint_rows).into_any_element()
+            h_virtual_list(cx.entity(), "hlist", sizes, Self::paint_rows)
+                .track_scroll(&self.scroll_handle)
+                .into_any_element()
         }
     }
 }
@@ -776,6 +789,37 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let view = VirtualListView::from_node(&horiz, tx);
         assert_eq!(view.axis, Axis::Horizontal);
+    }
+
+    #[test]
+    fn virtual_list_sync_preserves_scroll_handle() {
+        let first: Node = serde_json::from_value(json!({
+            "type": "virtual-list",
+            "items": [{"id": "a", "label": "A"}]
+        }))
+        .unwrap();
+        let updated: Node = serde_json::from_value(json!({
+            "type": "virtual-list",
+            "items": [{"id": "a", "label": "Updated"}, {"id": "b", "label": "B"}],
+            "value": "b"
+        }))
+        .unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut view = VirtualListView::from_node(&first, tx.clone());
+        let original_handle = view.scroll_handle.clone();
+        original_handle.set_offset(gpui::point(px(-7.0), px(-31.0)));
+
+        view.sync_from_node(&updated, tx);
+
+        assert_eq!(
+            view.scroll_handle.offset(),
+            gpui::point(px(-7.0), px(-31.0))
+        );
+        view.scroll_handle
+            .set_offset(gpui::point(px(-9.0), px(-42.0)));
+        assert_eq!(original_handle.offset(), gpui::point(px(-9.0), px(-42.0)));
+        assert_eq!(view.selected.as_deref(), Some("b"));
+        assert_eq!(view.items.len(), 2);
     }
 
     #[test]
