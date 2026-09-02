@@ -266,6 +266,124 @@
                  {:id (:on-open-change cancel-tree) :value false}])))
       (is (= [:cancel :close [:open false]] @cancel-log)))))
 
+(defn- exported-table
+  [tree]
+  (->> (tree-seq :children :children tree)
+       (filter #(= "table" (:type %)))
+       first))
+
+(deftest table-double-click-batch-keeps-generation-when-tree-would-shift
+  (runtime/reset-callbacks!)
+  (let [confirm-fired (atom 0)
+        x-fired (atom 0)
+        seen (atom [])
+        !shift (atom false)
+        tree (fn []
+               (ui/vstack
+                (when @!shift (ui/button "X" #(swap! x-fired inc)))
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}]
+                           :on-change (fn [id]
+                                        (reset! !shift true)
+                                        (swap! seen conj [:change id]))
+                           :on-confirm (fn [id]
+                                         (swap! confirm-fired inc)
+                                         (swap! seen conj [:confirm id]))})))
+        gen1 (runtime/export-tree tree)
+        table (exported-table gen1)
+        id-change (:on-change table)
+        id-confirm (:on-confirm table)]
+    (is (string? id-change))
+    (is (string? id-confirm))
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id id-change :value "ada"}
+               {:id id-confirm :value "ada"}])))
+    (is (= [[:change :ada] [:confirm :ada]] @seen))
+    (is (= 1 @confirm-fired) "confirm ran against the pre-export registry")
+    (is (zero? @x-fired) "X must not own confirm's old id")
+    (let [gen2 (runtime/export-tree tree)
+          new-table (exported-table gen2)]
+      (is (= "X" (get-in gen2 [:children 0 :text])))
+      (is (= id-confirm (:on-change new-table))
+          "after a render, confirm's old id is reused by a different function")
+      (runtime/invoke-callback! id-confirm "ada")
+      (is (= 1 @confirm-fired) "stale confirm id no longer invokes confirm"))))
+
+(deftest table-single-click-is-only-on-change
+  (runtime/reset-callbacks!)
+  (let [log (atom [])
+        table (exported-table
+               (runtime/export-tree
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}
+                                  {:id :grace :cells ["Grace"]}]
+                           :on-change #(swap! log conj [:change %])
+                           :on-confirm #(swap! log conj [:confirm %])})))]
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id (:on-change table) :value "grace"}])))
+    (is (= [[:change :grace]] @log))))
+
+(deftest table-confirm-only-still-fires
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        table (exported-table
+               (runtime/export-tree
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}]
+                           :on-confirm #(reset! got %)})))]
+    (is (nil? (:on-change table)))
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id (:on-confirm table) :value "ada"}])))
+    (is (= :ada @got))))
+
+(deftest table-change-only-double-click-is-one-callback
+  (runtime/reset-callbacks!)
+  (let [log (atom [])
+        table (exported-table
+               (runtime/export-tree
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}]
+                           :on-change #(swap! log conj %)})))]
+    (is (nil? (:on-confirm table)))
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id (:on-change table) :value "ada"}])))
+    (is (= [:ada] @log))))
+
+(deftest table-host-style-double-click-is-one-export
+  (let [buf (java.io.StringWriter.)
+        exports (atom 0)
+        seen (atom [])
+        !shift (atom false)
+        tree (fn []
+               (swap! exports inc)
+               (ui/vstack
+                (when @!shift (ui/button "X" (fn [] :x)))
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}]
+                           :on-change (fn [id]
+                                        (reset! !shift true)
+                                        (swap! seen conj [:change id]))
+                           :on-confirm (fn [id]
+                                         (swap! seen conj [:confirm id]))})))]
+    (runtime/bind-connection! {:out buf})
+    (try
+      (runtime/reset-callbacks!)
+      (let [table (exported-table (runtime/export-tree tree))
+            id-change (:on-change table)
+            id-confirm (:on-confirm table)]
+        (reset! exports 0)
+        (runtime/handle {:op "callback" :callback-id id-change
+                         :value "ada" :defer-render true :id 1})
+        (runtime/handle {:op "callback" :callback-id id-confirm
+                         :value "ada" :defer-render true :id 2})
+        (is (zero? @exports))
+        (is (= [[:change :ada] [:confirm :ada]] @seen))
+        (runtime/export-tree tree)
+        (is (= 1 @exports)))
+      (finally
+        (runtime/reset-callbacks!)
+        (runtime/bind-connection! nil)))))
+
 (defn- request-render-on-wire?
   [buf]
   (str/includes? (str buf) "request-render"))

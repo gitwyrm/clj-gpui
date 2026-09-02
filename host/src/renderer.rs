@@ -116,6 +116,9 @@ struct TableSlot {
     on_change: Option<String>,
     on_confirm: Option<String>,
     suppress_select: bool,
+    /// SelectRow from this effect cycle, flushed unless DoubleClickedRow
+    /// consumes it for a same-event activation batch.
+    coalesce: protocol::TableClickCoalesce,
 }
 
 struct TreeSlot {
@@ -1591,43 +1594,35 @@ impl RootView {
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &TableEvent, cx| match event {
             TableEvent::SelectRow(ix) => {
-                if this
+                let suppress = this
                     .tables
                     .get(&key_owned)
-                    .is_some_and(|s| s.suppress_select)
-                {
+                    .is_some_and(|s| s.suppress_select);
+                let defer = this
+                    .tables
+                    .get_mut(&key_owned)
+                    .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
+                if !defer {
                     return;
                 }
-                let Some(callback) = this
-                    .tables
-                    .get(&key_owned)
-                    .and_then(|s| s.on_change.clone())
-                else {
-                    return;
-                };
-                if let Some(id) = this
-                    .tables
-                    .get(&key_owned)
-                    .and_then(|s| s.state.read(cx).delegate().id_at(*ix))
-                {
-                    this.emit_value(callback, json!(id));
-                }
+                // Crate may emit DoubleClickedRow from the same
+                // on_row_left_click after this SelectRow subscriber
+                // returns. Defer the lone :on-change until that event
+                // has had a chance to consume the pending row.
+                let entity = cx.entity();
+                let key = key_owned.clone();
+                cx.defer(move |app| {
+                    let _ = entity.update(app, |this, cx| {
+                        this.flush_pending_table_select(&key, cx);
+                    });
+                });
             }
             TableEvent::DoubleClickedRow(ix) => {
-                let Some(callback) = this
+                let include_change = this
                     .tables
-                    .get(&key_owned)
-                    .and_then(|s| s.on_confirm.clone())
-                else {
-                    return;
-                };
-                if let Some(id) = this
-                    .tables
-                    .get(&key_owned)
-                    .and_then(|s| s.state.read(cx).delegate().id_at(*ix))
-                {
-                    this.emit_value(callback, json!(id));
-                }
+                    .get_mut(&key_owned)
+                    .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
+                emit_table_activation(this, &key_owned, *ix, include_change, cx);
             }
             _ => {}
         })
@@ -1640,6 +1635,7 @@ impl RootView {
                 on_change: node.on_change.clone(),
                 on_confirm: node.on_confirm.clone().or(node.on_double_click.clone()),
                 suppress_select: false,
+                coalesce: protocol::TableClickCoalesce::default(),
             },
         );
         state
@@ -1676,6 +1672,20 @@ impl RootView {
         if let Some(slot) = self.tables.get_mut(key) {
             slot.suppress_select = false;
         }
+    }
+
+    fn flush_pending_table_select(&mut self, key: &str, cx: &App) {
+        let Some((callback, state, ix)) = self.tables.get_mut(key).and_then(|slot| {
+            let ix = slot.coalesce.take_pending_select()?;
+            let callback = slot.on_change.clone()?;
+            Some((callback, slot.state.clone(), ix))
+        }) else {
+            return;
+        };
+        let Some(row_id) = state.read(cx).delegate().id_at(ix) else {
+            return;
+        };
+        self.emit_value(callback, json!(row_id));
     }
 
     fn render_tree(
@@ -2217,6 +2227,24 @@ fn emit_list_activation(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
     protocol::send_callbacks(
         &this.cmd_tx,
         protocol::list_activation_calls(slot.on_change.clone(), slot.on_confirm.clone(), row_id),
+    );
+}
+
+fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: bool, cx: &App) {
+    let Some(slot) = this.tables.get(key) else {
+        return;
+    };
+    let Some(row_id) = slot.state.read(cx).delegate().id_at(ix) else {
+        return;
+    };
+    let on_change = if include_change {
+        slot.on_change.clone()
+    } else {
+        None
+    };
+    protocol::send_callbacks(
+        &this.cmd_tx,
+        protocol::table_activation_calls(on_change, slot.on_confirm.clone(), row_id),
     );
 }
 

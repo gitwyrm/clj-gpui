@@ -1013,6 +1013,10 @@
   description-list `:columns` count). `:rows` are `{id, cells [...]}`.
   `on-change` receives the selected row's original id. `:on-confirm` (or
   `:on-double-click`) fires on double-click with that same original id.
+  gpui-component 0.5.1 emits `SelectRow` on every left click, then
+  `DoubleClickedRow` from the same click when `click_count` is 2. The host
+  batches those as `:on-change` then `:on-confirm` against one callback
+  generation, then one tree fetch. A single click is only `:on-change`.
 
   (ui/table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
              :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]

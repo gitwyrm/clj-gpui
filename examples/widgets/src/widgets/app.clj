@@ -24,6 +24,7 @@
            :list-sel :alpha
            :list-confirm nil
            :table-sel :ada
+           :table-confirm nil
            :tree-sel :src
            :list-rev 0
            :batch-shift? false
@@ -159,7 +160,7 @@
               (ui/label (str "Close from OK, Cancel, Escape, or the overlay. Tick " tick "."))
               (ui/button "Disabled" {:disabled true}))))
 
-(defn- data-panel [{:keys [list-sel list-confirm table-sel tree-sel list-rev batch-shift?]}]
+(defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm tree-sel list-rev batch-shift?]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
         list-items [{:id :alpha :label (str "Alpha" suffix)}
                     {:id :beta :label (str "Beta" suffix)}
@@ -187,6 +188,7 @@
      (ui/label (str "List " (pr-str list-sel)
                     " confirm " (pr-str list-confirm)
                     " · table " (pr-str table-sel)
+                    " confirm " (pr-str table-confirm)
                     " · tree " (pr-str tree-sel)
                     " · shift " (pr-str batch-shift?)))
      (when batch-shift?
@@ -215,7 +217,9 @@
                 :rows table-rows
                 :selected (when (not= table-sel :gone) table-sel)
                 :height 160
-                :on-change (set-key :table-sel)})
+                :on-change (fn [id]
+                             (swap! !state assoc :table-sel id :batch-shift? true))
+                :on-confirm (set-key :table-confirm)})
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "Tree lib" #(swap! !state assoc :tree-sel :lib))
