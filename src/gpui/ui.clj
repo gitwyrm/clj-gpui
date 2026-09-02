@@ -1254,7 +1254,8 @@
 
 (defn virtual-list
   "Variable-height virtualized rows `{id, label, height?}`. Default
-  row height is 36px. `:selected` / `on-change` restore original ids.
+  row height is 36px. Rows stack vertically unless `:orientation
+  :horizontal`. `:selected` / `on-change` restore original ids.
 
   (ui/virtual-list items {:selected id :on-change set! :height 200})"
   ([items]

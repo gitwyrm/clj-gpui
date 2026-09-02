@@ -41,6 +41,17 @@ pub fn parse_description_axis(value: Option<&str>) -> Axis {
     }
 }
 
+/// Virtual lists default to a vertical column of rows.
+///
+/// `parse_axis` defaults to horizontal (sliders, dividers, resizable). A
+/// virtual-list without `:orientation` should still look like `ui/list`.
+pub fn parse_virtual_list_axis(value: Option<&str>) -> Axis {
+    match value.map(catalog::normalize) {
+        Some(name) if name == "horizontal" => Axis::Horizontal,
+        _ => Axis::Vertical,
+    }
+}
+
 /// Column count for `description-list` (1–10). Default 1, not the crate's 3.
 pub fn parse_columns(value: Option<u32>) -> usize {
     value.map(|n| (n as usize).clamp(1, 10)).unwrap_or(1)
@@ -280,5 +291,11 @@ mod tests {
         assert_eq!(parse_placement(None, Placement::Right), Placement::Right);
         assert_eq!(parse_side(Some("right"), Side::Left), Side::Right);
         assert_eq!(parse_side(None, Side::Left), Side::Left);
+        assert_eq!(parse_virtual_list_axis(None), Axis::Vertical);
+        assert_eq!(
+            parse_virtual_list_axis(Some("horizontal")),
+            Axis::Horizontal
+        );
+        assert_eq!(parse_virtual_list_axis(Some("vertical")), Axis::Vertical);
     }
 }

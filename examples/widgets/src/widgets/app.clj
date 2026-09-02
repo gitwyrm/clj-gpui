@@ -38,7 +38,7 @@
            :color "#3366ff"
            :date "2026-09-02"
            :src "(defn hi [] \n  :ok)"
-           :vlist-sel :a
+           :vlist-sel :r0
            :nav :home
            :sidebar-collapsed false
            :setting-notify true
@@ -306,14 +306,12 @@
                     {:id :c :label "Wed" :value 6}
                     {:id :d :label "Thu" :value 10}]
              {:height 160})
-   (ui/hstack
-    {:gap 8}
-    (ui/bar-chart [{:id :a :label "A" :value 3}
-                   {:id :b :label "B" :value 7}]
-                  {:width 200 :height 140})
-    (ui/pie-chart [{:id :a :label "A" :value 2}
-                   {:id :b :label "B" :value 5}]
-                  {:width 160 :height 140}))
+   (ui/bar-chart [{:id :a :label "A" :value 3}
+                  {:id :b :label "B" :value 7}]
+                 {:width 220 :height 140})
+   (ui/pie-chart [{:id :a :label "A" :value 2}
+                  {:id :b :label "B" :value 5}]
+                 {:width 180 :height 160})
    (ui/markdown "# Markdown\n\nSelectable **gpui-component** `TextView`.\n\n- sheet\n- notification\n- charts"
                 {:height 140})))
 
@@ -344,7 +342,7 @@
    (ui/resizable {:orientation :horizontal :height 140}
                  (ui/markdown "Left pane" {:width 160})
                  (ui/markdown "Right pane"))
-   (ui/dock {:height 180
+   (ui/dock {:height 320
              :items [{:id :files :side :left :label "Files"
                       :content (ui/markdown "**Files**\n\n- a.clj\n- b.rs")}
                      {:id :main :side :center :label "Main"

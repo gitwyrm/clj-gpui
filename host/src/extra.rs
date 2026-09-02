@@ -136,8 +136,10 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
                 cx.theme().chart_4,
                 cx.theme().chart_5,
             ];
+            let radius = width.min(height) * 0.42;
             PieChart::new(points)
                 .value(|p| p.1 as f32)
+                .outer_radius(radius)
                 .color(move |p| {
                     let ix =
                         p.0.bytes()
@@ -219,7 +221,7 @@ impl VirtualListView {
             .collect();
         Self {
             items,
-            axis: mapping::parse_axis(node.orientation.as_deref()),
+            axis: mapping::parse_virtual_list_axis(node.orientation.as_deref()),
             selected: node.string_value(),
             on_change: node.on_change.clone(),
             cmd_tx,
@@ -230,8 +232,10 @@ impl VirtualListView {
         &mut self,
         range: Range<usize>,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
+        let vertical = self.axis == Axis::Vertical;
+        let accent = cx.theme().accent;
         range
             .filter_map(|ix| self.items.get(ix).cloned())
             .map(|row| {
@@ -241,13 +245,13 @@ impl VirtualListView {
                 let id = row.id.clone();
                 div()
                     .id(SharedString::from(row.id.clone()))
-                    .w_full()
-                    .h(px(row.height))
+                    .when(vertical, |this| this.w_full().h(px(row.height)))
+                    .when(!vertical, |this| this.h_full().w(px(row.height)))
                     .px_2()
                     .flex()
                     .items_center()
                     .when(selected, |this| {
-                        this.font_weight(gpui::FontWeight::SEMIBOLD)
+                        this.font_weight(gpui::FontWeight::SEMIBOLD).bg(accent)
                     })
                     .child(row.label)
                     .on_click(move |_, _, _| {
@@ -651,7 +655,31 @@ mod tests {
     fn dock_side_from_item() {
         let left: Item = serde_json::from_value(json!({"id": "files", "side": "left"})).unwrap();
         let center: Item = serde_json::from_value(json!({"id": "main"})).unwrap();
+        let bottom: Item = serde_json::from_value(json!({"id": "log", "side": "bottom"})).unwrap();
         assert_eq!(dock_side(&left), "left");
         assert_eq!(dock_side(&center), "center");
+        assert_eq!(dock_side(&bottom), "bottom");
+    }
+
+    #[test]
+    fn virtual_list_omitted_orientation_is_vertical() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "virtual-list",
+            "items": [{"id": "a", "label": "A"}]
+        }))
+        .unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let view = VirtualListView::from_node(&node, tx);
+        assert_eq!(view.axis, Axis::Vertical);
+
+        let horiz: Node = serde_json::from_value(json!({
+            "type": "virtual-list",
+            "orientation": "horizontal",
+            "items": [{"id": "a", "label": "A"}]
+        }))
+        .unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let view = VirtualListView::from_node(&horiz, tx);
+        assert_eq!(view.axis, Axis::Horizontal);
     }
 }

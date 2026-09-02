@@ -151,7 +151,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
 | `value` | JSON number, string, array, bool, or null | `slider`/`progress`/`number-input` (number), `select`/`radio-group`/`tabs`/`list`/`table`/`tree`/`virtual-list`/`sidebar` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`), `otp-input` (string), `color-picker` (hex), `date-picker` (ISO string or `[start, end]`) |
 | `min`, `max`, `step` | number | `slider`, `number-input`. Slider `step` is drag granularity; the host applies Clojure's controlled value even when it is off-step, then clamps to `min`/`max` |
-| `orientation` | string | `radio-group`, `slider`, `divider`, `resizable`, `virtual-list`: `horizontal` (default) or `vertical`. `description-list`: `vertical` (default) or `horizontal` |
+| `orientation` | string | `radio-group`, `slider`, `divider`, `resizable`: `horizontal` (default) or `vertical`. `virtual-list` and `description-list`: `vertical` (default) or `horizontal` |
 | `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
 | `disabled` | bool | buttons and most controls |
 | `tooltip` | string | any node: gpui-component tooltip |

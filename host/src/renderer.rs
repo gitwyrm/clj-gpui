@@ -2502,7 +2502,9 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.editor_slot(key, node, window, cx);
-        viewport_sized(Input::new(&state), node, 200.0, cx)
+        // Code editor Input is multi-line but `h_auto` without an explicit
+        // height collapses to a single row. Fill the viewport wrapper.
+        viewport_sized(Input::new(&state).h_full(), node, 200.0, cx)
     }
 
     fn editor_slot(
@@ -2751,9 +2753,13 @@ impl RootView {
             }
             if let Some(bottom) = by_side.remove("bottom") {
                 if !bottom.is_empty() {
+                    let bottom_h = node
+                        .height
+                        .map(|h| (h * 0.34).clamp(64.0, 140.0))
+                        .unwrap_or(96.0);
                     dock.set_bottom_dock(
                         DockItem::tabs(bottom, &weak, window, cx),
-                        Some(px(160.)),
+                        Some(px(bottom_h)),
                         true,
                         window,
                         cx,
