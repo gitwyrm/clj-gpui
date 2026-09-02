@@ -974,34 +974,35 @@ impl RootView {
         copy_outer_layout(div().relative().id(eid(&format!("{key}-track"))), node)
             .child(
                 canvas(
-                    move |bounds, window, cx| {
+                    move |bounds, window, _cx| {
+                        // RootView is borrowed during prepaint, so slot
+                        // bookkeeping and notify must wait until next frame.
+                        // Fill/thumb pixels are baked at RenderOnce time;
+                        // SliderState.bounds is written in this same phase.
                         let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-                        let mut refresh = false;
-                        let _ = view.update(cx, |this, _cx| {
-                            let Some(slot) = this.sliders.get_mut(&key) else {
-                                return;
-                            };
-                            let changed = match slot.bar_px {
-                                None => true,
-                                Some((w, h)) => {
-                                    (w - size.0).abs() > 0.5 || (h - size.1).abs() > 0.5
+                        let view = view.clone();
+                        let key = key.clone();
+                        window.on_next_frame(move |_, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                let Some(slot) = this.sliders.get_mut(&key) else {
+                                    return;
+                                };
+                                let changed = match slot.bar_px {
+                                    None => true,
+                                    Some((w, h)) => {
+                                        (w - size.0).abs() > 0.5 || (h - size.1).abs() > 0.5
+                                    }
+                                };
+                                if changed {
+                                    slot.bar_px = Some(size);
+                                    slot.settle = 0;
+                                    cx.notify();
+                                } else if slot.settle < 4 {
+                                    slot.settle += 1;
+                                    cx.notify();
                                 }
-                            };
-                            if changed {
-                                slot.bar_px = Some(size);
-                                slot.settle = 0;
-                                refresh = true;
-                            } else if slot.settle < 4 {
-                                slot.settle += 1;
-                                refresh = true;
-                            }
-                        });
-                        if refresh {
-                            let view = view.clone();
-                            window.on_next_frame(move |_, cx| {
-                                let _ = view.update(cx, |_, cx| cx.notify());
                             });
-                        }
+                        });
                     },
                     |_, _, _, _| {},
                 )
