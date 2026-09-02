@@ -259,6 +259,7 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/accordion open-id {:items [{:id :a :title "One" :content (ui/label "…")}]
                        :on-change set-open!})
 (ui/description-list [{:label "Host" :value "GPUI"}])
+(ui/description-list items {:orientation :horizontal :columns 2})
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 

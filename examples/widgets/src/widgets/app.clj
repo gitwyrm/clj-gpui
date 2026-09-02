@@ -91,10 +91,11 @@
                            :content (ui/label "Theme, density, and motion.")}]})
    (ui/description-list [{:label "Host" :value "GPUI"}
                          {:label "UI" :value "clj-gpui"}])
-   (ui/hstack {:gap 8 :align :center :height 48}
+   (ui/hstack {:gap 12 :align :center :height 36}
               (ui/label "v")
-              (ui/divider {:orientation :vertical :flex 1})
+              (ui/divider {:orientation :vertical :height 28})
               (ui/label "h"))
+   (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
 (defn app []
@@ -116,7 +117,7 @@
                 :variant :underline
                 :on-change (set-key :tab)})
       (ui/scroll
-       {:flex 1 :tooltip "Scrolls when the panel is taller than the window"}
+       {:flex 1}
        (ui/vstack
         {:gap 14 :padding 4}
         (case tab

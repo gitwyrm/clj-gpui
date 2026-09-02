@@ -34,6 +34,9 @@ pub struct Item {
     pub content: Option<Box<Node>>,
     #[serde(default, rename = "on-click")]
     pub on_click: Option<String>,
+    /// `description-list` item column span. `0` / omitted is 1.
+    #[serde(default)]
+    pub span: u32,
 }
 
 impl Item {
@@ -161,6 +164,9 @@ pub struct Node {
     pub step: Option<f32>,
     #[serde(default)]
     pub orientation: Option<String>,
+    /// `description-list` grid columns (1–10). Omitted is 1, not the crate's 3.
+    #[serde(default)]
+    pub columns: Option<u32>,
     #[serde(default)]
     pub items: Vec<Item>,
     #[serde(default)]
@@ -492,6 +498,32 @@ mod tests {
         .unwrap();
         assert_eq!(node.string_value(), None);
         assert!(node.string_values().is_empty());
+    }
+
+    #[test]
+    fn decodes_description_list_columns_and_span() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "description-list",
+            "orientation": "horizontal",
+            "columns": 2,
+            "items": [
+                {"label": "Host", "text": "GPUI", "span": 2},
+                {"label": "UI", "text": "clj-gpui"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(node.orientation.as_deref(), Some("horizontal"));
+        assert_eq!(node.columns, Some(2));
+        assert_eq!(node.collection()[0].span, 2);
+        assert_eq!(node.collection()[1].span, 0);
+        let omitted: Node = serde_json::from_value(json!({
+            "type": "description-list",
+            "items": [{"label": "Host", "text": "GPUI"}]
+        }))
+        .unwrap();
+        assert_eq!(omitted.columns, None);
+        assert_eq!(omitted.orientation, None);
+        assert_eq!(omitted.collection()[0].span, 0);
     }
 
     #[test]

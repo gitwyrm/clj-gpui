@@ -123,7 +123,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `text` | string | `label`, `button`, `checkbox`, `text-field`, `switch`, `toggle`, `divider`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar` |
 | `placeholder` | string | `text-field`, `select` |
 | `children` | array of nodes | layouts, `scroll`, `group-box`, `badge` |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span) |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
 | `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (wire id; Clojure restores the original id) |
@@ -136,7 +136,8 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
 | `value` | JSON number, string, array, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`) |
 | `min`, `max`, `step` | number | `slider` |
-| `orientation` | string | `radio-group`, `slider`, `divider`, `description-list`: `horizontal` (default) or `vertical` |
+| `orientation` | string | `radio-group`, `slider`, `divider`: `horizontal` (default) or `vertical`. `description-list`: `vertical` (default) or `horizontal` |
+| `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
 | `disabled` | bool | buttons and most controls |
 | `tooltip` | string | any node: gpui-component tooltip |
 | `href` | string | `link` |

@@ -29,6 +29,28 @@ pub fn parse_axis(value: Option<&str>) -> Axis {
     }
 }
 
+/// Description lists default to a vertical stack of rows.
+///
+/// gpui-component's `horizontal()` constructor also uses `columns: 3`, which
+/// jams two label/value pairs into a clipped three-column pill. Omitted
+/// orientation is vertical; pass `"horizontal"` plus `:columns` for a grid.
+pub fn parse_description_axis(value: Option<&str>) -> Axis {
+    match value.map(catalog::normalize) {
+        Some(name) if name == "horizontal" => Axis::Horizontal,
+        _ => Axis::Vertical,
+    }
+}
+
+/// Column count for `description-list` (1–10). Default 1, not the crate's 3.
+pub fn parse_columns(value: Option<u32>) -> usize {
+    value.map(|n| (n as usize).clamp(1, 10)).unwrap_or(1)
+}
+
+/// Per-item column span. `0` / omitted is 1.
+pub fn parse_span(value: u32) -> usize {
+    (value as usize).max(1)
+}
+
 pub fn parse_tab_variant(value: Option<&str>) -> TabVariant {
     match value.map(catalog::normalize) {
         Some(name) => match name.as_str() {
@@ -186,6 +208,19 @@ mod tests {
         assert_eq!(parse_axis(Some("vertical")), Axis::Vertical);
         assert_eq!(parse_axis(Some("horizontal")), Axis::Horizontal);
         assert_eq!(parse_axis(None), Axis::Horizontal);
+    }
+
+    #[test]
+    fn description_list_defaults_to_vertical_one_column() {
+        assert_eq!(parse_description_axis(None), Axis::Vertical);
+        assert_eq!(parse_description_axis(Some("vertical")), Axis::Vertical);
+        assert_eq!(parse_description_axis(Some("horizontal")), Axis::Horizontal);
+        assert_eq!(parse_columns(None), 1);
+        assert_eq!(parse_columns(Some(3)), 3);
+        assert_eq!(parse_columns(Some(0)), 1);
+        assert_eq!(parse_columns(Some(99)), 10);
+        assert_eq!(parse_span(0), 1);
+        assert_eq!(parse_span(2), 2);
     }
 
     #[test]

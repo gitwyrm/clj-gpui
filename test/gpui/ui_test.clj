@@ -177,8 +177,14 @@
     (let [n (ui/description-list [{:label "Host" :value "GPUI"}
                                   {:label "UI" :value "clj-gpui"}])]
       (is (= :description-list (:type n)))
+      (is (= :vertical (:orientation n)))
       (is (= ["Host" "UI"] (mapv :label (:items n))))
-      (is (= ["GPUI" "clj-gpui"] (mapv :text (:items n)))))))
+      (is (= ["GPUI" "clj-gpui"] (mapv :text (:items n)))))
+    (let [h (ui/description-list [{:label "A" :value "1" :span 2}]
+                                 {:orientation :horizontal :columns 3})]
+      (is (= :horizontal (:orientation h)))
+      (is (= 3 (:columns h)))
+      (is (= 2 (get-in h [:items 0 :span]))))))
 
 (deftest export-new-widget-callbacks
   (runtime/reset-callbacks!)

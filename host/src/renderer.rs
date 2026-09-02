@@ -1251,12 +1251,14 @@ impl RootView {
     }
 
     fn render_description_list(&self, node: &Node, _cx: &App) -> AnyElement {
-        let mut list = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Horizontal {
-            DescriptionList::horizontal()
-        } else {
-            DescriptionList::vertical()
-        };
+        let mut list =
+            if mapping::parse_description_axis(node.orientation.as_deref()) == Axis::Vertical {
+                DescriptionList::vertical()
+            } else {
+                DescriptionList::horizontal()
+            };
         list = list.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        list = list.columns(mapping::parse_columns(node.columns));
         for item in node.collection() {
             let label = item
                 .label
@@ -1264,7 +1266,7 @@ impl RootView {
                 .or_else(|| item.id.clone())
                 .unwrap_or_default();
             let value = item.text.clone().unwrap_or_default();
-            list = list.item(label, value, 1);
+            list = list.item(label, value, mapping::parse_span(item.span));
         }
         list.into_any_element()
     }

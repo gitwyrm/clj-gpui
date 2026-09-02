@@ -47,7 +47,7 @@ Classification:
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
 | `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; no image `src` yet |
 | `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids |
-| `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps |
+| `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col) |
 | `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
 | `slider::Slider` range / log scale | — | ❌ | C | Range thumbs and logarithmic scale need richer values |
 | `input::NumberInput` | — | ❌ | C | Extra `NumberInputState` + step semantics |

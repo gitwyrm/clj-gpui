@@ -743,21 +743,24 @@
                     :items items}
                    opts))))
 
+(defn- description-item [item]
+  (if (map? item)
+    (cond-> {:id (str (or (:label item) ""))
+             :label (str (or (:label item) ""))
+             :text (str (or (:value item) (:text item) ""))}
+      (some? (:span item)) (assoc :span (:span item)))
+    {:id (str item) :label (str item) :text ""}))
+
 (defn description-list
-  "Key/value description list.
+  "Key/value description list. Defaults to a vertical stack (one pair per row).
 
   (ui/description-list [{:label \"Name\" :value \"Ada\"}
-                        {:label \"Lang\" :value \"Clojure\"}])"
+                        {:label \"Lang\" :value \"Clojure\"}])
+  (ui/description-list items {:orientation :horizontal :columns 2})"
   ([items]
-   {:type :description-list
-    :items (mapv (fn [item]
-                   (if (map? item)
-                     {:id (str (or (:label item) ""))
-                      :label (str (or (:label item) ""))
-                      :text (str (or (:value item) (:text item) ""))}
-                     {:id (str item) :label (str item) :text ""}))
-                 items)})
+   (description-list items nil))
   ([items opts]
-   (merge {:type :description-list
-           :items (:items (description-list items))}
-          opts)))
+   (merge-widget {:type :description-list
+                  :orientation :vertical
+                  :items (mapv description-item items)}
+                 (dissoc opts :items))))
