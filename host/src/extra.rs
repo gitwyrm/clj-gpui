@@ -160,6 +160,31 @@ pub fn chart_viewport(node: &Node) -> (f32, f32) {
     )
 }
 
+/// Theme tokens for pie slices, in paint order. Slice `i` uses
+/// `PIE_SLICE_TOKENS[i % PIE_SLICE_TOKENS.len()]`. Labels are not hashed.
+const PIE_SLICE_TOKENS: [&str; 7] = [
+    "chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger",
+];
+
+/// Color token for pie slice `index`. The slice label does not affect this.
+#[cfg(test)]
+fn pie_slice_token(index: usize) -> &'static str {
+    PIE_SLICE_TOKENS[index % PIE_SLICE_TOKENS.len()]
+}
+
+fn pie_palette(cx: &App) -> [Hsla; 7] {
+    // Keep this in lockstep with `PIE_SLICE_TOKENS`.
+    [
+        cx.theme().chart_1,
+        cx.theme().chart_2,
+        cx.theme().chart_3,
+        cx.theme().chart_4,
+        cx.theme().chart_5,
+        cx.theme().warning,
+        cx.theme().danger,
+    ]
+}
+
 pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let points = chart_points(node);
     let (width, height) = chart_viewport(node);
@@ -183,23 +208,17 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             .fill(fill)
             .into_any_element(),
         "pie" => {
-            let palette = [
-                cx.theme().chart_1,
-                cx.theme().chart_2,
-                cx.theme().chart_3,
-                cx.theme().chart_4,
-                cx.theme().chart_5,
-            ];
+            let palette = pie_palette(cx);
             let radius = width.min(height) * 0.42;
-            PieChart::new(points)
+            let pie_data: Vec<(usize, f64)> = points
+                .iter()
+                .enumerate()
+                .map(|(ix, (_, value))| (ix, *value))
+                .collect();
+            PieChart::new(pie_data)
                 .value(|p| p.1 as f32)
                 .outer_radius(radius)
-                .color(move |p| {
-                    let ix =
-                        p.0.bytes()
-                            .fold(0usize, |acc, b| acc.wrapping_add(b as usize));
-                    palette[ix % palette.len()]
-                })
+                .color(move |p| palette[p.0 % PIE_SLICE_TOKENS.len()])
                 .into_any_element()
         }
         _ => LineChart::new(points)
@@ -728,6 +747,52 @@ mod tests {
             chart_points(&node),
             vec![("A".into(), 1.0), ("B".into(), 2.5)]
         );
+    }
+
+    #[test]
+    fn pie_first_seven_indices_are_distinct_tokens() {
+        let tokens: Vec<_> = (0..7).map(pie_slice_token).collect();
+        assert_eq!(
+            tokens,
+            vec!["chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"]
+        );
+        for i in 0..7 {
+            for j in (i + 1)..7 {
+                assert_ne!(
+                    pie_slice_token(i),
+                    pie_slice_token(j),
+                    "indices {i} and {j}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pie_color_depends_on_index_not_label() {
+        let color_for = |index: usize, _label: &str| pie_slice_token(index);
+        assert_eq!(color_for(0, "flutter"), color_for(0, "Other"));
+        assert_eq!(color_for(0, "flutter"), "chart_1");
+        assert_ne!(color_for(0, "flutter"), color_for(1, "flutter"));
+        assert_ne!(color_for(0, "flutter"), color_for(1, "Other"));
+        assert_eq!(color_for(1, "Other"), "chart_2");
+    }
+
+    #[test]
+    fn pie_index_colors_avoid_former_label_hash_collisions() {
+        fn label_hash_bucket(label: &str) -> usize {
+            label
+                .bytes()
+                .fold(0usize, |acc, b| acc.wrapping_add(b as usize))
+                % 5
+        }
+        assert_eq!(
+            label_hash_bucket("flutter"),
+            label_hash_bucket("Other"),
+            "these labels collided on the old 5-color hash"
+        );
+        assert_ne!(pie_slice_token(0), pie_slice_token(1));
+        assert_eq!(pie_slice_token(0), "chart_1");
+        assert_eq!(pie_slice_token(1), "chart_2");
     }
 
     #[test]
