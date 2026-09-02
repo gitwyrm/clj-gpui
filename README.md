@@ -126,7 +126,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
         :on-change #(swap! !state assoc :draft %)})))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, tabs, breadcrumb, and accordion pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts is 0-arg.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, tabs, breadcrumb, accordion, list, table, tree, and menus pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts and dialogs is 0-arg. Popover `:on-open-change` receives a boolean.
 
 ## Architecture
 
@@ -260,6 +260,22 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
                        :on-change set-open!})
 (ui/description-list [{:label "Host" :value "GPUI"}])
 (ui/description-list items {:orientation :horizontal :columns 2})
+(ui/dialog open? {:title "Delete?" :variant :confirm :on-ok delete! :on-close hide!}
+  (ui/label "This cannot be undone."))
+(ui/popover open? {:trigger (ui/button "More") :on-open-change set-open!}
+  (ui/label "Hint"))
+(ui/dropdown-menu [{:id :copy :label "Copy"} :- {:id :paste :label "Paste"}]
+                  {:on-change handle!}
+                  (ui/button "Edit"))
+(ui/context-menu items {:on-change handle!} (ui/label "Right-click me"))
+(ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
+(ui/table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
+           :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+           :selected :ada
+           :on-change set-row!})
+(ui/tree [{:id :src :label "src" :expanded true
+           :items [{:id :lib :label "lib.rs"}]}]
+         {:on-change set-node!})
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 

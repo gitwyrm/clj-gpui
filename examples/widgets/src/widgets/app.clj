@@ -15,7 +15,13 @@
            :tab :general
            :section :audio
            :crumb :home
-           :alert? true}))
+           :alert? true
+           :dialog? false
+           :popover? false
+           :menu nil
+           :list-sel :alpha
+           :table-sel :ada
+           :tree-sel :src}))
 
 (defn- set-key [k]
   (fn [v]
@@ -99,13 +105,76 @@
    (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
+(defn- overlay-panel [{:keys [dialog? popover? menu]}]
+  (ui/vstack
+   {:gap 12}
+   (ui/label (str "Menu " (pr-str menu)))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button "Open dialog" #(swap! !state assoc :dialog? true) {:primary true})
+    (ui/popover popover?
+                {:trigger (ui/button "Popover")
+                 :on-open-change (set-key :popover?)}
+                (ui/label "Anchored content.")
+                (ui/button "Close" #(swap! !state assoc :popover? false)))
+    (ui/dropdown-menu
+     [{:id :copy :label "Copy"}
+      :-
+      {:id :share :label "Share"
+       :items [{:id :email :label "Email"}
+               {:id :link :label "Copy link"}]}]
+     {:on-change (set-key :menu)}
+     (ui/button "Edit")))
+   (ui/context-menu
+    [{:id :inspect :label "Inspect"}
+     {:id :delete :label "Delete"}]
+    {:on-change (set-key :menu)}
+    (ui/label "Right-click this label."))
+   (ui/dialog dialog?
+              {:title "Confirm"
+               :variant :confirm
+               :on-ok #(swap! !state assoc :dialog? false :menu :ok)
+               :on-cancel #(swap! !state assoc :dialog? false)
+               :on-close #(swap! !state assoc :dialog? false)}
+              (ui/label "Close from OK, Cancel, or the overlay."))))
+
+(defn- data-panel [{:keys [list-sel table-sel tree-sel]}]
+  (ui/vstack
+   {:gap 12}
+   (ui/label (str "List " (pr-str list-sel)
+                  " · table " (pr-str table-sel)
+                  " · tree " (pr-str tree-sel)))
+   (ui/list [{:id :alpha :label "Alpha"}
+             {:id :beta :label "Beta"}
+             {:id :gamma :label "Gamma"}
+             {:id :delta :label "Delta"}]
+            {:selected list-sel
+             :searchable true
+             :height 160
+             :on-change (set-key :list-sel)})
+   (ui/table {:columns [{:id :name :label "Name" :width 140}
+                        {:id :lang :label "Lang" :width 100}]
+              :rows [{:id :ada :cells ["Ada" "Clojure"]}
+                     {:id :grace :cells ["Grace" "Rust"]}
+                     {:id :alan :cells ["Alan" "Go"]}]
+              :selected table-sel
+              :height 160
+              :on-change (set-key :table-sel)})
+   (ui/tree [{:id :src :label "src" :expanded true
+              :items [{:id :lib :label "lib.rs"}
+                      {:id :main :label "main.rs"}]}
+             {:id :readme :label "README.md"}]
+            {:selected tree-sel
+             :height 160
+             :on-change (set-key :tree-sel)})))
+
 (defn app []
   (let [{:keys [tab] :as state} @!state]
     (ui/window
      {:title "Widgets"
       :chrome :dev
-      :width 560
-      :height 760
+      :width 620
+      :height 820
       :theme "Tokyo Night"}
      (ui/vstack
       {:gap 14 :padding 16 :flex 1}
@@ -114,7 +183,9 @@
                 {:font-size 13})
       (ui/tabs tab
                {:items [{:id :general :label "General"}
-                        {:id :chrome :label "Chrome"}]
+                        {:id :chrome :label "Chrome"}
+                        {:id :overlay :label "Overlay"}
+                        {:id :data :label "Data"}]
                 :variant :underline
                 :on-change (set-key :tab)})
       (ui/scroll
@@ -123,4 +194,6 @@
         {:gap 14 :padding 4}
         (case tab
           :chrome (chrome-panel state)
+          :overlay (overlay-panel state)
+          :data (data-panel state)
           (general-panel state))))))))

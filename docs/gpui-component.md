@@ -54,16 +54,16 @@ Classification:
 | `input::OtpInput` | — | ❌ | C | Per-cell state |
 | `input` code editor | — | ❌ | C | Rope, LSP, highlighter; not a form control |
 | `select` searchable sections / custom item render | — | ⚠️ | C | Basic string select is B; groups/custom rows are not |
-| `list::List` | — | ❌ | C | `ListDelegate`, virtualization, search |
-| `table::Table` / `DataTable` | — | ❌ | C | `TableDelegate`, columns, sort, virtualization |
-| `tree::Tree` | — | ❌ | C | `TreeDelegate`, expand/collapse |
+| `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
+| `table::Table` / `DataTable` | `ui/table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate` |
+| `tree::Tree` | `ui/tree` | ✅ | C | Nested `{id, label, items}`; `:expanded` is initial. Click sends original id. Expand state is host-local until item identity changes |
+| `dialog::Dialog` | `ui/dialog` | ✅ | C | Controlled `:open?`; overlay via `WindowExt`. `:variant` `:confirm` / `:alert` |
+| `popover::Popover` | `ui/popover` | ✅ | C | Controlled `:open?`; trigger must be a button; content rebuilt from child nodes |
+| `menu::PopupMenu` / context / dropdown | `ui/dropdown-menu`, `ui/context-menu` | ✅ | C | `{id, label}` items, nested `:items` submenus, `-` separators. No GPUI Action required |
 | `VirtualList` | — | ❌ | C | Measured variable-height lists |
-| `dialog::Dialog` | — | ❌ | C | Overlay layer + `WindowExt` |
 | `sheet::Sheet` | — | ❌ | C | Overlay layer |
-| `popover::Popover` | — | ❌ | C | Anchor + overlay |
 | `notification::Notification` | — | ❌ | C | Overlay stack |
-| `menu::PopupMenu` / context / app menu | — | ❌ | C | Actions, nesting, OS menu bar |
-| `button::DropdownButton` | — | ❌ | C | Popup menu |
+| `button::DropdownButton` | — | ❌ | C | Use `ui/dropdown-menu` |
 | `button::ButtonGroup` | — | ❌ | E | Use `ui/hstack` of buttons |
 | `color_picker::ColorPicker` | — | ❌ | C | `ColorPickerState` + color type |
 | `date_picker::DatePicker` / `calendar` | — | ❌ | C | Dates are not JSON-native; state entity |
@@ -87,40 +87,27 @@ Classification:
 
 0.5.1 has **no** `Combobox`, `Rating`, or `Stepper` modules. Those names appear in later gpui-component docs only.
 
-## Category C — deferred
+## Category C — remaining
 
-Do not cram these into the current protocol.
+Sheet, notification, and the OS app menu bar still need overlay-stack work. VirtualList needs measured variable-height rows. Date / color / number / OTP / editor each have a dedicated `*State` and a non-JSON-native value. Dock, sidebar, settings, charts, and markdown are application chrome.
 
-### Overlay family (dialog, sheet, popover, notification, menus)
+### Overlay family (implemented for dialog, popover, menus)
 
-gpui-component paints these through `Root` / `WindowExt` as a **layer above** the tree, not as ordinary children. clj-gpui currently has one render tree and one callback registry. A host abstraction is missing:
+Dialogs are collected from the tree and opened through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The builder reads the latest Clojure node from `RootView`, so title/body stay live. `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg and then the crate closes. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus.
 
-- open/close owned by Clojure (controlled) vs internal dismiss
-- focus restore
-- stacking order
-- JSON-safe result payloads (confirm, cancel, selected command)
+Sheet and notification are still deferred.
 
-**Suggested API later:** `(ui/dialog {:open? … :on-close …} …)` and `(ui/context-menu items)`. **Order:** dialog, then popover, then menus.
+### Delegate collections (implemented for list, table, tree)
 
-### Delegate collections (list, table, tree, virtual list)
+Clojure sends `{id, label}` (list), `{id, cells}` (table), or nested `{id, label, items}` (tree). Rust owns `ListDelegate` / `TableDelegate` / `TreeState`. Selection callbacks send original Clojure ids. Table column defs travel in `options`, not the description-list `columns` u32. Tree expand/collapse is host-local until the item identity changes (`set_items` would reset it).
 
-These require a Rust `Delegate` that can render **rows as GPUI elements** and report selection via `IndexPath`. Mapping every row through the JSON tree is possible but will not virtualize. A reusable host piece would be: Clojure sends `{id, cells/label}` rows; Rust owns scroll/measure; selection callbacks send ids.
-
-**Order:** list (id + label), then table (columns), then tree.
-
-### Date / color / number / OTP / editor
-
-Each has a dedicated `*State` entity and a non-trivial value type (chrono date, HSLA, digit vector, rope). Generalize the existing `InputState` / `SliderState` / `SelectState` slot map first, then add one value codec at a time.
-
-### Dock, sidebar, settings, charts, markdown
-
-Application chrome and documents. They need persistence or a document model. They should not be the next batch.
+VirtualList (variable measured height) is still deferred.
 
 ## Path to near-complete coverage
 
-Yes: keep **Clojure as the semantic owner**, keep **Rust widget state only where GPUI requires an Entity**, and grow **one slot map** (`text-field` → `slider` → `select` already follows this). Overlays need one new host capability. Delegates need one row protocol. That is a coherent sequence, not a pile of FFI wrappers.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers text-field, slider, select, list, table, and tree. Overlay sync covers dialog; popover/menus are in-tree. Remaining C work is product widgets (sheet, notification, dates, dock, charts), not a new architecture.
 
-## Callback payloads (protocol v4)
+## Callback payloads (protocol v5)
 
 | Widget | callback | payload |
 |---|---|---|
@@ -132,5 +119,9 @@ Yes: keep **Clojure as the semantic owner**, keep **Rust widget state only where
 | `clipboard` | `:on-copied` | copied string |
 | `text-field` | `:on-change` / `:on-submit` / `:on-blur` | string (unchanged) |
 | `button` / `checkbox` | `:on-click` | none (unchanged) |
+| `list` / `table` / `tree` / menus | `:on-change` | original Clojure row/item id |
+| `list` | `:on-confirm` | original Clojure row id (Enter / confirm click) |
+| `dialog` | `:on-close` / `:on-ok` / `:on-cancel` | none (0-arg) |
+| `dialog` / `popover` | `:on-open-change` | boolean |
 
 The wire still uses JSON strings. `gpui.ui` keeps a map of wire id → original Clojure id and restores it in the callback. `{:id :dark}` yields `:dark`; `{:id "custom-id"}` yields `"custom-id"`. If two options share a wire id (`:dark` and `"dark"`), the first wins.

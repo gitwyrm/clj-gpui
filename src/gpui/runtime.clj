@@ -109,7 +109,8 @@
 
 (def ^:private callback-keys
   [:on-click :on-change :on-submit :on-double-click :on-blur
-   :on-escape :on-close :on-copied])
+   :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
+   :on-open-change])
 
 (declare sanitize)
 
@@ -123,7 +124,8 @@
                     item
                     callback-keys)
       (some? (:content item)) (update :content sanitize)
-      (seq (:children item)) (update :children #(mapv sanitize %)))
+      (seq (:children item)) (update :children #(mapv sanitize %))
+      (seq (:items item)) (update :items #(mapv sanitize-item %)))
     item))
 
 (defn- sanitize
@@ -140,7 +142,8 @@
       (-> node
           (update :children #(mapv sanitize (or % [])))
           (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
-          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))))
+          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
+          (cond-> (some? (:trigger node)) (update :trigger sanitize))))
 
     (sequential? node)
     (mapv sanitize node)

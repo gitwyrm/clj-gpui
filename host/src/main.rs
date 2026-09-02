@@ -1,8 +1,10 @@
 mod bridge;
 mod catalog;
 mod mapping;
+mod overlay;
 mod protocol;
 mod renderer;
+mod rows;
 
 use anyhow::Result;
 

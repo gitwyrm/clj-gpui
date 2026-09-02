@@ -2,7 +2,7 @@ use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub const PROTOCOL_VERSION: u64 = 4;
+pub const PROTOCOL_VERSION: u64 = 5;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -37,6 +37,27 @@ pub struct Item {
     /// `description-list` item column span. `0` / omitted is 1.
     #[serde(default)]
     pub span: u32,
+    /// Nested items for menus and trees.
+    #[serde(default)]
+    pub items: Vec<Item>,
+    /// Table row cells (one string per column). Empty falls back to `label`.
+    #[serde(default)]
+    pub cells: Vec<String>,
+    /// Menu separator row. Also accepted as id `"-"`.
+    #[serde(default)]
+    pub separator: bool,
+    /// Table column width in pixels; tree/menu unused.
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// Menu item check mark; tree unused.
+    #[serde(default)]
+    pub checked: Option<bool>,
+    /// Menu item icon (kebab name).
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Tree item expanded on first paint.
+    #[serde(default)]
+    pub expanded: bool,
 }
 
 impl Item {
@@ -54,6 +75,13 @@ impl Item {
             .or_else(|| self.text.clone())
             .or_else(|| self.id.clone())
             .unwrap_or_default()
+    }
+
+    pub fn is_separator(&self) -> bool {
+        self.separator
+            || self.id.as_deref() == Some("-")
+            || self.label.as_deref() == Some("-")
+            || self.text.as_deref() == Some("-")
     }
 }
 
@@ -191,6 +219,20 @@ pub struct Node {
     pub multiple: bool,
     #[serde(default)]
     pub message: Option<String>,
+    /// Controlled overlay/popover open flag (`:open?` on the Clojure side).
+    #[serde(default)]
+    pub open: Option<bool>,
+    #[serde(default, rename = "on-ok")]
+    pub on_ok: Option<String>,
+    #[serde(default, rename = "on-cancel")]
+    pub on_cancel: Option<String>,
+    #[serde(default, rename = "on-confirm")]
+    pub on_confirm: Option<String>,
+    #[serde(default, rename = "on-open-change")]
+    pub on_open_change: Option<String>,
+    /// Popover / dropdown-menu trigger node (usually a `button`).
+    #[serde(default)]
+    pub trigger: Option<Box<Node>>,
 }
 
 impl Node {
@@ -225,6 +267,10 @@ impl Node {
                 .any(|child| child.contains_text(needle))
             || self.items.iter().any(|item| item_contains(item, needle))
             || self.options.iter().any(|item| item_contains(item, needle))
+            || self
+                .trigger
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
     }
 
     pub fn collection(&self) -> &[Item] {
@@ -290,6 +336,8 @@ fn item_contains(item: &Item, needle: &str) -> bool {
             .children
             .iter()
             .any(|child| child.contains_text(needle))
+        || item.items.iter().any(|child| item_contains(child, needle))
+        || item.cells.iter().any(|cell| cell.contains(needle))
 }
 
 #[derive(Debug, Clone)]
@@ -466,7 +514,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     #[test]
@@ -536,5 +584,102 @@ mod tests {
         .unwrap();
         assert_eq!(node.kind, "label");
         assert_eq!(node.text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn decodes_v5_overlay_and_row_nodes() {
+        let dialog: Node = serde_json::from_value(json!({
+            "type": "dialog",
+            "open": true,
+            "title": "Delete?",
+            "variant": "confirm",
+            "on-close": "cb-1",
+            "on-ok": "cb-2",
+            "on-cancel": "cb-3",
+            "children": [{"type": "label", "text": "Undo?"}]
+        }))
+        .unwrap();
+        assert_eq!(dialog.kind, "dialog");
+        assert_eq!(dialog.open, Some(true));
+        assert_eq!(dialog.on_ok.as_deref(), Some("cb-2"));
+        assert_eq!(dialog.on_cancel.as_deref(), Some("cb-3"));
+        assert!(dialog.contains_text("Undo?"));
+
+        let popover: Node = serde_json::from_value(json!({
+            "type": "popover",
+            "open": false,
+            "on-open-change": "cb-4",
+            "trigger": {"type": "button", "text": "More"},
+            "children": [{"type": "label", "text": "Hint"}]
+        }))
+        .unwrap();
+        assert_eq!(popover.open, Some(false));
+        assert_eq!(
+            popover.trigger.as_ref().map(|n| n.kind.as_str()),
+            Some("button")
+        );
+        assert!(popover.contains_text("Hint"));
+        assert!(popover.contains_text("More"));
+
+        let list: Node = serde_json::from_value(json!({
+            "type": "list",
+            "value": "alpha",
+            "searchable": true,
+            "on-change": "cb-5",
+            "on-confirm": "cb-6",
+            "items": [{"id": "alpha", "label": "Alpha"}, {"id": "beta", "label": "Beta"}]
+        }))
+        .unwrap();
+        assert_eq!(list.string_value().as_deref(), Some("alpha"));
+        assert!(list.searchable);
+        assert_eq!(list.on_confirm.as_deref(), Some("cb-6"));
+
+        let table: Node = serde_json::from_value(json!({
+            "type": "table",
+            "value": "ada",
+            "options": [{"id": "name", "label": "Name", "width": 120}],
+            "items": [{"id": "ada", "cells": ["Ada", "Clojure"]}]
+        }))
+        .unwrap();
+        assert_eq!(table.options[0].width, Some(120.0));
+        assert_eq!(table.items[0].cells, vec!["Ada", "Clojure"]);
+        // `columns` stays the description-list u32; table columns live in `options`.
+        assert_eq!(table.columns, None);
+        assert!(table.contains_text("Ada"));
+
+        let tree: Node = serde_json::from_value(json!({
+            "type": "tree",
+            "value": "lib",
+            "items": [{
+                "id": "src",
+                "label": "src",
+                "expanded": true,
+                "items": [{"id": "lib", "label": "lib.rs"}]
+            }]
+        }))
+        .unwrap();
+        assert!(tree.items[0].expanded);
+        assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
+        assert!(tree.contains_text("lib.rs"));
+        assert_eq!(PROTOCOL_VERSION, 5);
+    }
+
+    #[test]
+    fn menu_separator_and_nested_items() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "dropdown-menu",
+            "items": [
+                {"id": "copy", "label": "Copy"},
+                {"separator": true},
+                {
+                    "id": "more",
+                    "label": "More",
+                    "items": [{"id": "paste", "label": "Paste"}]
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(node.items[1].is_separator());
+        assert_eq!(node.items[2].items[0].id_or_label(), "paste");
     }
 }
