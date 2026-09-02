@@ -64,6 +64,9 @@ struct SliderSlot {
     /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
     /// track width changes we must re-render or they disagree by a few px.
     bar_px: Option<(f32, f32)>,
+    /// Extra RootView frames after the size looks stable, so fill/thumb
+    /// rebuild against the crate canvas bounds from the previous prepaint.
+    settle: u8,
 }
 
 #[derive(Clone)]
@@ -178,6 +181,7 @@ pub struct RootView {
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
     _appearance: Subscription,
+    _window_bounds: Subscription,
     _keystrokes: Subscription,
     next_submit_seq: u64,
     tree_seq: Option<u64>,
@@ -197,6 +201,13 @@ impl RootView {
             this.apply_theme(window, cx);
             // Always notify: nested nodes may use `:theme :system` even when
             // the root is pinned to light or dark.
+            cx.notify();
+        });
+        let window_bounds = cx.observe_window_bounds(window, |this, _, cx| {
+            for slot in this.sliders.values_mut() {
+                slot.bar_px = None;
+                slot.settle = 0;
+            }
             cx.notify();
         });
         let keystrokes = cx.observe_keystrokes(|this, event, window, cx| {
@@ -259,6 +270,7 @@ impl RootView {
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
             _appearance: appearance,
+            _window_bounds: window_bounds,
             _keystrokes: keystrokes,
             next_submit_seq: 0,
             tree_seq: None,
@@ -631,6 +643,7 @@ impl RootView {
                 step,
                 on_change: node.on_change.clone(),
                 bar_px: None,
+                settle: 0,
             },
         );
         state
@@ -959,12 +972,12 @@ impl RootView {
         let view = cx.weak_entity();
         let key = key.to_string();
         copy_outer_layout(div().relative().id(eid(&format!("{key}-track"))), node)
-            .child(slider)
             .child(
                 canvas(
-                    move |bounds, _, cx| {
+                    move |bounds, window, cx| {
                         let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-                        let _ = view.update(cx, |this, cx| {
+                        let mut refresh = false;
+                        let _ = view.update(cx, |this, _cx| {
                             let Some(slot) = this.sliders.get_mut(&key) else {
                                 return;
                             };
@@ -976,15 +989,26 @@ impl RootView {
                             };
                             if changed {
                                 slot.bar_px = Some(size);
-                                cx.notify();
+                                slot.settle = 0;
+                                refresh = true;
+                            } else if slot.settle < 4 {
+                                slot.settle += 1;
+                                refresh = true;
                             }
                         });
+                        if refresh {
+                            let view = view.clone();
+                            window.on_next_frame(move |_, cx| {
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                            });
+                        }
                     },
                     |_, _, _, _| {},
                 )
                 .absolute()
                 .size_full(),
             )
+            .child(slider)
             .into_any_element()
     }
 
