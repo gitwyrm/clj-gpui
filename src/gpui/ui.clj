@@ -5,11 +5,11 @@
   translates that data into GPUI elements. Application logic stays
   in Clojure: atoms, functions, sequences, macros, and namespaces
   are the real Clojure runtime."
-  (:refer-clojure :exclude []))
+  (:refer-clojure :exclude [list]))
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  4)
+  5)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -199,11 +199,19 @@
         (on-change (resolve-option-id id-map wire-value))))
     on-change))
 
+(defn- with-id-callbacks
+  "Restore original Clojure ids for the given option callbacks."
+  [opts xs ks]
+  (reduce (fn [m k]
+            (let [f (get m k)]
+              (cond-> m
+                (fn? f) (assoc k (wrap-option-callback f xs)))))
+          opts
+          ks))
+
 (defn- with-option-callback
   [opts xs]
-  (let [on-change (:on-change opts)]
-    (cond-> opts
-      (fn? on-change) (assoc :on-change (wrap-option-callback on-change xs)))))
+  (with-id-callbacks opts xs [:on-change]))
 
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
@@ -248,6 +256,34 @@
           (dissoc :size)
           (assoc :control-size (name size)))
       opts)))
+
+(defn- rewrite-open
+  "Clojure `:open?` becomes wire `:open` (boolean)."
+  [opts]
+  (if (contains? opts :open?)
+    (-> opts (dissoc :open?) (assoc :open (boolean (:open? opts))))
+    opts))
+
+(defn- rewrite-selected
+  "`:selected` is an alias for `:value` on list/table/tree."
+  [opts]
+  (cond-> (or opts {})
+    (and (contains? opts :selected) (not (contains? opts :value)))
+    (-> (dissoc :selected) (assoc :value (:selected opts)))
+    (contains? opts :selected) (dissoc :selected)))
+
+(defn flatten-tree-items
+  "Depth-first flattening of nested `:items` (menus, trees) for id maps."
+  [xs]
+  (into []
+        (mapcat (fn [x]
+                  (let [kids (when (map? x) (:items x))]
+                    (cons x (flatten-tree-items (or kids []))))))
+        (remove nil? xs)))
+
+(defn- with-nested-option-callback
+  [opts xs]
+  (with-option-callback opts (flatten-tree-items xs)))
 
 (defn- merge-widget
   [base opts]
@@ -764,3 +800,269 @@
                   :orientation :vertical
                   :items (mapv description-item items)}
                  (dissoc opts :items))))
+
+(defn- leading-opts
+  "Split a trailing args seq into an optional style map and children."
+  [args]
+  (if (and (seq args)
+           (map? (first args))
+           (not (ui-node? (first args))))
+    [(first args) (rest args)]
+    [{} args]))
+
+(defn menu-item
+  "Normalize a popup-menu row. `-` / `:-` / `{:separator true}` is a rule.
+  Nested `:items` become a submenu."
+  [x]
+  (cond
+    (nil? x) nil
+    (or (= x :-) (= x "-") (= x :separator)) {:separator true}
+    (and (map? x) (or (true? (:separator x))
+                      (= (:id x) :-)
+                      (= (:id x) "-")))
+    {:separator true}
+    (map? x)
+    (let [n (option-item x)]
+      (cond-> n
+        (true? (:checked x)) (assoc :checked true)
+        (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
+        (seq (:items x)) (assoc :items (into [] (keep menu-item) (:items x)))))
+    :else (option-item x)))
+
+(defn menu-items
+  "Normalize popup-menu / context-menu / dropdown-menu rows."
+  [xs]
+  (into [] (keep menu-item) xs))
+
+(defn tree-item
+  "Normalize a tree row. Nested `:items` are children; `:expanded` is initial."
+  [x]
+  (let [n (option-item x)]
+    (when n
+      (cond-> n
+        (and (map? x) (true? (:expanded x))) (assoc :expanded true)
+        (and (map? x) (seq (:items x)))
+        (assoc :items (into [] (keep tree-item) (:items x)))))))
+
+(defn- table-column [x]
+  (let [n (option-item x)]
+    (cond-> n
+      (and (map? x) (some? (:width x))) (assoc :width (:width x)))))
+
+(defn- table-row [x]
+  (cond
+    (nil? x) nil
+    (map? x)
+    (let [cells (mapv str (or (:cells x) []))
+          id (or (:id x) (:value x) (first cells) (:label x))
+          label (or (:label x) (first cells) id)]
+      (cond-> {:id (wire-id id)
+               :label (when (some? label) (str label))
+               :cells cells}
+        (empty? cells) (assoc :cells [(str (or label id))])))
+    :else {:id (str x) :label (str x) :cells [(str x)]}))
+
+(defn dialog
+  "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
+
+  Not painted inline — the host opens it through gpui-component `Root`.
+  The open dialog always uses the latest Clojure tree: callback ids,
+  title, and body update on the next paint without closing. `:on-close`
+  is 0-arg. `:on-ok` / `:on-cancel` are 0-arg. Crate order per action:
+
+  * OK → `:on-ok`, then `:on-close` (and `:on-open-change false`)
+  * Cancel, Escape, close button, overlay click → `:on-cancel`, then
+    `:on-close` (and `:on-open-change false`)
+
+  The host sends that whole chain as one batch against the same callback
+  generation, then fetches one tree. `:on-ok` cannot re-export and rewire
+  `:on-close`. Each handler runs at most once per action. `:variant` is `:confirm`
+  (OK+Cancel), `:alert` (OK only), or omitted (content + close button).
+  Clicking the dimmed overlay dismisses the dialog (crate `confirm`/`alert`
+  turn that off; this host keeps it on unless `:overlay-closable false`).
+
+  (ui/dialog open?
+    {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
+    (ui/label \"This cannot be undone.\"))"
+  [open?-or-opts & args]
+  (let [[open? opts children]
+        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
+          (let [[opts children] (leading-opts args)]
+            [open?-or-opts opts children])
+          (let [[opts children] (leading-opts (cons open?-or-opts args))]
+            [(or (:open? opts) (:open opts) false) opts children]))
+        opts (-> opts rewrite-open (dissoc :open?) apply-control-size)]
+    (merge {:type :dialog
+            :open (boolean open?)
+            :children (flatten-children children)}
+           opts
+           {:open (boolean open?)})))
+
+(defn popover
+  "Anchored popover. Controlled by `open?`. `:trigger` is a button (or
+  label wrapped as a button). `:on-open-change` receives the new boolean.
+
+  Content is rebuilt each paint from the child nodes (label, button,
+  stacks, divider).
+
+  (ui/popover open?
+    {:trigger (ui/button \"More\") :on-open-change set-open!}
+    (ui/label \"Hint\")
+    (ui/button \"Do it\" do!))"
+  [open? & args]
+  (let [[opts children] (leading-opts args)
+        trigger (:trigger opts)
+        opts (-> opts
+                 (dissoc :trigger)
+                 rewrite-open
+                 apply-control-size)]
+    (cond-> (merge {:type :popover
+                    :open (boolean open?)
+                    :children (flatten-children children)}
+                   opts
+                   {:open (boolean open?)})
+      (ui-node? trigger) (assoc :trigger trigger)
+      (and (some? trigger) (not (ui-node? trigger)))
+      (assoc :trigger (button (str trigger))))))
+
+(defn dropdown-menu
+  "Button that opens a popup menu. `on-change` receives the original item id.
+
+  Item `:on-click` (0-arg) runs before the menu `:on-change` for the same
+  selection. Both use the same callback generation; the host then fetches
+  one tree.
+
+  (ui/dropdown-menu [{:id :copy :label \"Copy\"} :- {:id :paste :label \"Paste\"}]
+                    {:on-change handle!}
+                    (ui/button \"Edit\"))"
+  ([items trigger]
+   (dropdown-menu items nil trigger))
+  ([items opts trigger]
+   (let [raw (or items [])
+         opts (with-nested-option-callback
+                (-> (or opts {})
+                    (dissoc :items :trigger)
+                    rewrite-open
+                    apply-control-size)
+                raw)
+         trigger (cond
+                   (ui-node? trigger) trigger
+                   (string? trigger) (button trigger)
+                   :else (button (str (or trigger "Menu"))))]
+     (merge {:type :dropdown-menu
+             :items (menu-items raw)
+             :trigger trigger}
+            opts))))
+
+(defn context-menu
+  "Right-click menu around a child. `on-change` receives the original item id.
+
+  Same selection batch as `dropdown-menu`: item `:on-click` then menu
+  `:on-change`, one tree fetch.
+
+  (ui/context-menu [{:id :copy :label \"Copy\"} {:id :paste :label \"Paste\"}]
+                   {:on-change handle!}
+                   (ui/label \"Right-click me\"))"
+  ([items child]
+   (context-menu items nil child))
+  ([items opts child]
+   (let [raw (or items [])
+         opts (with-nested-option-callback
+                (-> (or opts {})
+                    (dissoc :items)
+                    apply-control-size)
+                raw)]
+     (merge {:type :context-menu
+             :items (menu-items raw)
+             :children (flatten-children [child])}
+            opts))))
+
+(defn list
+  "Virtualized list of `{id, label}` rows. `value` / `:selected` is the
+  selected id; `on-change` receives that original Clojure id.
+
+  `:on-change` fires when selection changes (arrow keys, and also the
+  selection implied by a confirm). `:on-confirm` fires when the item is
+  activated (mouse click or Enter). gpui-component 0.5.1 emits Select for
+  arrows and Confirm only for click/Enter; the host maps those to this
+  contract. Click/Enter is one batch: `:on-change` then `:on-confirm`
+  against the same callback generation, then one tree fetch. Escape /
+  Cancel sends `on-change` with `nil`. `:searchable true` filters by label
+  and keeps that query when Clojure replaces the rows.
+
+  (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})"
+  ([items]
+   (list items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (-> (or opts {})
+                  rewrite-selected
+                  apply-control-size)
+         selected (:value opts)
+         opts (with-id-callbacks
+                (dissoc opts :items :options :value)
+                raw
+                [:on-change :on-confirm])]
+     (merge-widget {:type :list
+                    :value (wire-id selected)
+                    :items (option-items raw)}
+                   opts))))
+
+(defn table
+  "Virtualized table. `:columns` are `{id, label, width}` maps (not the
+  description-list `:columns` count). `:rows` are `{id, cells [...]}`.
+  `on-change` receives the selected row's original id. `:on-confirm` (or
+  `:on-double-click`) fires on double-click with that same original id.
+  gpui-component 0.5.1 `on_row_left_click` always emits `SelectRow`; when
+  `click_count` is 2 it then emits `DoubleClickedRow` from that same call.
+  A count-1 click is only `:on-change` (deferred to the end of the GPUI
+  effect cycle). A count-2 click is `:on-change` then `:on-confirm` as one
+  batch against one callback generation, then one tree fetch. Programmatic
+  `:selected` does not emit `:on-change`.
+
+  (ui/table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
+             :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
+             :selected :ada
+             :on-change set-row!})"
+  [opts]
+  (let [opts (if (map? opts) opts {})
+        columns (or (:columns opts) (:options opts) [])
+        rows (or (:rows opts) (:items opts) [])
+        opts (-> opts
+                 (dissoc :columns :rows :items :options)
+                 rewrite-selected
+                 apply-control-size)
+        selected (:value opts)
+        opts (with-id-callbacks
+               (dissoc opts :value)
+               rows
+               [:on-change :on-confirm :on-double-click])]
+    (merge-widget {:type :table
+                   :value (wire-id selected)
+                   :options (into [] (keep table-column) columns)
+                   :items (into [] (keep table-row) rows)}
+                  opts)))
+
+(defn tree
+  "Tree of nested `{id, label, items}` rows. `:expanded true` is the initial
+  fold; later expand/collapse stays host-local until item identity changes.
+  `:selected` is controlled. Nested ids apply when their ancestors are
+  expanded (visible). `on-change` receives the clicked node's original id.
+
+  (ui/tree [{:id :src :label \"src\" :expanded true
+             :items [{:id :lib :label \"lib.rs\"}]}]
+           {:selected :lib :on-change set-node!})"
+  ([items]
+   (tree items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (-> (or opts {})
+                  (dissoc :items)
+                  rewrite-selected
+                  apply-control-size)
+         selected (:value opts)
+         opts (with-nested-option-callback (dissoc opts :value) raw)]
+     (merge-widget {:type :tree
+                    :value (wire-id selected)
+                    :items (into [] (keep tree-item) raw)}
+                   opts))))

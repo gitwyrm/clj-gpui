@@ -472,8 +472,142 @@
     (is (= {:ok true :id submit-id} (runtime/invoke-callback! submit-id "done")))
     (is (= "go:done" @got))))
 
-(deftest export-tree-error-overlay
+(deftest overlay-and-row-constructors
+  (testing "dialog rewrites :open? and keeps children"
+    (let [n (ui/dialog true
+                       {:title "Delete?" :variant :confirm :on-ok (fn []) :on-close (fn [])}
+                       (ui/label "Undo?"))]
+      (is (= :dialog (:type n)))
+      (is (true? (:open n)))
+      (is (nil? (:open? n)))
+      (is (= "Delete?" (:title n)))
+      (is (= :confirm (:variant n)))
+      (is (= :label (get-in n [:children 0 :type])))))
+  (testing "overlay-closable passes through"
+    (let [n (ui/dialog true {:overlay-closable false} (ui/label "x"))]
+      (is (false? (:overlay-closable n)))))
+  (testing "dialog map-first form"
+    (let [n (ui/dialog {:open? true :title "Hi"} (ui/label "x"))]
+      (is (true? (:open n)))
+      (is (= "Hi" (:title n)))))
+  (testing "popover trigger and open"
+    (let [n (ui/popover false
+                        {:trigger (ui/button "More") :on-open-change (fn [_])}
+                        (ui/label "Hint"))]
+      (is (= :popover (:type n)))
+      (is (false? (:open n)))
+      (is (= :button (get-in n [:trigger :type])))
+      (is (= "More" (get-in n [:trigger :text])))))
+  (testing "dropdown and context menus nest and separate"
+    (let [items [{:id :copy :label "Copy"} :- {:id :more :label "More"
+                                               :items [{:id :paste :label "Paste"}]}]
+          drop (ui/dropdown-menu items {:on-change (fn [_])} (ui/button "Edit"))
+          ctx (ui/context-menu items (ui/label "Right-click"))]
+      (is (= :dropdown-menu (:type drop)))
+      (is (true? (get-in drop [:items 1 :separator])))
+      (is (= "paste" (get-in drop [:items 2 :items 0 :id])))
+      (is (= :button (get-in drop [:trigger :type])))
+      (is (= :context-menu (:type ctx)))
+      (is (= :label (get-in ctx [:children 0 :type])))))
+  (testing "list selected alias and searchable"
+    (let [n (ui/list [{:id :alpha :label "Alpha"} :beta]
+                     {:selected :alpha :searchable true :height 180})]
+      (is (= :list (:type n)))
+      (is (= "alpha" (:value n)))
+      (is (true? (:searchable n)))
+      (is (= 180 (:height n)))
+      (is (nil? (:selected n)))
+      (is (= ["alpha" "beta"] (mapv :id (:items n))))))
+  (testing "table columns live in :options not :columns"
+    (let [n (ui/table {:columns [{:id :name :label "Name" :width 120}
+                                 {:id :lang :label "Lang"}]
+                       :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                       :selected :ada})]
+      (is (= :table (:type n)))
+      (is (= "ada" (:value n)))
+      (is (nil? (:columns n)))
+      (is (= "name" (get-in n [:options 0 :id])))
+      (is (= 120 (get-in n [:options 0 :width])))
+      (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
+  (testing "tree nested items and expanded"
+    (let [n (ui/tree [{:id :src :label "src" :expanded true
+                       :items [{:id :lib :label "lib.rs"}]}]
+                     {:selected :lib})]
+      (is (= :tree (:type n)))
+      (is (= "lib" (:value n)))
+      (is (true? (get-in n [:items 0 :expanded])))
+      (is (= "lib" (get-in n [:items 0 :items 0 :id]))))))
+
+(deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
-  (let [exported (runtime/export-tree (fn [] (throw (ex-info "boom" {}))))]
-    (is (some #(= "Clojure error" (:text %))
-              (tree-seq :children :children exported)))))
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/dialog true {:on-close #(reset! got :closed)
+                                    :on-ok #(reset! got :ok)
+                                    :on-open-change #(reset! got %)}
+                              (ui/label "x"))
+                   (ui/popover true {:on-open-change #(reset! got %)}
+                               (ui/button "Go" #(reset! got :go)))
+                   (ui/dropdown-menu [{:id :copy :label "Copy"}]
+                                     {:on-change #(reset! got %)}
+                                     (ui/button "Edit"))
+                   (ui/list [{:id :alpha :label "Alpha"} {:id :beta :label "Beta"}]
+                            {:on-change #(reset! got %)
+                             :on-confirm #(reset! got [:confirm %])})
+                   (ui/table {:columns [{:id :name :label "Name"}]
+                              :rows [{:id :ada :cells ["Ada"]}]
+                              :on-change #(reset! got %)})
+                   (ui/tree [{:id :src :label "src"
+                              :items [{:id :lib :label "lib.rs"}]}]
+                            {:on-change #(reset! got %)})))
+        children (:children exported)]
+    (is (string? (get-in children [0 :on-close])))
+    (is (string? (get-in children [0 :on-ok])))
+    (is (string? (get-in children [1 :on-open-change])))
+    (is (string? (get-in children [1 :children 0 :on-click])))
+    (is (string? (get-in children [2 :on-change])))
+    (is (string? (get-in children [2 :trigger :text])))
+    (is (string? (get-in children [3 :on-confirm])))
+    (is (= {:ok true :id (get-in children [0 :on-close])}
+           (runtime/invoke-callback! (get-in children [0 :on-close]))))
+    (is (= :closed @got))
+    (is (= {:ok true :id (get-in children [1 :on-open-change])}
+           (runtime/invoke-callback! (get-in children [1 :on-open-change]) false)))
+    (is (false? @got))
+    (is (= {:ok true :id (get-in children [2 :on-change])}
+           (runtime/invoke-callback! (get-in children [2 :on-change]) "copy")))
+    (is (= :copy @got))
+    (is (= {:ok true :id (get-in children [3 :on-change])}
+           (runtime/invoke-callback! (get-in children [3 :on-change]) "beta")))
+    (is (= :beta @got))
+    (is (= {:ok true :id (get-in children [3 :on-confirm])}
+           (runtime/invoke-callback! (get-in children [3 :on-confirm]) "alpha")))
+    (is (= [:confirm :alpha] @got))
+    (is (= {:ok true :id (get-in children [4 :on-change])}
+           (runtime/invoke-callback! (get-in children [4 :on-change]) "ada")))
+    (is (= :ada @got))
+    (is (= {:ok true :id (get-in children [5 :on-change])}
+           (runtime/invoke-callback! (get-in children [5 :on-change]) "lib")))
+    (is (= :lib @got))))
+
+(deftest later-export-invalidates-prior-callback-ids
+  (runtime/reset-callbacks!)
+  (let [gen1 (atom 0)
+        exported-1 (runtime/export-tree
+                    (ui/dialog true {:on-ok #(swap! gen1 inc)}
+                               (ui/label "one")))
+        id-1 (:on-ok exported-1)
+        gen2 (atom 0)
+        exported-2 (runtime/export-tree
+                    (ui/dialog true {:on-ok #(swap! gen2 inc)}
+                               (ui/label "two")))
+        id-2 (:on-ok exported-2)]
+    (is (string? id-1))
+    (is (string? id-2))
+    (is (not= id-1 id-2) "callback ids are not reused across exports")
+    (is (= {:ok false :error (str "unknown callback " id-1)}
+           (runtime/invoke-callback! id-1)))
+    (is (zero? @gen1) "stale id must not run the prior handler")
+    (is (= {:ok true :id id-2} (runtime/invoke-callback! id-2)))
+    (is (= 1 @gen2) "current id still runs the new handler")))

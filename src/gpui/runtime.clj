@@ -20,9 +20,11 @@
 
 (defonce ^:private conn (atom nil))
 (defonce ^:private callbacks (atom {}))
+;; Process-lifetime monotonic. Never reset: a stale cb-N must stay unknown.
 (defonce ^:private callback-counter (atom 0))
 (defonce ^:private render-scheduled? (atom false))
 (defonce ^:private callback-depth (atom 0))
+(defonce ^:private callback-hold (atom 0))
 (defonce ^:private app-var* (atom nil))
 (defonce ^:private app-sym* (atom nil))
 (defonce ^:private nrepl-port* (atom nil))
@@ -73,14 +75,22 @@
         (.write out ^String (str (json/write-str message) "\n"))
         (.flush out)))))
 
+(defn- host-callback-active?
+  []
+  (or (pos? @callback-depth) (pos? @callback-hold)))
+
 (defn- schedule-render!
   []
   ;; The host always fetches a tree after a callback RPC (needed for
   ;; text-field submit sequencing and for handlers that do not touch an
   ;; atom). Skip the r/atom watch's request-render while that RPC is
-  ;; running so one click is not two paints. nREPL / watcher / explicit
-  ;; ui/request-render! still go through this path with depth 0.
-  (when (and (zero? @callback-depth)
+  ;; running so one click is not two paints. A multi-callback native
+  ;; action sets `defer-render` on every item so hold stays up across
+  ;; sequential callback RPCs and the gap before the host's one
+  ;; following `"render"` RPC, which clears it. nREPL / watcher /
+  ;; explicit ui/request-render! still go through this path with depth
+  ;; 0 and hold 0.
+  (when (and (not (host-callback-active?))
              (compare-and-set! render-scheduled? false true))
     (future
       (try
@@ -109,7 +119,8 @@
 
 (def ^:private callback-keys
   [:on-click :on-change :on-submit :on-double-click :on-blur
-   :on-escape :on-close :on-copied])
+   :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
+   :on-open-change])
 
 (declare sanitize)
 
@@ -123,7 +134,8 @@
                     item
                     callback-keys)
       (some? (:content item)) (update :content sanitize)
-      (seq (:children item)) (update :children #(mapv sanitize %)))
+      (seq (:children item)) (update :children #(mapv sanitize %))
+      (seq (:items item)) (update :items #(mapv sanitize-item %)))
     item))
 
 (defn- sanitize
@@ -140,7 +152,8 @@
       (-> node
           (update :children #(mapv sanitize (or % [])))
           (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
-          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))))
+          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
+          (cond-> (some? (:trigger node)) (update :trigger sanitize))))
 
     (sequential? node)
     (mapv sanitize node)
@@ -333,9 +346,12 @@
        (throw e)))))
 
 (defn reset-callbacks!
+  "Drop the current callback map. The id counter is process-lifetime
+  monotonic so a stale `cb-N` cannot name a newer function."
   []
   (reset! callbacks {})
-  (reset! callback-counter 0))
+  (reset! callback-hold 0)
+  (reset! callback-depth 0))
 
 (defn lookup-callback
   [id]
@@ -395,18 +411,52 @@
            (swap! callback-depth dec))))
      {:ok false :error (str "unknown callback " callback-id)})))
 
+(defn invoke-callback-batch!
+  "Invoke several callbacks against the current registry without exporting.
+
+  Same-generation contract the host uses for one native action: sequential
+  invoke, no `export-tree` between items. Stops on the first failure so a
+  failed prerequisite does not run later actions (unknown id or `ok:false`).
+  Thrown handlers propagate. Each item is `{:id ...}` with optional `:value`
+  (including JSON `nil`, which is `(f nil)` not a 0-arg call)."
+  [calls]
+  (loop [calls (vec calls)
+         results []]
+    (if (empty? calls)
+      {:ok true :results results}
+      (let [call (first calls)
+            id (:id call)
+            present? (contains? call :value)
+            result (invoke-callback! id (:value call) present?)]
+        (if (:ok result)
+          (recur (subvec calls 1) (conj results result))
+          {:ok false :results (conj results result)})))))
+
+(defn- apply-callback-msg
+  [msg]
+  (let [defer? (true? (:defer-render msg))]
+    (when defer?
+      (swap! callback-hold inc))
+    (try
+      (invoke-callback! (:callback-id msg)
+                        (:value msg)
+                        (contains? msg :value))
+      (finally
+        (when-not defer?
+          (reset! callback-hold 0))))))
+
 (defn handle
   [msg]
   (try
     (let [id (:id msg)
           op (:op msg)
           result (case op
-                   "render" {:ok true
-                             :tree (export-tree)
-                             :themes (theme/wire-sets)}
-                   "callback" (invoke-callback! (:callback-id msg)
-                                                (:value msg)
-                                                (contains? msg :value))
+                   "render" (do
+                              (reset! callback-hold 0)
+                              {:ok true
+                               :tree (export-tree)
+                               :themes (theme/wire-sets)})
+                   "callback" (apply-callback-msg msg)
                    "directory-picked" (do
                                         (try
                                           (require 'gpui.platform)
@@ -417,11 +467,13 @@
                                                        (.getMessage e)))))
                                         {:ok true})
                    "reload" (try
+                              (reset! callback-hold 0)
                               (assoc (reload-app!)
                                      :ok true
                                      :tree (export-tree)
                                      :themes (theme/wire-sets))
                               (catch Exception _
+                                (reset! callback-hold 0)
                                 {:ok true
                                  :tree (export-tree)
                                  :themes (theme/wire-sets)}))

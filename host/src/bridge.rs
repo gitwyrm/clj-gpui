@@ -65,6 +65,83 @@ fn parse_tree(value: &Value) -> Result<(Node, Vec<gpui_component::theme::ThemeSe
     Ok((node, themes))
 }
 
+fn send_event(event_tx: &async_channel::Sender<HostEvent>, result: Result<HostEvent>) {
+    match result {
+        Ok(event) => {
+            let _ = event_tx.send_blocking(event);
+        }
+        Err(err) => {
+            let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+        }
+    }
+}
+
+fn callback_failed(value: &Value) -> Option<String> {
+    if value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        None
+    } else {
+        Some(
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("Clojure callback failed")
+                .to_string(),
+        )
+    }
+}
+
+/// Invoke every callback in one native action against the same registry
+/// generation, then fetch exactly one tree. Stop remaining callbacks on
+/// the first failure; still render so earlier atom mutations paint.
+fn apply_callback_batch(
+    writer: &Mutex<TcpStream>,
+    pending: &Pending,
+    next_id: &AtomicU64,
+    event_tx: &async_channel::Sender<HostEvent>,
+    calls: Vec<crate::protocol::CallbackCall>,
+    seq: Option<u64>,
+) {
+    let flags = crate::protocol::defer_render_flags(calls.len());
+    let mut failed = None;
+    for (call, defer) in calls.into_iter().zip(flags) {
+        let request = if defer {
+            crate::protocol::callback_rpc(call.id, call.value, true)
+        } else {
+            crate::protocol::callback_request(call.id, call.value)
+        };
+        match rpc(writer, pending, next_id, request) {
+            Ok(resp) => {
+                if let Some(err) = callback_failed(&resp) {
+                    failed = Some(err);
+                    break;
+                }
+            }
+            Err(err) => {
+                let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+                return;
+            }
+        }
+    }
+    // Always fetch a tree here: text-field submit attaches `seq` to this
+    // response, and handlers that do not touch an r/atom still need a paint.
+    // Multi-callback RPCs used defer-render so this is the only export-tree
+    // for the native action. Stop remaining callbacks on first failure;
+    // still render so earlier atom mutations paint, then surface the error.
+    match rpc(writer, pending, next_id, json!({"op": "render"}))
+        .and_then(|value| parse_tree(&value))
+    {
+        Ok((node, themes)) => {
+            let _ = event_tx.send_blocking(HostEvent::Tree(node, seq, themes));
+        }
+        Err(err) => {
+            let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+        }
+    }
+    if let Some(err) = failed {
+        let _ = event_tx.send_blocking(HostEvent::Error(err));
+    }
+}
+
 fn connect_to_clojure() -> Result<TcpStream> {
     let host = std::env::var("CLJ_GPUI_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port = std::env::var("CLJ_GPUI_PORT")
@@ -231,49 +308,38 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
                             }
                         }
-                        other => {
-                            let result = match other {
-                                Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
-                                Cmd::Render => {
+                        other => match other {
+                            Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
+                            Cmd::Render => {
+                                let result =
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                                         .and_then(|value| parse_tree(&value))
-                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes))
-                                }
-                                Cmd::Callback { id, value, seq } => {
-                                    let request = crate::protocol::callback_request(id, value);
-                                    // Always fetch a tree here: text-field submit attaches
-                                    // `seq` to this response, and handlers that do not
-                                    // touch an r/atom still need a paint. Clojure suppresses
-                                    // the r/atom watch's request-render for the duration of
-                                    // the callback so this is not a duplicate of that path.
-                                    rpc(&writer, &pending, &next_id, request)
-                                        .and_then(|_| {
-                                            rpc(
-                                                &writer,
-                                                &pending,
-                                                &next_id,
-                                                json!({"op": "render"}),
-                                            )
-                                        })
-                                        .and_then(|value| parse_tree(&value))
-                                        .map(|(node, themes)| HostEvent::Tree(node, seq, themes))
-                                }
-                                Cmd::Reload => {
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                send_event(&event_tx, result);
+                            }
+                            Cmd::Callback { id, value, seq } => {
+                                apply_callback_batch(
+                                    &writer,
+                                    &pending,
+                                    &next_id,
+                                    &event_tx,
+                                    vec![crate::protocol::CallbackCall { id, value }],
+                                    seq,
+                                );
+                            }
+                            Cmd::CallbackBatch { callbacks, seq } => {
+                                apply_callback_batch(
+                                    &writer, &pending, &next_id, &event_tx, callbacks, seq,
+                                );
+                            }
+                            Cmd::Reload => {
+                                let result =
                                     rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
                                         .and_then(|value| parse_tree(&value))
-                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes))
-                                }
-                            };
-                            match result {
-                                Ok(event) => {
-                                    let _ = event_tx.send_blocking(event);
-                                }
-                                Err(err) => {
-                                    let _ =
-                                        event_tx.send_blocking(HostEvent::Error(err.to_string()));
-                                }
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                send_event(&event_tx, result);
                             }
-                        }
+                        },
                     }
                 }
             }

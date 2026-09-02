@@ -1,6 +1,8 @@
 use crate::catalog;
 use crate::mapping;
-use crate::protocol::{Cmd, HostEvent, Item, Node};
+use crate::overlay;
+use crate::protocol::{self, Cmd, HostEvent, Item, Node};
+use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
     Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId, Keystroke,
@@ -22,6 +24,9 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     kbd::Kbd,
     link::Link,
+    list::{List, ListEvent, ListState},
+    menu::{ContextMenuExt as _, DropdownMenu as _},
+    popover::Popover,
     progress::Progress,
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement as _,
@@ -31,12 +36,16 @@ use gpui_component::{
     spinner::Spinner,
     switch::Switch,
     tab::{Tab, TabBar},
+    table::{Table, TableEvent, TableState},
     tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
     tooltip::Tooltip,
-    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _,
+    tree::{tree, TreeItem, TreeState},
+    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root, Sizable as _,
+    WindowExt as _,
 };
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
@@ -90,6 +99,32 @@ impl SelectItem for SelectOpt {
 struct SelectSlot {
     state: Entity<SelectState<SearchableVec<SelectOpt>>>,
     searchable: bool,
+    on_change: Option<String>,
+}
+
+struct ListSlot {
+    state: Entity<ListState<RowListDelegate>>,
+    fingerprint: u64,
+    searchable: bool,
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+}
+
+struct TableSlot {
+    state: Entity<TableState<RowTableDelegate>>,
+    fingerprint: u64,
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+    suppress_select: bool,
+    /// SelectRow from this effect cycle, flushed by Defer unless
+    /// DoubleClickedRow consumes it for a same-click activation batch.
+    coalesce: protocol::TableClickCoalesce,
+}
+
+struct TreeSlot {
+    state: Entity<TreeState>,
+    items: Vec<TreeItem>,
+    fingerprint: u64,
     on_change: Option<String>,
 }
 
@@ -180,8 +215,18 @@ pub struct RootView {
     /// dropping the entity on unmount remounts at size 0 (100% fill).
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
+    lists: HashMap<String, ListSlot>,
+    tables: HashMap<String, TableSlot>,
+    trees: HashMap<String, TreeSlot>,
+    dialogs: Vec<overlay::DialogSpec>,
+    dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
+    dialog_keys: Vec<String>,
+    dialog_pending: bool,
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
+    used_lists: HashSet<String>,
+    used_tables: HashSet<String>,
+    used_trees: HashSet<String>,
     _appearance: Subscription,
     _window_bounds: Subscription,
     _keystrokes: Subscription,
@@ -269,8 +314,18 @@ impl RootView {
             inputs: HashMap::new(),
             sliders: HashMap::new(),
             selects: HashMap::new(),
+            lists: HashMap::new(),
+            tables: HashMap::new(),
+            trees: HashMap::new(),
+            dialogs: Vec::new(),
+            dialog_live: Rc::new(RefCell::new(Vec::new())),
+            dialog_keys: Vec::new(),
+            dialog_pending: false,
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
+            used_lists: HashSet::new(),
+            used_tables: HashSet::new(),
+            used_trees: HashSet::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
             _keystrokes: keystrokes,
@@ -845,6 +900,13 @@ impl RootView {
             "avatar" => self.render_avatar(node, cx),
             "accordion" => self.render_accordion(node, path, &key, window, cx),
             "description-list" => self.render_description_list(node, cx),
+            "dialog" => div().into_any_element(),
+            "popover" => self.render_popover(node, &key, cx),
+            "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
+            "context-menu" => self.render_context_menu(node, path, &key, window, cx),
+            "list" => self.render_list(node, &key, window, cx),
+            "table" => self.render_table(node, &key, window, cx),
+            "tree" => self.render_tree(node, &key, window, cx),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
@@ -1328,6 +1390,453 @@ impl RootView {
         content_sized(list, node, cx)
     }
 
+    fn render_popover(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let open = node.open.unwrap_or(false);
+        let content = node.children.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let content_path = format!("{key}/content");
+        let mut popover = Popover::new(eid(key))
+            .open(open)
+            .trigger(overlay::trigger_button(node.trigger.as_deref(), key))
+            .content(move |_, _, _| overlay::paint_static(&content, cmd_tx.clone(), &content_path));
+        if let Some(callback_id) = node.on_open_change.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            popover = popover.on_open_change(move |open, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*open)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(popover, node, cx).into_any_element()
+    }
+
+    fn render_dropdown_menu(
+        &self,
+        node: &Node,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = node.items.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let on_change = node.on_change.clone();
+        let button = apply_style(
+            overlay::trigger_button(node.trigger.as_deref(), key),
+            node,
+            cx,
+        );
+        button
+            .dropdown_menu(move |menu, window, cx| {
+                overlay::fill_popup_menu(
+                    menu,
+                    &items,
+                    cmd_tx.clone(),
+                    on_change.clone(),
+                    window,
+                    cx,
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_context_menu(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = node.items.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let on_change = node.on_change.clone();
+        apply_style(div().id(eid(key)), node, cx)
+            .context_menu(move |menu, window, cx| {
+                overlay::fill_popup_menu(
+                    menu,
+                    &items,
+                    cmd_tx.clone(),
+                    on_change.clone(),
+                    window,
+                    cx,
+                )
+            })
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
+    fn render_list(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.list_slot(key, node, window, cx);
+        viewport_sized(List::new(&state), node, 200.0, cx)
+    }
+
+    fn list_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ListState<RowListDelegate>> {
+        self.used_lists.insert(key.to_string());
+        let items = rows::rows_from_items(node.collection());
+        let fingerprint = rows::rows_fingerprint(node.collection());
+        let searchable = node.searchable;
+        let selected = node.string_value();
+
+        if let Some(slot) = self.lists.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_confirm = node.on_confirm.clone();
+            let state = slot.state.clone();
+            if slot.fingerprint != fingerprint || slot.searchable != searchable {
+                slot.fingerprint = fingerprint;
+                slot.searchable = searchable;
+                let items = items.clone();
+                state.update(cx, |list, cx| {
+                    list.delegate_mut().set_items(items);
+                    list.set_searchable(searchable, cx);
+                    cx.notify();
+                });
+            }
+            sync_list_selection(&state, selected.as_deref(), window, cx);
+            return state;
+        }
+
+        let delegate = RowListDelegate::new(items);
+        let state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(searchable));
+        sync_list_selection(&state, selected.as_deref(), window, cx);
+        let key_owned = key.to_string();
+        cx.subscribe(&state, move |this, _, event: &ListEvent, cx| match event {
+            ListEvent::Select(ix) => {
+                emit_list_change(this, &key_owned, *ix, cx);
+            }
+            ListEvent::Confirm(ix) => {
+                // 0.5.1: arrows emit Select only; mouse click and Enter emit
+                // Confirm only. Treat confirm as selection + activation in
+                // one batch so :on-change cannot rewire :on-confirm's id.
+                emit_list_activation(this, &key_owned, *ix, cx);
+            }
+            ListEvent::Cancel => {
+                if let Some(callback) = this.lists.get(&key_owned).and_then(|s| s.on_change.clone())
+                {
+                    this.emit_value(callback, Value::Null);
+                }
+            }
+        })
+        .detach();
+        self.lists.insert(
+            key.to_string(),
+            ListSlot {
+                state: state.clone(),
+                fingerprint,
+                searchable,
+                on_change: node.on_change.clone(),
+                on_confirm: node.on_confirm.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_table(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.table_slot(key, node, window, cx);
+        viewport_sized(Table::new(&state), node, 220.0, cx)
+    }
+
+    fn table_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TableState<RowTableDelegate>> {
+        self.used_tables.insert(key.to_string());
+        let columns = rows::columns_from_items(&node.options);
+        let rows = rows::rows_from_items(&node.items);
+        let fingerprint = rows::table_fingerprint(&node.options, &node.items);
+        let selected = node.string_value();
+
+        if let Some(slot) = self.tables.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_confirm = node.on_confirm.clone().or(node.on_double_click.clone());
+            let state = slot.state.clone();
+            if slot.fingerprint != fingerprint {
+                slot.fingerprint = fingerprint;
+                let columns = columns.clone();
+                let rows = rows.clone();
+                state.update(cx, |table, cx| {
+                    table.delegate_mut().columns = columns;
+                    table.delegate_mut().rows = rows;
+                    table.refresh(cx);
+                });
+            }
+            self.sync_table_selection(key, &state, selected.as_deref(), cx);
+            return state;
+        }
+
+        let delegate = RowTableDelegate::new(columns, rows);
+        let state = cx.new(|cx| TableState::new(delegate, window, cx));
+        // Subscribe after the first programmatic select so SelectRow from
+        // `set_selected_row` has no listener yet. Reuse uses suppress_select.
+        self.sync_table_selection(key, &state, selected.as_deref(), cx);
+        let key_owned = key.to_string();
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _, event: &TableEvent, window, cx| match event {
+                TableEvent::SelectRow(ix) => {
+                    let suppress = this
+                        .tables
+                        .get(&key_owned)
+                        .is_some_and(|s| s.suppress_select);
+                    let schedule = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
+                    if !schedule {
+                        return;
+                    }
+                    // End of this effect cycle: after already-queued
+                    // DoubleClickedRow, or as the lone count-1 :on-change.
+                    let key = key_owned.clone();
+                    cx.defer_in(window, move |this, _, cx| {
+                        this.flush_pending_table_select(&key, cx);
+                    });
+                }
+                TableEvent::DoubleClickedRow(ix) => {
+                    let include_change = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
+                    emit_table_activation(this, &key_owned, *ix, include_change, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        self.tables.insert(
+            key.to_string(),
+            TableSlot {
+                state: state.clone(),
+                fingerprint,
+                on_change: node.on_change.clone(),
+                on_confirm: node.on_confirm.clone().or(node.on_double_click.clone()),
+                suppress_select: false,
+                coalesce: protocol::TableClickCoalesce::default(),
+            },
+        );
+        state
+    }
+
+    fn sync_table_selection(
+        &mut self,
+        key: &str,
+        state: &Entity<TableState<RowTableDelegate>>,
+        selected: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let decision = {
+            let table = state.read(cx);
+            rows::selection_sync(
+                selected,
+                table.selected_row(),
+                |id| table.delegate().index_of(id),
+                |id| table.delegate().contains_id(id),
+            )
+        };
+        if matches!(decision, SelectionSync::Keep) {
+            return;
+        }
+        // `set_selected_row` only queues `Effect::Emit`. Clearing suppress
+        // here would let the subscriber treat programmatic select as a
+        // user click. Drop the flag at the end of this effect cycle.
+        if let Some(slot) = self.tables.get_mut(key) {
+            slot.suppress_select = true;
+        }
+        state.update(cx, |table, cx| match decision {
+            SelectionSync::Select(ix) => table.set_selected_row(ix, cx),
+            SelectionSync::Clear => table.clear_selection(cx),
+            SelectionSync::Keep => {}
+        });
+        let key = key.to_string();
+        let entity = cx.entity();
+        cx.defer(move |app| {
+            let _ = entity.update(app, |this, _cx| {
+                if let Some(slot) = this.tables.get_mut(&key) {
+                    slot.suppress_select = false;
+                }
+            });
+        });
+    }
+
+    /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
+    /// not follow from the same `on_row_left_click`. Always consume the
+    /// pending row so a change-less table cannot leave a stuck flush.
+    fn flush_pending_table_select(&mut self, key: &str, cx: &App) {
+        let Some(slot) = self.tables.get_mut(key) else {
+            return;
+        };
+        let Some(ix) = slot.coalesce.take_pending_select() else {
+            return;
+        };
+        let callback = slot.on_change.clone();
+        let state = slot.state.clone();
+        let Some(callback) = callback else {
+            return;
+        };
+        let Some(row_id) = state.read(cx).delegate().id_at(ix) else {
+            return;
+        };
+        protocol::send_callbacks(
+            &self.cmd_tx,
+            protocol::table_activation_calls(Some(callback), None, row_id),
+        );
+    }
+
+    fn render_tree(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.tree_slot(key, node, window, cx);
+        let on_change = node.on_change.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let view = tree(&state, move |ix, entry, selected, _, _| {
+            let id = entry.item().id.to_string();
+            let label = entry.item().label.clone();
+            let cmd_tx = cmd_tx.clone();
+            let on_change = on_change.clone();
+            gpui_component::list::ListItem::new(ix)
+                .pl(px(16. * entry.depth() as f32))
+                .selected(selected)
+                .child(label)
+                .on_click(move |_, _, _| {
+                    if let Some(callback_id) = on_change.clone() {
+                        let _ = cmd_tx.send(Cmd::Callback {
+                            id: callback_id,
+                            value: Some(json!(id.clone())),
+                            seq: None,
+                        });
+                    }
+                })
+        });
+        viewport_sized(view, node, 200.0, cx)
+    }
+
+    fn tree_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TreeState> {
+        self.used_trees.insert(key.to_string());
+        let fingerprint = rows::rows_fingerprint(node.collection());
+        let items = rows::tree_items_from_protocol(node.collection());
+        let selected = node.string_value();
+
+        if self.trees.contains_key(key) {
+            let (state, live, refresh) = {
+                let slot = self.trees.get_mut(key).unwrap();
+                slot.on_change = node.on_change.clone();
+                let refresh = slot.fingerprint != fingerprint;
+                if refresh {
+                    slot.fingerprint = fingerprint;
+                    slot.items = items;
+                }
+                (slot.state.clone(), slot.items.clone(), refresh)
+            };
+            if refresh {
+                let next = live.clone();
+                state.update(cx, |tree, cx| {
+                    tree.set_items(next, cx);
+                });
+            }
+            sync_tree_selection(&state, &live, selected.as_deref(), cx);
+            return state;
+        }
+
+        let state = cx.new(|cx| TreeState::new(cx).items(items.clone()));
+        sync_tree_selection(&state, &items, selected.as_deref(), cx);
+        self.trees.insert(
+            key.to_string(),
+            TreeSlot {
+                state: state.clone(),
+                items,
+                fingerprint,
+                on_change: node.on_change.clone(),
+            },
+        );
+        state
+    }
+
+    fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted = self
+            .tree
+            .as_ref()
+            .map(overlay::collect_open_dialogs)
+            .unwrap_or_default();
+        let wanted_keys = overlay::dialog_keys(&wanted);
+        let crate_open = window.has_active_dialog(cx);
+        let keys_changed = wanted_keys != self.dialog_keys;
+        let waiting =
+            overlay::crate_dismiss_waiting_for_clojure(&wanted_keys, &self.dialog_keys, crate_open);
+        let should_open = !wanted_keys.is_empty() && !crate_open && !waiting;
+        let should_close = wanted_keys.is_empty() && crate_open;
+        // Always refresh the live cell so an already-open dialog builder
+        // (`render_dialog_layer` each paint) sees the latest callback ids,
+        // title, and body. Do not re-enter RootView from that builder.
+        self.dialogs = wanted.clone();
+        *self.dialog_live.borrow_mut() = wanted;
+        if self.dialog_pending {
+            return;
+        }
+        if !(keys_changed || should_open || should_close) {
+            return;
+        }
+        self.dialog_pending = true;
+        let entity = cx.entity();
+        window.on_next_frame(move |window, cx| {
+            window.close_all_dialogs(cx);
+            let (keys, live, cmd_tx) = entity.update(cx, |this, _| {
+                this.dialog_pending = false;
+                let keys = overlay::dialog_keys(&this.dialogs);
+                this.dialog_keys = keys.clone();
+                (keys, this.dialog_live.clone(), this.cmd_tx.clone())
+            });
+            for key in keys {
+                let live = live.clone();
+                let cmd_tx = cmd_tx.clone();
+                window.open_dialog(cx, move |dialog, _, _cx| {
+                    let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
+                        return dialog;
+                    };
+                    let children = vec![overlay::paint_static(
+                        &spec.node.children,
+                        cmd_tx.clone(),
+                        &format!("{}/content", spec.key),
+                    )];
+                    let dialog = overlay::configure_dialog(dialog, &spec.node, children);
+                    overlay::bind_dialog_callbacks(dialog, &spec.node, cmd_tx.clone())
+                });
+            }
+        });
+    }
+
     fn render_scroll(
         &mut self,
         node: &Node,
@@ -1379,7 +1888,13 @@ impl RootView {
             .clone()
             .into_iter()
             .enumerate()
-            .map(|(index, child)| self.render_node(&child, &format!("{path}-{index}"), window, cx))
+            .filter_map(|(index, child)| {
+                if child.kind == "dialog" {
+                    None
+                } else {
+                    Some(self.render_node(&child, &format!("{path}-{index}"), window, cx))
+                }
+            })
             .collect()
     }
 
@@ -1426,6 +1941,9 @@ impl Render for RootView {
         self.apply_chrome(window);
         self.used_inputs.clear();
         self.used_selects.clear();
+        self.used_lists.clear();
+        self.used_tables.clear();
+        self.used_trees.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
 
@@ -1452,12 +1970,23 @@ impl Render for RootView {
         // stay for the window lifetime (see docs/gpui-component.md).
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
+        let used_lists = std::mem::take(&mut self.used_lists);
+        self.lists.retain(|key, _| used_lists.contains(key));
+        let used_tables = std::mem::take(&mut self.used_tables);
+        self.tables.retain(|key, _| used_tables.contains(key));
+        let used_trees = std::mem::take(&mut self.used_trees);
+        self.trees.retain(|key, _| used_trees.contains(key));
+
+        self.sync_dialogs(window, cx);
+
+        let dialog_layer = Root::render_dialog_layer(window, cx);
 
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
 
         v_flex()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(v_flex().flex_1().min_h_0().child(body))
@@ -1472,6 +2001,8 @@ impl Render for RootView {
                         .child(status),
                 )
             })
+            // gpui-component 0.5.1 Root::render does not paint this layer.
+            .children(dialog_layer)
     }
 }
 
@@ -1673,6 +2204,131 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
+/// List/table/tree use crate `size_full()`. They need a bounded viewport or
+/// they collapse to zero / steal leftover column height.
+///
+/// Outer wrapper owns Clojure layout geometry and visual keys. Inner
+/// List/Table/Tree owns virtualization (`size_full` inside the wrapper).
+/// `:size` is a square. Omitted width fills the parent. Default height
+/// applies only when height, size, and flex-fill are all omitted.
+fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {
+    let mut wrap = v_flex().min_h_0();
+    if node.width.is_none() && node.size.is_none() {
+        wrap = wrap.w_full();
+    }
+    if node.height.is_none() && node.size.is_none() && node.flex.unwrap_or(0.0) < 1.0 {
+        wrap = wrap.h(px(default_h));
+    }
+    apply_style(wrap, node, cx).child(el).into_any_element()
+}
+
+fn emit_list_change(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
+    let Some(slot) = this.lists.get(key) else {
+        return;
+    };
+    let Some(callback) = slot.on_change.clone() else {
+        return;
+    };
+    if let Some(id) = slot.state.read(cx).delegate().id_at(ix) {
+        this.emit_value(callback, json!(id));
+    }
+}
+
+fn emit_list_activation(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
+    let Some(slot) = this.lists.get(key) else {
+        return;
+    };
+    let Some(row_id) = slot.state.read(cx).delegate().id_at(ix) else {
+        return;
+    };
+    protocol::send_callbacks(
+        &this.cmd_tx,
+        protocol::list_activation_calls(slot.on_change.clone(), slot.on_confirm.clone(), row_id),
+    );
+}
+
+fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: bool, cx: &App) {
+    let Some(slot) = this.tables.get(key) else {
+        return;
+    };
+    let Some(row_id) = slot.state.read(cx).delegate().id_at(ix) else {
+        return;
+    };
+    let on_change = if include_change {
+        slot.on_change.clone()
+    } else {
+        None
+    };
+    protocol::send_callbacks(
+        &this.cmd_tx,
+        protocol::table_activation_calls(on_change, slot.on_confirm.clone(), row_id),
+    );
+}
+
+fn sync_list_selection(
+    state: &Entity<ListState<RowListDelegate>>,
+    selected: Option<&str>,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    let decision = {
+        let list = state.read(cx);
+        rows::selection_sync(
+            selected,
+            list.selected_index().map(|ix| ix.row),
+            |id| list.delegate().index_of(id).map(|ix| ix.row),
+            |id| list.delegate().contains_id(id),
+        )
+    };
+    match decision {
+        SelectionSync::Select(ix) => state.update(cx, |list, cx| {
+            list.set_selected_index(Some(IndexPath::new(ix)), window, cx);
+        }),
+        SelectionSync::Clear => state.update(cx, |list, cx| {
+            list.set_selected_index(None, window, cx);
+        }),
+        SelectionSync::Keep => {}
+    }
+}
+
+fn sync_tree_selection(
+    state: &Entity<TreeState>,
+    items: &[TreeItem],
+    selected: Option<&str>,
+    cx: &mut Context<RootView>,
+) {
+    let current = state.read(cx).selected_index();
+    let decision = rows::selection_sync(
+        selected,
+        current,
+        |id| rows::tree_visible_index(items, id),
+        |id| rows::tree_contains_id(items, id),
+    );
+    match decision {
+        SelectionSync::Select(ix) => {
+            state.update(cx, |tree, cx| tree.set_selected_index(Some(ix), cx));
+        }
+        SelectionSync::Clear => {
+            state.update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        }
+        SelectionSync::Keep => {
+            // Collapsed/filtered ids stay selected in Clojure. If the native
+            // highlight now points at a different visible row, clear it.
+            if let Some(id) = selected {
+                if rows::tree_visible_index(items, id).is_none() {
+                    let current_id = state
+                        .read(cx)
+                        .selected_entry()
+                        .map(|entry| entry.item().id.to_string());
+                    if current.is_some() && current_id.as_deref() != Some(id) {
+                        state.update(cx, |tree, cx| tree.set_selected_index(None, cx));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Testable layout contract for `content_sized` wrappers.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
@@ -1695,6 +2351,38 @@ fn content_wrap(node: &Node) -> ContentWrap {
         flex_fill: layout.flex_fill,
         fill_width: layout.width.is_none() && layout.size.is_none(),
         flex_none: !layout.flex_fill,
+    }
+}
+
+/// Testable layout contract for list/table/tree viewports.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+struct ViewportWrap {
+    width: Option<f32>,
+    height: Option<f32>,
+    size: Option<f32>,
+    flex_fill: bool,
+    fill_width: bool,
+    default_height: Option<f32>,
+    visual: bool,
+}
+
+#[cfg(test)]
+fn viewport_wrap(node: &Node, default_h: f32) -> ViewportWrap {
+    let layout = outer_layout(node);
+    let default_height = if node.height.is_none() && node.size.is_none() && !layout.flex_fill {
+        Some(default_h)
+    } else {
+        None
+    };
+    ViewportWrap {
+        width: layout.width,
+        height: layout.height,
+        size: layout.size,
+        flex_fill: layout.flex_fill,
+        fill_width: node.width.is_none() && node.size.is_none(),
+        default_height,
+        visual: node.padding.is_some() || node.bg.is_some() || node.border.is_some(),
     }
 }
 
@@ -2308,7 +2996,7 @@ mod accordion_control_tests {
 
 #[cfg(test)]
 mod widget_wrap_tests {
-    use super::{content_wrap, outer_layout, Node};
+    use super::{content_wrap, outer_layout, viewport_wrap, Node};
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {
@@ -2357,6 +3045,61 @@ mod widget_wrap_tests {
         assert!(wrap.flex_fill);
         assert!(!wrap.flex_none);
         assert!(wrap.fill_width);
+    }
+
+    #[test]
+    fn list_table_tree_viewport_default_height() {
+        for kind in ["list", "table", "tree"] {
+            let node = Node {
+                kind: kind.into(),
+                ..Node::default()
+            };
+            let wrap = viewport_wrap(&node, 200.0);
+            assert!(wrap.fill_width, "{kind}");
+            assert_eq!(wrap.default_height, Some(200.0), "{kind}");
+            assert!(!wrap.flex_fill, "{kind}");
+            assert_eq!(wrap.size, None, "{kind}");
+        }
+    }
+
+    #[test]
+    fn list_viewport_explicit_width_height_size_flex_and_visual() {
+        let wide = Node {
+            kind: "list".into(),
+            width: Some(320.0),
+            height: Some(180.0),
+            padding: Some(8.0),
+            bg: Some("#111111".into()),
+            border: Some("#222222".into()),
+            ..Node::default()
+        };
+        let wrap = viewport_wrap(&wide, 200.0);
+        assert_eq!(wrap.width, Some(320.0));
+        assert_eq!(wrap.height, Some(180.0));
+        assert!(!wrap.fill_width);
+        assert_eq!(wrap.default_height, None);
+        assert!(wrap.visual);
+
+        let square = Node {
+            kind: "table".into(),
+            size: Some(160.0),
+            width: Some(300.0),
+            ..Node::default()
+        };
+        let wrap = viewport_wrap(&square, 220.0);
+        assert_eq!(wrap.size, Some(160.0));
+        assert!(!wrap.fill_width);
+        assert_eq!(wrap.default_height, None);
+
+        let grow = Node {
+            kind: "tree".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let wrap = viewport_wrap(&grow, 200.0);
+        assert!(wrap.flex_fill);
+        assert!(wrap.fill_width);
+        assert_eq!(wrap.default_height, None);
     }
 
     #[test]

@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **4**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **5**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **4**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":4,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":5,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -90,7 +90,15 @@ Optional `value` is a JSON value (string, number, boolean, array, or `null`):
 
 When `value` is present (including `""`, `false`, `0`, and `null`), Clojure calls `(f value)`. Buttons and checkboxes omit `value`; Clojure calls the handler with no arguments.
 
+A native user action that fires several handlers (list click/Enter, table double-click `SelectRow`+`DoubleClickedRow`, dialog OK/Cancel, menu item with both item `:on-click` and menu `:on-change`) is one host-internal batch. The worker sends the existing `"callback"` op once per handler, in order, against the **same** callback registry generation, then issues **one** `"render"`. There is no new Clojure wire op. Intermediate callback requests set `"defer-render": true` so an `r/atom` watch cannot enqueue `request-render` (which would `export-tree` and rebuild `cb-N` ids) before the rest of the batch and the host's following `render`.
+
+Failure policy: **stop remaining callbacks on the first failure** (unknown id, thrown handler, or `ok: false`). Earlier atom mutations still paint because the worker fetches a tree after the stop. The error is not swallowed (`HostEvent::Error` after that tree). Prefer this over continuing so a failed prerequisite cannot invoke a later action.
+
+`Cmd` (`Callback` / `CallbackBatch`) is host-internal and is not part of the JSON protocol version. Protocol v5 is unchanged.
+
 v4 changed `value` from string-only to any JSON type so switch/slider/select can pass booleans, numbers, and ids without encoding them as strings. Text fields still send strings. New node types were added in the same bump so a v3 host cannot silently paint “Unknown GPUI node” placeholders.
+
+v5 added overlay nodes (`dialog`, `popover`, `dropdown-menu`, `context-menu`) and row-delegate collections (`list`, `table`, `tree`). A v4 host would paint “Unknown GPUI node” for those types, so the version must match exactly.
 
 Option ids on the wire are JSON strings. Clojure restores the original application id in the callback (`:dark` not `"dark"`). Accordion `:multiple` uses a JSON array of ids, including ids that contain commas.
 
@@ -112,29 +120,33 @@ Result of `pick-directory`. `path` is set when the user chose a folder. `cancell
 
 Clojure invokes the `gpui.platform/pick-directory` callback. It does not automatically re-export the tree; a typical handler `swap!`s an `r/atom`.
 
-## Node schema (version 4)
+## Node schema (version 5)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
 |---|---|---|
-| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`, `switch`, `toggle`, `radio-group`, `slider`, `progress`, `divider`, `spinner`, `tag`, `alert`, `skeleton`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `accordion`, `description-list`) |
-| `id` | string | optional stable identity, especially `text-field`, `slider`, `select` |
+| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `text-field`, `switch`, `toggle`, `radio-group`, `slider`, `progress`, `divider`, `spinner`, `tag`, `alert`, `skeleton`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `accordion`, `description-list`, `dialog`, `popover`, `dropdown-menu`, `context-menu`, `list`, `table`, `tree`) |
+| `id` | string | optional stable identity, especially `text-field`, `slider`, `select`, `list`, `table`, `tree`, `dialog` |
 | `text` | string | `label`, `button`, `checkbox`, `text-field`, `switch`, `toggle`, `divider`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar` |
 | `placeholder` | string | `text-field`, `select` |
-| `children` | array of nodes | layouts, `scroll`, `group-box`, `badge` |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span) |
+| `children` | array of nodes | layouts, `scroll`, `group-box`, `badge`, `dialog`, `popover`, `context-menu` |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,checked,icon,expanded}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children. Table **columns** are `options`; table **rows** are `items` with `cells`. Do not reuse `columns` (u32) for table column defs |
+| `trigger` | node | `popover`, `dropdown-menu` (usually a `button`) |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link` |
-| `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
-| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (wire id; Clojure restores the original id). Accordion `:multiple` sends a JSON array in original item order |
+| `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`); `table` double-click row (row id) |
+| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion`/`list`/`table`/`tree`/`dropdown-menu`/`context-menu` (wire id; Clojure restores the original id). Accordion `:multiple` sends a JSON array in original item order |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `on-blur` | string callback id | `text-field` (called with the field string) |
 | `on-escape` | string callback id | `text-field` (0-arg) |
-| `on-close` | string callback id | `alert` (0-arg) |
+| `on-close` | string callback id | `alert`, `dialog` (0-arg) |
+| `on-ok` / `on-cancel` | string callback id | `dialog` (0-arg; crate then closes and fires `on-close`) |
+| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `table`: count-1 click is only `on-change` (end of the GPUI effect cycle). Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
+| `on-open-change` | string callback id | `popover` (boolean); `dialog` (`false` on dismiss) |
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `text-field`: request keyboard focus |
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
-| `value` | JSON number, string, array, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`) |
+| `value` | JSON number, string, array, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs`/`list`/`table`/`tree` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`) |
 | `min`, `max`, `step` | number | `slider`. `step` is drag granularity; the host applies Clojure's controlled value even when it is off-step, then clamps to `min`/`max` |
 | `orientation` | string | `radio-group`, `slider`, `divider`: `horizontal` (default) or `vertical`. `description-list`: `vertical` (default) or `horizontal` |
 | `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
@@ -147,12 +159,14 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `dot` | bool | `badge` |
 | `dashed` | bool | `divider` |
 | `outline` | bool | `tag` |
-| `searchable` | bool | `select`: show a filter field; host uses `SearchableVec` so typing actually filters |
+| `searchable` | bool | `select`: show a filter field; host uses `SearchableVec` so typing actually filters. `list`: filter rows by label |
+| `open` | bool | `dialog`, `popover`: controlled open (`:open?` in Clojure). Omitted/false dialogs are not shown |
+| `overlay-closable` | bool | `dialog`: click the dimmed overlay to dismiss (default true). Crate `confirm()`/`alert()` turn this off; the host restores the default unless this is `false` |
 | `multiple` | bool | `accordion` |
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
-| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle` |
+| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`) |
 | `compact` | bool | `button` |
 | `strikethrough` | bool | text |
 | `shadow` | bool | layouts |
@@ -165,15 +179,19 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
 | `theme` | string | any node: `system` (default), `light`, `dark`, a shipped gpui-component palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
-| `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` titles |
+| `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` / `dialog` titles |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
-Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:content` are walked too. The registry is rebuilt on every export.
+Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:content` / `:trigger` are walked too. The registry is rebuilt on every export.
 
 The native host paints these nodes with [gpui-component](https://crates.io/crates/gpui-component) 0.5.1. Icon-bearing widgets (`icon`, `spinner`, `alert`, `select` chevron, `clipboard`) load SVGs from `gpui-component-assets` 0.5.1. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
+
+`list`, `table`, and `tree` use an outer clj-gpui wrapper for layout geometry and visual keys; the inner crate widget keeps `size_full()` for virtualization. `:size` is a square (it wins over `:width` / `:height`). Omitted `:width` fills the parent. Explicit `:height` is a pixel viewport. `:flex 1` fills leftover column height with `min-height: 0`. If height, size, and flex are all omitted, the host uses a default viewport (~200px list/tree, ~220px table) so crate `size_full()` does not collapse or steal the column.
+
+gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder runs on every layer paint and reads a live spec cell (latest callback ids, title, body, children) so an unrelated Clojure rerender cannot leave a stale `cb-7` on an already-open dialog. Title and body update immediately while the dialog stays open. Overlay click dismisses the dialog by default even when `:variant` is `confirm` (crate `confirm()` turns that off; `:overlay-closable false` restores the crate lock). Crate order: OK → `:on-ok` then `:on-close`; Cancel / Escape / X / overlay → `:on-cancel` then `:on-close`. `:on-open-change false` is sent from `:on-close`. For one native action the host buffers those ids and sends **one** callback batch so `:on-ok` cannot render and rewire `:on-close`. After overlay/Escape dismiss the host does not re-open until Clojure’s tree drops `open`. Static overlay children use a full path element id. `popover` is in-tree; its trigger must be a button (`Selectable`). Menu item clicks send the original Clojure id; item `:on-click` then menu `:on-change` is one batch. List `:on-change` is selection and `:on-confirm` is activation; both restore the original Clojure id and, on click/Enter, run as one batch before the next tree. Table single click is `:on-change`; a double-click is crate `SelectRow` then `DoubleClickedRow` from one `on_row_left_click`, batched as `:on-change` then `:on-confirm`.
 
 `spinner`, `badge`, and `clipboard` are not gpui-component `Styled` types. The host wraps them in a `div` that receives the usual layout and visual keys (`width`, `height`, `size`, `flex`, `padding`, `bg`, …). `accordion` and `description-list` use the same outer-owns-layout pattern, but the wrapper defaults to `flex-none` and full width so crate `size_full()` cannot steal leftover column height. Inner chrome is not styled twice.
 
