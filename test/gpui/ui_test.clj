@@ -604,7 +604,10 @@
                                (ui/label "two")))
         id-2 (:on-ok exported-2)]
     (is (string? id-1))
-    (is (= id-1 id-2) "callback ids are reused across export generations")
+    (is (string? id-2))
+    (is (not= id-1 id-2) "callback ids are not reused across exports")
+    (is (= {:ok false :error (str "unknown callback " id-1)}
+           (runtime/invoke-callback! id-1)))
+    (is (zero? @gen1) "stale id must not run the prior handler")
     (is (= {:ok true :id id-2} (runtime/invoke-callback! id-2)))
-    (is (= 1 @gen2) "latest generation owns the reused id")
-    (is (zero? @gen1) "prior generation is no longer registered")))
+    (is (= 1 @gen2) "current id still runs the new handler")))

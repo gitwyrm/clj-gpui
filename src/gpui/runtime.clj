@@ -20,6 +20,7 @@
 
 (defonce ^:private conn (atom nil))
 (defonce ^:private callbacks (atom {}))
+;; Process-lifetime monotonic. Never reset: a stale cb-N must stay unknown.
 (defonce ^:private callback-counter (atom 0))
 (defonce ^:private render-scheduled? (atom false))
 (defonce ^:private callback-depth (atom 0))
@@ -345,9 +346,10 @@
        (throw e)))))
 
 (defn reset-callbacks!
+  "Drop the current callback map. The id counter is process-lifetime
+  monotonic so a stale `cb-N` cannot name a newer function."
   []
   (reset! callbacks {})
-  (reset! callback-counter 0)
   (reset! callback-hold 0)
   (reset! callback-depth 0))
 

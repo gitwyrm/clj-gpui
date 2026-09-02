@@ -148,7 +148,7 @@
         (runtime/bind-connection! nil)
         (ui/set-request-render! nil)))))
 
-(deftest export-between-callbacks-rewires-ids
+(deftest export-between-callbacks-does-not-reuse-ids
   (runtime/reset-callbacks!)
   (let [b-fired (atom 0)
         x-fired (atom 0)
@@ -162,16 +162,34 @@
         gen1 (runtime/export-tree tree)
         id-a (get-in gen1 [:children 0 :on-click])
         id-b (get-in gen1 [:children 1 :on-click])]
-    (is (= "cb-1" id-a))
-    (is (= "cb-2" id-b))
+    (is (string? id-a))
+    (is (string? id-b))
     (runtime/invoke-callback! id-a)
-    (let [gen2 (runtime/export-tree tree)]
+    (let [gen2 (runtime/export-tree tree)
+          id-x (get-in gen2 [:children 1 :on-click])]
       (is (= "X" (get-in gen2 [:children 1 :text])))
-      (is (= "cb-2" (get-in gen2 [:children 1 :on-click]))
-          "X reused B's previous id")
-      (runtime/invoke-callback! id-b)
-      (is (= 1 @x-fired) "stale cb-2 now owns X, not B")
+      (is (not= id-b id-x) "X must not reuse B's previous id")
+      (is (= {:ok false :error (str "unknown callback " id-b)}
+             (runtime/invoke-callback! id-b)))
+      (is (zero? @x-fired) "stale id must not invoke X")
       (is (zero? @b-fired)))))
+
+(deftest callback-ids-are-monotonic-and-stale-ids-fail-closed
+  (runtime/reset-callbacks!)
+  (let [a-fired (atom 0)
+        b-fired (atom 0)
+        id1 (:on-click (runtime/export-tree (ui/button "A" #(swap! a-fired inc))))
+        id2 (:on-click (runtime/export-tree (ui/button "B" #(swap! b-fired inc))))]
+    (is (string? id1))
+    (is (string? id2))
+    (is (not= id1 id2) "ids are not reused across exports")
+    (is (= {:ok false :error (str "unknown callback " id1)}
+           (runtime/invoke-callback! id1)))
+    (is (zero? @a-fired) "stale id must not run A")
+    (is (zero? @b-fired))
+    (is (= {:ok true :id id2} (runtime/invoke-callback! id2)))
+    (is (= 1 @b-fired) "current id still runs B")
+    (is (zero? @a-fired))))
 
 (deftest callback-batch-keeps-generation-when-tree-would-shift
   (runtime/reset-callbacks!)
@@ -309,11 +327,12 @@
           x-id (get-in gen2 [:children 1 :on-click])]
       (is (= "pad" (get-in gen2 [:children 0 :text])))
       (is (= "X" (get-in gen2 [:children 1 :text])))
-      (is (= id-confirm x-id)
-          "after a render, confirm's old id is X, not the table")
+      (is (not= id-confirm x-id)
+          "after a render, confirm's old id is not reused by X")
       (is (not= id-confirm (:on-confirm new-table)))
-      (runtime/invoke-callback! id-confirm)
-      (is (= 1 @x-fired) "stale confirm id now invokes X")
+      (is (= {:ok false :error (str "unknown callback " id-confirm)}
+             (runtime/invoke-callback! id-confirm)))
+      (is (zero? @x-fired) "stale confirm id must not invoke X")
       (is (= 1 @confirm-fired) "stale confirm id no longer invokes confirm"))))
 
 (deftest table-empty-batch-is-ok
