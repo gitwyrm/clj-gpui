@@ -18,7 +18,6 @@ use gpui_component::{
     checkbox::Checkbox,
     clipboard::Clipboard,
     description_list::DescriptionList,
-    dialog::Dialog,
     divider::Divider,
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
@@ -1771,29 +1770,6 @@ impl RootView {
         state
     }
 
-    fn paint_dialog(
-        &mut self,
-        key: &str,
-        dialog: Dialog,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Dialog {
-        let Some(spec) = self.dialogs.iter().find(|spec| spec.key == key).cloned() else {
-            return dialog;
-        };
-        let node = spec.node;
-        let children: Vec<AnyElement> = node
-            .children
-            .iter()
-            .enumerate()
-            .map(|(index, child)| {
-                self.render_node(child, &format!("{key}-body-{index}"), window, cx)
-            })
-            .collect();
-        let dialog = overlay::configure_dialog(dialog, &node, children);
-        overlay::bind_dialog_callbacks(dialog, &node, self.cmd_tx.clone())
-    }
-
     fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = self
             .tree
@@ -1816,16 +1792,26 @@ impl RootView {
         let entity = cx.entity();
         window.on_next_frame(move |window, cx| {
             window.close_all_dialogs(cx);
-            let keys = entity.update(cx, |this, _| {
+            let (keys, specs, cmd_tx) = entity.update(cx, |this, _| {
                 this.dialog_pending = false;
                 let keys = overlay::dialog_keys(&this.dialogs);
                 this.dialog_keys = keys.clone();
-                keys
+                (keys, this.dialogs.clone(), this.cmd_tx.clone())
             });
-            for key in keys {
-                let entity = entity.clone();
-                window.open_dialog(cx, move |dialog, window, cx| {
-                    entity.update(cx, |this, cx| this.paint_dialog(&key, dialog, window, cx))
+            for key in &keys {
+                let key = key.clone();
+                let specs = specs.clone();
+                let cmd_tx = cmd_tx.clone();
+                window.open_dialog(cx, move |dialog, _, _cx| {
+                    // Builder runs from RootView::render via render_dialog_layer.
+                    // Use pre-captured spec to avoid reading entity during render.
+                    let Some(spec) = specs.iter().find(|spec| spec.key == key) else {
+                        return dialog;
+                    };
+                    let node = &spec.node;
+                    let children = vec![overlay::paint_static(&node.children, cmd_tx.clone())];
+                    let dialog = overlay::configure_dialog(dialog, node, children);
+                    overlay::bind_dialog_callbacks(dialog, node, cmd_tx.clone())
                 });
             }
         });
@@ -1973,11 +1959,14 @@ impl Render for RootView {
 
         self.sync_dialogs(window, cx);
 
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
 
         v_flex()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(v_flex().flex_1().min_h_0().child(body))
@@ -1992,6 +1981,8 @@ impl Render for RootView {
                         .child(status),
                 )
             })
+            // gpui-component 0.5.1 Root::render does not paint this layer.
+            .children(dialog_layer)
     }
 }
 

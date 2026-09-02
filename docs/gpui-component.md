@@ -93,7 +93,7 @@ Sheet, notification, and the OS app menu bar still need overlay-stack work. Virt
 
 ### Overlay family (implemented for dialog, popover, menus)
 
-Dialogs are collected from the tree and opened through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The builder reads the latest Clojure node from `RootView`, so title/body stay live. `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg and then the crate closes. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus.
+gpui-component 0.5.1 `Root::render` does not paint the dialog layer; the host calls `Root::render_dialog_layer` from `RootView`. Open/close still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The dialog builder uses a cloned Clojure node (no `RootView` read/update) because the layer is painted during `RootView::render`. Title/body therefore update on the next open, not live while the crate dialog is already showing. `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg and then the crate closes. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus.
 
 Sheet and notification are still deferred.
 
