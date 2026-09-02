@@ -874,7 +874,9 @@
   * Cancel, Escape, close button, overlay click → `:on-cancel`, then
     `:on-close` (and `:on-open-change false`)
 
-  Each handler runs at most once per action. `:variant` is `:confirm`
+  The host sends that whole chain as one batch against the same callback
+  generation, then fetches one tree. `:on-ok` cannot re-export and rewire
+  `:on-close`. Each handler runs at most once per action. `:variant` is `:confirm`
   (OK+Cancel), `:alert` (OK only), or omitted (content + close button).
   Clicking the dimmed overlay dismisses the dialog (crate `confirm`/`alert`
   turn that off; this host keeps it on unless `:overlay-closable false`).
@@ -926,6 +928,10 @@
 (defn dropdown-menu
   "Button that opens a popup menu. `on-change` receives the original item id.
 
+  Item `:on-click` (0-arg) runs before the menu `:on-change` for the same
+  selection. Both use the same callback generation; the host then fetches
+  one tree.
+
   (ui/dropdown-menu [{:id :copy :label \"Copy\"} :- {:id :paste :label \"Paste\"}]
                     {:on-change handle!}
                     (ui/button \"Edit\"))"
@@ -950,6 +956,9 @@
 
 (defn context-menu
   "Right-click menu around a child. `on-change` receives the original item id.
+
+  Same selection batch as `dropdown-menu`: item `:on-click` then menu
+  `:on-change`, one tree fetch.
 
   (ui/context-menu [{:id :copy :label \"Copy\"} {:id :paste :label \"Paste\"}]
                    {:on-change handle!}
@@ -976,8 +985,10 @@
   selection implied by a confirm). `:on-confirm` fires when the item is
   activated (mouse click or Enter). gpui-component 0.5.1 emits Select for
   arrows and Confirm only for click/Enter; the host maps those to this
-  contract. Escape / Cancel sends `on-change` with `nil`. `:searchable true`
-  filters by label and keeps that query when Clojure replaces the rows.
+  contract. Click/Enter is one batch: `:on-change` then `:on-confirm`
+  against the same callback generation, then one tree fetch. Escape /
+  Cancel sends `on-change` with `nil`. `:searchable true` filters by label
+  and keeps that query when Clojure replaces the rows.
 
   (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})"
   ([items]

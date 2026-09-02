@@ -25,7 +25,10 @@
            :list-confirm nil
            :table-sel :ada
            :tree-sel :src
-           :list-rev 0}))
+           :list-rev 0
+           :batch-shift? false
+           :close-hit false
+           :dialog-open nil}))
 
 (defn- set-key [k]
   (fn [v]
@@ -109,13 +112,20 @@
    (ui/divider)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick]}]
+(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open]}]
   (ui/vstack
    {:gap 12}
-   (ui/label (str "Menu " (pr-str menu) " · tick " tick))
+   (ui/label (str "Menu " (pr-str menu)
+                  " · tick " tick
+                  " · close-hit " (pr-str close-hit)
+                  " · dialog-open " (pr-str dialog-open)
+                  " · shift " (pr-str batch-shift?)))
+   (when batch-shift?
+     [(ui/button "shifted-a" (fn []))
+      (ui/button "shifted-b" (fn []))])
    (ui/hstack
     {:gap 8 :align :center}
-    (ui/button "Open dialog" #(swap! !state assoc :dialog? true) {:primary true})
+    (ui/button "Open dialog" #(swap! !state assoc :dialog? true :close-hit false :dialog-open true) {:primary true})
     (ui/button "Rerender" #(swap! !state update :tick inc)
                {:tooltip "Unrelated atom update while a dialog stays open"})
     (ui/switch overlay-lock? (set-key :overlay-lock?) "Lock overlay")
@@ -125,7 +135,8 @@
                 (ui/label "Anchored content.")
                 (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost}))
     (ui/dropdown-menu
-     [{:id :copy :label "Copy"}
+     [{:id :copy :label "Copy"
+       :on-click #(swap! !state assoc :batch-shift? true)}
       :-
       {:id :share :label "Share"
        :items [{:id :email :label "Email"}
@@ -141,13 +152,14 @@
               {:title (str "Confirm · tick " tick)
                :variant :confirm
                :overlay-closable (not overlay-lock?)
-               :on-ok #(swap! !state assoc :dialog? false :menu :ok)
+               :on-ok #(swap! !state assoc :dialog? false :menu :ok :batch-shift? true)
                :on-cancel #(swap! !state assoc :dialog? false :menu :cancel)
-               :on-close #(swap! !state assoc :dialog? false)}
+               :on-close #(swap! !state assoc :dialog? false :close-hit true)
+               :on-open-change (set-key :dialog-open)}
               (ui/label (str "Close from OK, Cancel, Escape, or the overlay. Tick " tick "."))
               (ui/button "Disabled" {:disabled true}))))
 
-(defn- data-panel [{:keys [list-sel list-confirm table-sel tree-sel list-rev]}]
+(defn- data-panel [{:keys [list-sel list-confirm table-sel tree-sel list-rev batch-shift?]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
         list-items [{:id :alpha :label (str "Alpha" suffix)}
                     {:id :beta :label (str "Beta" suffix)}
@@ -175,7 +187,11 @@
      (ui/label (str "List " (pr-str list-sel)
                     " confirm " (pr-str list-confirm)
                     " · table " (pr-str table-sel)
-                    " · tree " (pr-str tree-sel)))
+                    " · tree " (pr-str tree-sel)
+                    " · shift " (pr-str batch-shift?)))
+     (when batch-shift?
+       [(ui/button "shifted-a" (fn []))
+        (ui/button "shifted-b" (fn []))])
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "List A→B" #(swap! !state assoc :list-sel :beta))
@@ -186,7 +202,8 @@
               {:selected (when (not= list-sel :gone) list-sel)
                :searchable true
                :height 160
-               :on-change (set-key :list-sel)
+               :on-change (fn [id]
+                            (swap! !state assoc :list-sel id :batch-shift? true))
                :on-confirm (set-key :list-confirm)})
      (ui/hstack
       {:gap 8 :align :center}

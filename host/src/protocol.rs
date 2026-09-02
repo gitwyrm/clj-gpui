@@ -6,7 +6,21 @@ pub const PROTOCOL_VERSION: u64 = 5;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
+///
+/// `defer_render` is set on every item of a multi-callback native action,
+/// including the last. Clojure keeps the callback transaction open so an
+/// r/atom watch cannot enqueue `request-render` (and reset ids) before
+/// the remaining callbacks run — or in the gap before the following
+/// `"render"` RPC, which is what clears the hold. Singles omit the flag.
 pub fn callback_request(callback_id: impl Into<String>, value: Option<Value>) -> Value {
+    callback_rpc(callback_id, value, false)
+}
+
+pub fn callback_rpc(
+    callback_id: impl Into<String>,
+    value: Option<Value>,
+    defer_render: bool,
+) -> Value {
     let mut request = json!({
         "op": "callback",
         "callback-id": callback_id.into()
@@ -14,7 +28,126 @@ pub fn callback_request(callback_id: impl Into<String>, value: Option<Value>) ->
     if let Some(value) = value {
         request["value"] = value;
     }
+    if defer_render {
+        request["defer-render"] = json!(true);
+    }
     request
+}
+
+/// One Clojure callback captured for a native user action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallbackCall {
+    pub id: String,
+    pub value: Option<Value>,
+}
+
+impl CallbackCall {
+    pub fn fire(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            value: None,
+        }
+    }
+
+    pub fn with_value(id: impl Into<String>, value: Value) -> Self {
+        Self {
+            id: id.into(),
+            value: Some(value),
+        }
+    }
+}
+
+/// `true` on every callback RPC in a multi-callback batch, including the
+/// last. A following `"render"` RPC clears Clojure's hold. A single
+/// callback keeps the previous one-RPC contract (no `defer-render`).
+pub fn defer_render_flags(count: usize) -> Vec<bool> {
+    vec![count > 1; count]
+}
+
+pub fn send_callbacks(tx: &std::sync::mpsc::Sender<Cmd>, calls: Vec<CallbackCall>) {
+    send_callbacks_seq(tx, calls, None);
+}
+
+pub fn send_callbacks_seq(
+    tx: &std::sync::mpsc::Sender<Cmd>,
+    calls: Vec<CallbackCall>,
+    seq: Option<u64>,
+) {
+    let calls: Vec<CallbackCall> = calls
+        .into_iter()
+        .filter(|call| !call.id.is_empty())
+        .collect();
+    match calls.len() {
+        0 => {}
+        1 => {
+            let call = calls.into_iter().next().unwrap();
+            let _ = tx.send(Cmd::Callback {
+                id: call.id,
+                value: call.value,
+                seq,
+            });
+        }
+        _ => {
+            let _ = tx.send(Cmd::CallbackBatch {
+                callbacks: calls,
+                seq,
+            });
+        }
+    }
+}
+
+/// List click / Enter: `:on-change` then `:on-confirm`, same row id.
+pub fn list_activation_calls(
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+    row_id: impl Into<String>,
+) -> Vec<CallbackCall> {
+    let row_id = row_id.into();
+    let mut calls = Vec::new();
+    if let Some(id) = on_change {
+        calls.push(CallbackCall::with_value(id, json!(row_id.clone())));
+    }
+    if let Some(id) = on_confirm {
+        calls.push(CallbackCall::with_value(id, json!(row_id)));
+    }
+    calls
+}
+
+/// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
+pub fn menu_selection_calls(
+    item_click: Option<String>,
+    on_change: Option<String>,
+    item_id: impl Into<String>,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let Some(id) = item_click {
+        calls.push(CallbackCall::fire(id));
+    }
+    if let Some(id) = on_change {
+        calls.push(CallbackCall::with_value(id, json!(item_id.into())));
+    }
+    calls
+}
+
+/// Dialog OK or Cancel chain flushed from `on_close`.
+/// OK: on-ok, on-close, on-open-change false.
+/// Cancel: on-cancel, on-close, on-open-change false.
+pub fn dialog_action_calls(
+    first: Option<String>,
+    on_close: Option<String>,
+    on_open_change: Option<String>,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let Some(id) = first {
+        calls.push(CallbackCall::fire(id));
+    }
+    if let Some(id) = on_close {
+        calls.push(CallbackCall::fire(id));
+    }
+    if let Some(id) = on_open_change {
+        calls.push(CallbackCall::with_value(id, json!(false)));
+    }
+    calls
 }
 
 /// Collection item for radios, select, tabs, breadcrumbs, accordion, etc.
@@ -353,6 +486,12 @@ pub enum Cmd {
         /// Set on text-field submit so the following tree can force-sync that field.
         seq: Option<u64>,
     },
+    /// Several callbacks from one native action. The worker invokes them
+    /// against the same Clojure registry generation, then fetches one tree.
+    CallbackBatch {
+        callbacks: Vec<CallbackCall>,
+        seq: Option<u64>,
+    },
     Reload,
     DirectoryPicked {
         request_id: String,
@@ -501,6 +640,79 @@ mod tests {
             callback_request("cb-6", Some(json!(["a", "b"])))["value"],
             json!(["a", "b"])
         );
+        let deferred = callback_rpc("cb-7", None, true);
+        assert_eq!(deferred["defer-render"], true);
+        assert!(callback_request("cb-8", None).get("defer-render").is_none());
+    }
+
+    #[test]
+    fn defer_render_every_item_of_a_multi_callback_batch() {
+        assert_eq!(defer_render_flags(0), Vec::<bool>::new());
+        assert_eq!(defer_render_flags(1), vec![false]);
+        assert_eq!(defer_render_flags(3), vec![true, true, true]);
+    }
+
+    #[test]
+    fn send_callbacks_batches_multi_and_skips_empty() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        send_callbacks(&tx, vec![]);
+        assert!(rx.try_recv().is_err());
+
+        send_callbacks(&tx, vec![CallbackCall::fire("cb-1")]);
+        match rx.recv().unwrap() {
+            Cmd::Callback { id, value, seq } => {
+                assert_eq!(id, "cb-1");
+                assert!(value.is_none());
+                assert!(seq.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+
+        send_callbacks(
+            &tx,
+            vec![
+                CallbackCall::fire("cb-1"),
+                CallbackCall::with_value("cb-2", json!(false)),
+            ],
+        );
+        match rx.recv().unwrap() {
+            Cmd::CallbackBatch { callbacks, seq } => {
+                assert_eq!(callbacks.len(), 2);
+                assert!(seq.is_none());
+                assert_eq!(callbacks[0], CallbackCall::fire("cb-1"));
+                assert_eq!(callbacks[1].value, Some(json!(false)));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_action_helpers_preserve_order_and_payloads() {
+        let list = list_activation_calls(Some("cb-12".into()), Some("cb-13".into()), "alpha");
+        assert_eq!(list[0].id, "cb-12");
+        assert_eq!(list[1].id, "cb-13");
+        assert_eq!(list[0].value, Some(json!("alpha")));
+        assert_eq!(list[1].value, Some(json!("alpha")));
+
+        let ok = dialog_action_calls(
+            Some("cb-ok".into()),
+            Some("cb-close".into()),
+            Some("cb-open".into()),
+        );
+        assert_eq!(
+            ok.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["cb-ok", "cb-close", "cb-open"]
+        );
+        assert_eq!(ok[2].value, Some(json!(false)));
+        assert_eq!(ok[0].value, None);
+
+        let cancel = dialog_action_calls(Some("cb-cancel".into()), Some("cb-close".into()), None);
+        assert_eq!(cancel[0].id, "cb-cancel");
+        assert_eq!(cancel[1].id, "cb-close");
+
+        let menu = menu_selection_calls(Some("cb-item".into()), Some("cb-menu".into()), "copy");
+        assert_eq!(menu[0], CallbackCall::fire("cb-item"));
+        assert_eq!(menu[1], CallbackCall::with_value("cb-menu", json!("copy")));
     }
 
     #[test]

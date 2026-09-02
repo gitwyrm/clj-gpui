@@ -1,7 +1,7 @@
 use crate::catalog;
 use crate::mapping;
 use crate::overlay;
-use crate::protocol::{Cmd, HostEvent, Item, Node};
+use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
@@ -1516,9 +1516,9 @@ impl RootView {
             }
             ListEvent::Confirm(ix) => {
                 // 0.5.1: arrows emit Select only; mouse click and Enter emit
-                // Confirm only. Treat confirm as selection + activation.
-                emit_list_id(this, &key_owned, ListCallback::Change, *ix, cx);
-                emit_list_id(this, &key_owned, ListCallback::Confirm, *ix, cx);
+                // Confirm only. Treat confirm as selection + activation in
+                // one batch so :on-change cannot rewire :on-confirm's id.
+                emit_list_activation(this, &key_owned, *ix, cx);
             }
             ListEvent::Cancel => {
                 if let Some(callback) = this.lists.get(&key_owned).and_then(|s| s.on_change.clone())
@@ -2214,6 +2214,19 @@ fn emit_list_id(this: &RootView, key: &str, which: ListCallback, ix: IndexPath, 
     if let Some(id) = slot.state.read(cx).delegate().id_at(ix) {
         this.emit_value(callback, json!(id));
     }
+}
+
+fn emit_list_activation(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
+    let Some(slot) = this.lists.get(key) else {
+        return;
+    };
+    let Some(row_id) = slot.state.read(cx).delegate().id_at(ix) else {
+        return;
+    };
+    protocol::send_callbacks(
+        &this.cmd_tx,
+        protocol::list_activation_calls(slot.on_change.clone(), slot.on_confirm.clone(), row_id),
+    );
 }
 
 fn sync_list_selection(

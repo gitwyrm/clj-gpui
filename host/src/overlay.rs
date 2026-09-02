@@ -6,7 +6,7 @@
 //! never re-enters `Root::update`.
 
 use crate::mapping;
-use crate::protocol::{Cmd, Item, Node};
+use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
     div, px, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
 };
@@ -18,6 +18,7 @@ use gpui_component::{
 };
 use serde_json::json;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc;
 
 #[derive(Clone, Debug)]
@@ -129,20 +130,10 @@ pub fn fill_popup_menu(
         let on_change = on_change.clone();
         let item_click = item.on_click.clone();
         entry = entry.on_click(move |_, _, _| {
-            if let Some(callback_id) = item_click.clone() {
-                let _ = cmd_tx.send(Cmd::Callback {
-                    id: callback_id,
-                    value: None,
-                    seq: None,
-                });
-            }
-            if let Some(callback_id) = on_change.clone() {
-                let _ = cmd_tx.send(Cmd::Callback {
-                    id: callback_id,
-                    value: Some(json!(id.clone())),
-                    seq: None,
-                });
-            }
+            protocol::send_callbacks(
+                &cmd_tx,
+                protocol::menu_selection_calls(item_click.clone(), on_change.clone(), id.clone()),
+            );
         });
         menu = menu.item(entry);
     }
@@ -283,8 +274,9 @@ pub fn crate_dismiss_waiting_for_clojure(
 /// * OK: `on_ok` (false keeps the dialog open), then `on_close`
 /// * Cancel, Escape, close button, overlay click: `on_cancel`, then `on_close`
 ///
-/// This host then sends `:on-open-change false` from `on_close`. Each
-/// Clojure handler is invoked at most once per user action.
+/// Those closures run synchronously for one user action. This host buffers
+/// their callback ids and sends **one** batch from `on_close` so `:on-ok`
+/// cannot render and rewire `:on-close`. Then `:on-open-change false`.
 pub fn bind_dialog_callbacks(
     dialog: gpui_component::dialog::Dialog,
     node: &Node,
@@ -294,44 +286,39 @@ pub fn bind_dialog_callbacks(
     let on_cancel = node.on_cancel.clone();
     let on_close = node.on_close.clone();
     let on_open_change = node.on_open_change.clone();
-    let tx_ok = cmd_tx.clone();
-    let tx_cancel = cmd_tx.clone();
-    let tx_close = cmd_tx;
+    let pending = Rc::new(RefCell::new(Vec::<protocol::CallbackCall>::new()));
     dialog
-        .on_ok(move |_, _, _| {
-            if let Some(id) = on_ok.clone() {
-                let _ = tx_ok.send(Cmd::Callback {
-                    id,
-                    value: None,
-                    seq: None,
-                });
+        .on_ok({
+            let pending = pending.clone();
+            move |_, _, _| {
+                if let Some(id) = on_ok.clone() {
+                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
+                }
+                true
             }
-            true
         })
-        .on_cancel(move |_, _, _| {
-            if let Some(id) = on_cancel.clone() {
-                let _ = tx_cancel.send(Cmd::Callback {
-                    id,
-                    value: None,
-                    seq: None,
-                });
+        .on_cancel({
+            let pending = pending.clone();
+            move |_, _, _| {
+                if let Some(id) = on_cancel.clone() {
+                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
+                }
+                true
             }
-            true
         })
-        .on_close(move |_, _, _| {
-            if let Some(id) = on_close.clone() {
-                let _ = tx_close.send(Cmd::Callback {
-                    id,
-                    value: None,
-                    seq: None,
-                });
-            }
-            if let Some(id) = on_open_change.clone() {
-                let _ = tx_close.send(Cmd::Callback {
-                    id,
-                    value: Some(json!(false)),
-                    seq: None,
-                });
+        .on_close({
+            let pending = pending.clone();
+            move |_, _, _| {
+                if let Some(id) = on_close.clone() {
+                    pending.borrow_mut().push(protocol::CallbackCall::fire(id));
+                }
+                if let Some(id) = on_open_change.clone() {
+                    pending
+                        .borrow_mut()
+                        .push(protocol::CallbackCall::with_value(id, json!(false)));
+                }
+                let calls = pending.replace(Vec::new());
+                protocol::send_callbacks(&cmd_tx, calls);
             }
         })
 }
