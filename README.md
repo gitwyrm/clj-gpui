@@ -267,7 +267,7 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/dropdown-menu [{:id :copy :label "Copy"} :- {:id :paste :label "Paste"}]
                   {:on-change handle!}
                   (ui/button "Edit"))
-(ui/context-menu items {:on-change handle!} (ui/label "Right-click me"))
+(ui/context-menu items {:on-change handle!} (ui/table {:columns cols :rows rows :flex 1}))
 (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
 (ui/table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
            :rows [{:id :ada :cells ["Ada" "Clojure"]}]
