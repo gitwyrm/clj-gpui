@@ -126,7 +126,7 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
         :on-change #(swap! !state assoc :draft %)})))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, and tabs pass the selected option id (a string; keywords become `"light"`). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts is 0-arg.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders pass a number. Select, radio-group, tabs, breadcrumb, and accordion pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields pass the current string to `:on-change` / `:on-submit`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts is 0-arg.
 
 ## Architecture
 
@@ -237,6 +237,7 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/progress 45)
 (ui/select selected {:options [{:id :clj :label "Clojure"} "Rust"]
                      :placeholder "Language"
+                     :searchable true
                      :on-change set-lang!})
 (ui/tabs tab {:items [{:id :general :label "General"}]
               :variant :underline
@@ -261,7 +262,7 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 
-`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire.
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` clears the selection. `:searchable true` filters select options by label.
 
 gpui-component 0.5.1 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 

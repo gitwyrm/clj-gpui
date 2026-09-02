@@ -25,7 +25,7 @@ use gpui_component::{
     progress::Progress,
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement as _,
-    select::{Select, SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     spinner::Spinner,
@@ -82,7 +82,7 @@ impl SelectItem for SelectOpt {
 }
 
 struct SelectSlot {
-    state: Entity<SelectState<Vec<SelectOpt>>>,
+    state: Entity<SelectState<SearchableVec<SelectOpt>>>,
     searchable: bool,
     on_change: Option<String>,
 }
@@ -637,49 +637,32 @@ impl RootView {
         node: &Node,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<SelectState<Vec<SelectOpt>>> {
+    ) -> Entity<SelectState<SearchableVec<SelectOpt>>> {
         self.used_selects.insert(key.to_string());
-        let items: Vec<SelectOpt> = node
-            .collection()
-            .iter()
-            .map(|item| SelectOpt {
-                id: SharedString::from(item.id_or_label()),
-                label: SharedString::from(item.label_or_id()),
-            })
-            .collect();
-        let selected = node.string_value();
-        let selected_index = selected.as_ref().and_then(|id| {
-            items
-                .iter()
-                .position(|item| item.id.as_ref() == id)
-                .map(|ix| gpui_component::IndexPath::default().row(ix))
-        });
+        let items = select_opts(node);
+        let selected_index = select_selected_index(&items, node.string_value().as_deref());
+        // SearchableVec implements perform_search; Vec<T> does not (0.5.1).
 
         if let Some(slot) = self.selects.get_mut(key) {
             if slot.searchable == node.searchable {
                 slot.on_change = node.on_change.clone();
-                let items = items.clone();
                 slot.state.update(cx, |state, cx| {
-                    state.set_items(items, window, cx);
-                    if let Some(id) = selected.as_deref() {
-                        let id = SharedString::from(id.to_string());
-                        state.set_selected_value(&id, window, cx);
-                    }
+                    state.set_items(SearchableVec::new(items.clone()), window, cx);
+                    state.set_selected_index(selected_index, window, cx);
                 });
                 return slot.state.clone();
             }
         }
 
         let searchable = node.searchable;
-        let items_for_state = items;
         let state = cx.new(|cx| {
-            let built = SelectState::new(items_for_state, selected_index, window, cx);
+            let built = SelectState::new(SearchableVec::new(items), selected_index, window, cx);
             built.searchable(searchable)
         });
         let key_owned = key.to_string();
         cx.subscribe(
             &state,
-            move |this, _, event: &SelectEvent<Vec<SelectOpt>>, _cx| {
+            move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, _cx| {
                 let SelectEvent::Confirm(value) = event;
                 let Some(id) = this
                     .selects
@@ -1222,7 +1205,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.collection();
-        let open = node.string_value();
+        let open_ids = node.string_values();
         let mut accordion = Accordion::new(eid(key)).multiple(node.multiple);
         if node.disabled {
             accordion = accordion.disabled(true);
@@ -1231,12 +1214,7 @@ impl RootView {
         for (ix, item) in items.iter().enumerate() {
             let id = item.id_or_label();
             let title = item.label_or_id();
-            let is_open = if node.multiple {
-                open.as_ref()
-                    .is_some_and(|s| s.split(',').any(|part| part.trim() == id))
-            } else {
-                open.as_deref() == Some(id.as_str())
-            };
+            let is_open = open_ids.iter().any(|open| open == &id);
             let content = if let Some(child) = item.content.as_ref() {
                 self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
             } else {
@@ -1497,12 +1475,84 @@ fn apply_button_variant(button: Button, node: &Node) -> Button {
     }
 }
 
+fn select_opts(node: &Node) -> Vec<SelectOpt> {
+    node.collection()
+        .iter()
+        .map(|item| SelectOpt {
+            id: SharedString::from(item.id_or_label()),
+            label: SharedString::from(item.label_or_id()),
+        })
+        .collect()
+}
+
+fn select_selected_index(
+    items: &[SelectOpt],
+    selected: Option<&str>,
+) -> Option<gpui_component::IndexPath> {
+    selected.and_then(|id| {
+        items
+            .iter()
+            .position(|item| item.id.as_ref() == id)
+            .map(|ix| gpui_component::IndexPath::default().row(ix))
+    })
+}
+
+/// Titles that `SearchableVec::perform_search` filters on (gpui-component 0.5.1).
+#[cfg(test)]
+fn select_search_matches(items: &[SelectOpt], query: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    items
+        .iter()
+        .filter(|item| item.title().to_lowercase().contains(&q))
+        .map(|item| item.id.to_string())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OuterLayout {
+    width: Option<f32>,
+    height: Option<f32>,
+    size: Option<f32>,
+    flex_fill: bool,
+    /// Scroll viewports fill parent width when `:width` / `:size` are omitted.
+    full_width: bool,
+}
+
+fn outer_layout(node: &Node) -> OuterLayout {
+    OuterLayout {
+        width: node.width,
+        height: node.height,
+        size: node.size,
+        flex_fill: node.flex.unwrap_or(0.0) >= 1.0,
+        full_width: node.kind == "scroll" && node.width.is_none() && node.size.is_none(),
+    }
+}
+
+fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+    let layout = outer_layout(node);
+    if let Some(width) = layout.width {
+        el = el.w(px(width));
+    }
+    if let Some(height) = layout.height {
+        el = el.h(px(height));
+    }
+    if let Some(size) = layout.size {
+        el = el.size(px(size));
+    }
+    if layout.flex_fill {
+        el = el.flex_1().min_h_0();
+    }
+    if layout.full_width {
+        el = el.w_full();
+    }
+    el
+}
+
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
     let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
         return el;
     };
-    div()
-        .id(eid(&format!("{key}-tip")))
+    copy_outer_layout(div().id(eid(&format!("{key}-tip"))), node)
         .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
         .child(el)
         .into_any_element()
@@ -1894,5 +1944,130 @@ mod scroll_viewport_tests {
         let v = scroll_viewport(&node_with(Some(300.0), Some(220.0), Some(180.0)));
         assert_eq!(v.width, ScrollExtent::Px(180.0));
         assert_eq!(v.height, ScrollExtent::Px(180.0));
+    }
+}
+
+#[cfg(test)]
+mod select_control_tests {
+    use super::{
+        outer_layout, select_opts, select_search_matches, select_selected_index, Node, SelectOpt,
+    };
+    use crate::protocol::Item;
+    use gpui::SharedString;
+
+    fn select_node(value: Option<serde_json::Value>, ids: &[&str]) -> Node {
+        Node {
+            kind: "select".into(),
+            value,
+            options: ids
+                .iter()
+                .map(|id| Item {
+                    id: Some((*id).into()),
+                    label: Some((*id).into()),
+                    ..Item::default()
+                })
+                .collect(),
+            ..Node::default()
+        }
+    }
+
+    fn opt(id: &str, label: &str) -> SelectOpt {
+        SelectOpt {
+            id: SharedString::from(id.to_string()),
+            label: SharedString::from(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn nil_and_missing_values_clear_selection() {
+        let items = select_opts(&select_node(None, &["clj", "rs"]));
+        assert_eq!(select_selected_index(&items, None), None);
+        let items = select_opts(&select_node(Some(serde_json::Value::Null), &["clj"]));
+        assert_eq!(select_selected_index(&items, None), None);
+    }
+
+    #[test]
+    fn value_a_to_b_updates_index() {
+        let items = select_opts(&select_node(None, &["clj", "rs", "go"]));
+        let a = select_selected_index(&items, Some("clj")).unwrap();
+        let b = select_selected_index(&items, Some("rs")).unwrap();
+        assert_eq!(a.row, 0);
+        assert_eq!(b.row, 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn disappeared_option_clears_selection() {
+        let items = select_opts(&select_node(None, &["rs", "go"]));
+        assert_eq!(select_selected_index(&items, Some("clj")), None);
+    }
+
+    #[test]
+    fn searchable_matches_filter_on_title_not_id() {
+        let items = vec![opt("clj", "Clojure"), opt("rs", "Rust"), opt("go", "Go")];
+        assert_eq!(
+            select_search_matches(&items, "clo"),
+            vec!["clj".to_string()]
+        );
+        assert!(
+            select_search_matches(&items, "clj").is_empty(),
+            "filter is on title, not id"
+        );
+        assert_eq!(select_search_matches(&items, "ust"), vec!["rs".to_string()]);
+        assert!(select_search_matches(&items, "python").is_empty());
+    }
+
+    #[test]
+    fn tooltip_wrapper_copies_width_height_flex_and_scroll_fill() {
+        let button = Node {
+            kind: "button".into(),
+            width: Some(200.0),
+            tooltip: Some("Save".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&button);
+        assert_eq!(layout.width, Some(200.0));
+        assert!(!layout.flex_fill);
+        assert!(!layout.full_width);
+
+        let column = Node {
+            kind: "vstack".into(),
+            flex: Some(1.0),
+            tooltip: Some("col".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&column);
+        assert!(layout.flex_fill);
+        assert!(!layout.full_width);
+
+        let label = Node {
+            kind: "label".into(),
+            width: Some(300.0),
+            tooltip: Some("hint".into()),
+            ..Node::default()
+        };
+        assert_eq!(outer_layout(&label).width, Some(300.0));
+
+        let scroll = Node {
+            kind: "scroll".into(),
+            flex: Some(1.0),
+            tooltip: Some("list".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&scroll);
+        assert!(layout.flex_fill);
+        assert!(layout.full_width);
+        assert_eq!(layout.height, None);
+
+        let fixed = Node {
+            kind: "scroll".into(),
+            height: Some(220.0),
+            tooltip: Some("box".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&fixed);
+        assert_eq!(layout.height, Some(220.0));
+        assert!(!layout.flex_fill);
+        assert!(layout.full_width);
     }
 }

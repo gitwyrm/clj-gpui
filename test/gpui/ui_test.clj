@@ -77,6 +77,19 @@
   (is (= "ui/dark" (ui/wire-id :ui/dark)))
   (is (= "light" (ui/wire-id :light))))
 
+(deftest option-ids-preserve-original-clojure-identity
+  (is (= :dark (ui/option-identity :dark)))
+  (is (= :dark (ui/option-identity {:id :dark :label "Dark"})))
+  (is (= "custom-id" (ui/option-identity {:id "custom-id"})))
+  (is (= :dark (ui/resolve-option-id (ui/option-id-map [:dark :light]) "dark")))
+  (is (= "custom-id" (ui/resolve-option-id (ui/option-id-map ["custom-id"]) "custom-id")))
+  (is (= :ui/dark (ui/resolve-option-id (ui/option-id-map [:ui/dark]) "ui/dark")))
+  (is (= [:a :b] (ui/resolve-option-id (ui/option-id-map [:a :b]) ["a" "b"])))
+  (is (nil? (ui/resolve-option-id (ui/option-id-map [:a]) nil)))
+  (testing "first option wins when wire ids collide"
+    (is (= :dark (ui/resolve-option-id (ui/option-id-map [:dark "dark"]) "dark")))
+    (is (= "dark" (ui/resolve-option-id (ui/option-id-map ["dark" :dark]) "dark")))))
+
 (deftest switch-slider-select-nodes
   (testing "switch"
     (let [n (ui/switch true {:on-change (fn [_]) :text "On"})]
@@ -150,10 +163,16 @@
       (is (= "a" (:value n)))
       (is (= "One" (get-in n [:items 0 :label])))
       (is (= :label (get-in n [:items 0 :content :type]))))
-    (is (= "a,b" (:value (ui/accordion [:a :b]
-                                       {:multiple true
-                                        :items [{:id :a :title "A" :content (ui/label "x")}
-                                                {:id :b :title "B" :content (ui/label "y")}]})))))
+    (is (= ["a" "b"] (:value (ui/accordion [:a :b]
+                                           {:multiple true
+                                            :items [{:id :a :title "A" :content (ui/label "x")}
+                                                    {:id :b :title "B" :content (ui/label "y")}]}))))
+    (is (= ["audio,advanced"]
+           (:value (ui/accordion ["audio,advanced"]
+                                 {:multiple true
+                                  :items [{:id "audio,advanced"
+                                           :title "Mixed"
+                                           :content (ui/label "x")}]})))))
   (testing "description-list"
     (let [n (ui/description-list [{:label "Host" :value "GPUI"}
                                   {:label "UI" :value "clj-gpui"}])]
@@ -191,6 +210,92 @@
     (is (string? copied-id))
     (is (= {:ok true :id copied-id} (runtime/invoke-callback! copied-id "z")))
     (is (= "z" @got))))
+
+(deftest option-callbacks-restore-original-clojure-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/tabs :general
+                            {:items [{:id :general :label "General"}
+                                     {:id :chrome :label "Chrome"}]
+                             :on-change #(reset! got %)})
+                   (ui/radio-group :light
+                                   {:options [{:id :light :label "Light"}
+                                              {:id :dark :label "Dark"}]
+                                    :on-change #(reset! got %)})
+                   (ui/select :clj
+                              {:options [{:id :clj :label "Clojure"}
+                                         {:id :rs :label "Rust"}]
+                               :on-change #(reset! got %)})
+                   (ui/breadcrumb [{:id :home :label "Home"} {:id :project :label "Project"}]
+                                  {:on-change #(reset! got %)})
+                   (ui/accordion :audio
+                                 {:on-change #(reset! got %)
+                                  :items [{:id :audio :title "Audio" :content (ui/label "a")}
+                                          {:id :display :title "Display" :content (ui/label "b")}]})
+                   (ui/select "custom-id"
+                              {:options [{:id "custom-id" :label "Custom"}
+                                         {:id "other" :label "Other"}]
+                               :on-change #(reset! got %)})))
+        children (:children exported)]
+    (is (= "general" (get-in children [0 :value])))
+    (is (= {:ok true :id (get-in children [0 :on-change])}
+           (runtime/invoke-callback! (get-in children [0 :on-change]) "chrome")))
+    (is (= :chrome @got))
+    (runtime/invoke-callback! (get-in children [1 :on-change]) "dark")
+    (is (= :dark @got))
+    (runtime/invoke-callback! (get-in children [2 :on-change]) "rs")
+    (is (= :rs @got))
+    (runtime/invoke-callback! (get-in children [3 :on-change]) "home")
+    (is (= :home @got))
+    (runtime/invoke-callback! (get-in children [4 :on-change]) "display")
+    (is (= :display @got))
+    (runtime/invoke-callback! (get-in children [4 :on-change]) ["audio" "display"])
+    (is (= [:audio :display] @got))
+    (runtime/invoke-callback! (get-in children [5 :on-change]) "other")
+    (is (= "other" @got))))
+
+(deftest select-nil-value-and-searchable-stay-on-the-node
+  (let [cleared (ui/select nil {:options [{:id :clj :label "Clojure"}]
+                                :searchable true})]
+    (is (nil? (:value cleared)))
+    (is (true? (:searchable cleared))))
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/select nil {:options [{:id :clj :label "Clojure"}]
+                                  :searchable true}))]
+    (is (nil? (:value exported)))
+    (is (true? (:searchable exported)))))
+
+(deftest callback-json-socket-decoding
+  (runtime/reset-callbacks!)
+  (let [got (atom :unset)
+        exported (runtime/export-tree
+                  (ui/vstack
+                   (ui/button "Go" #(reset! got :zero))
+                   (ui/switch false {:on-change #(reset! got %)})
+                   (ui/text-field "" {:on-change #(reset! got %)})))
+        children (:children exported)
+        zero-id (get-in children [0 :on-click])
+        switch-id (get-in children [1 :on-change])
+        field-id (get-in children [2 :on-change])
+        through (fn [m]
+                  (runtime/handle (json/read-str (json/write-str m) :key-fn keyword)))]
+    (through {:op "callback" :id 1 :callback-id zero-id})
+    (is (= :zero @got))
+    (through {:op "callback" :id 2 :callback-id switch-id :value false})
+    (is (false? @got))
+    (through {:op "callback" :id 3 :callback-id switch-id :value 0})
+    (is (zero? @got))
+    (through {:op "callback" :id 4 :callback-id field-id :value ""})
+    (is (= "" @got))
+    (through {:op "callback" :id 5 :callback-id switch-id :value nil})
+    (is (nil? @got))
+    (through {:op "callback" :id 6 :callback-id switch-id :value ["a" "b"]})
+    (is (= ["a" "b"] @got))
+    (through {:op "callback" :id 7 :callback-id switch-id :value {:k 1}})
+    (is (= {:k 1} @got))))
 
 (deftest invoke-callback-false-zero-and-null
   (runtime/reset-callbacks!)

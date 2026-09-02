@@ -92,6 +92,8 @@ When `value` is present (including `""`, `false`, `0`, and `null`), Clojure call
 
 v4 changed `value` from string-only to any JSON type so switch/slider/select can pass booleans, numbers, and ids without encoding them as strings. Text fields still send strings. New node types were added in the same bump so a v3 host cannot silently paint “Unknown GPUI node” placeholders.
 
+Option ids on the wire are JSON strings. Clojure restores the original application id in the callback (`:dark` not `"dark"`). Accordion `:multiple` uses a JSON array of ids, including ids that contain commas.
+
 ### `reload`
 
 ```json
@@ -124,7 +126,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `items` / `options` | array of `{id,label,text,disabled,content,on-click}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`) |
-| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (id) |
+| `on-change` | string callback id | `text-field` (string), `switch`/`toggle` (bool), `slider` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion` (wire id; Clojure restores the original id) |
 | `on-submit` | string callback id | `text-field` (Enter; called with the field string) |
 | `on-blur` | string callback id | `text-field` (called with the field string) |
 | `on-escape` | string callback id | `text-field` (0-arg) |
@@ -132,7 +134,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `text-field`: request keyboard focus |
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
-| `value` | JSON number, string, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs`/`accordion` (selected id) |
+| `value` | JSON number, string, array, bool, or null | `slider`/`progress` (number), `select`/`radio-group`/`tabs` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`) |
 | `min`, `max`, `step` | number | `slider` |
 | `orientation` | string | `radio-group`, `slider`, `divider`, `description-list`: `horizontal` (default) or `vertical` |
 | `disabled` | bool | buttons and most controls |
@@ -144,7 +146,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `dot` | bool | `badge` |
 | `dashed` | bool | `divider` |
 | `outline` | bool | `tag` |
-| `searchable` | bool | `select` |
+| `searchable` | bool | `select`: show a filter field; host uses `SearchableVec` so typing actually filters |
 | `multiple` | bool | `accordion` |
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |

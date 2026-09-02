@@ -1,7 +1,8 @@
 (ns widgets.app
   "Gallery of gpui-component widgets newly exposed through gpui.ui.
 
-  Real r/atom state so controls can be dogfooded as a smoke test."
+  Real r/atom state so controls can be dogfooded as a smoke test.
+  Option ids are keywords on purpose: callbacks must round-trip them."
   (:require [gpui.ratom :as r]
             [gpui.ui :as ui]))
 
@@ -10,12 +11,11 @@
            :bold? false
            :theme-mode :dark
            :volume 36
-           :lang "clj"
+           :lang :clj
            :tab :general
            :section :audio
            :crumb :home
-           :alert? true
-           :progress 40}))
+           :alert? true}))
 
 (defn- set-key [k]
   (fn [v]
@@ -37,23 +37,29 @@
     {:gap 12 :align :center}
     (ui/label (str "Volume " volume))
     (ui/slider volume {:min 0 :max 100 :flex 1
+                       :tooltip "0–100"
                        :on-change (set-key :volume)}))
    (ui/progress volume {:tooltip "Mirrors the slider"})
-   (ui/select lang
-              {:options [{:id "clj" :label "Clojure"}
-                         {:id "rs" :label "Rust"}
-                         {:id "go" :label "Go"}]
-               :placeholder "Language"
-               :on-change (set-key :lang)})
    (ui/hstack
     {:gap 8 :align :center}
-    (ui/tag lang {:variant :info})
+    (ui/select lang
+               {:options [{:id :clj :label "Clojure"}
+                          {:id :rs :label "Rust"}
+                          {:id :go :label "Go"}]
+                :placeholder "Language"
+                :searchable true
+                :flex 1
+                :on-change (set-key :lang)})
+    (ui/button "Clear" #(swap! !state assoc :lang nil)))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/tag (if lang (name lang) "none") {:variant :info})
     (ui/kbd "ctrl-s")
     (ui/button "Save" #(swap! !state assoc :alert? true)
                {:primary true :tooltip "Write the current settings"})
     (ui/link "https://clojure.org" "clojure.org"))))
 
-(defn- chrome-panel [{:keys [section alert?]}]
+(defn- chrome-panel [{:keys [section crumb alert?]}]
   (ui/vstack
    {:gap 12}
    (ui/breadcrumb
@@ -61,6 +67,7 @@
      {:id :project :label "Project"}
      {:label "Widgets"}]
     {:on-change (set-key :crumb)})
+   (ui/label (str "Crumb " (pr-str crumb)))
    (ui/hstack
     {:gap 12 :align :center}
     (ui/badge 3 (ui/icon :bell))
@@ -109,7 +116,7 @@
                 :variant :underline
                 :on-change (set-key :tab)})
       (ui/scroll
-       {:flex 1}
+       {:flex 1 :tooltip "Scrolls when the panel is taller than the window"}
        (ui/vstack
         {:gap 14 :padding 4}
         (case tab

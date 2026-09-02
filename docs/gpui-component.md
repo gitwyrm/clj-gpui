@@ -28,7 +28,7 @@ Classification:
 | `theme::*` | `:theme` / `gpui.theme` | ✅ | A | Existing ThemeSet architecture |
 | `switch::Switch` | `ui/switch` | ✅ | B | `:on-change` receives boolean |
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean |
-| `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives option id |
+| `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives the original Clojure id |
 | `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives number |
 | `progress::Progress` | `ui/progress` | ✅ | B | 0–100 |
 | `divider::Divider` | `ui/divider` | ✅ | B | Horizontal default; `:orientation :vertical` |
@@ -40,15 +40,15 @@ Classification:
 | `link::Link` | `ui/link` | ✅ | B | Opens `href`; optional 0-arg `:on-click` |
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |
 | `badge::Badge` | `ui/badge` | ✅ | B | Count or `:dot`; wraps a child |
-| `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel |
-| `select::Select` | `ui/select` | ✅ | B | String ids; host-held `SelectState`; popup is internal |
+| `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel; keyword ids round-trip |
+| `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`; `:searchable true` filters by label; `nil` clears |
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
 | `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string |
-| `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | |
+| `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
 | `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; no image `src` yet |
-| `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:content` is a nested node |
+| `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids |
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps |
-| `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; not a standalone widget |
+| `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
 | `slider::Slider` range / log scale | — | ❌ | C | Range thumbs and logarithmic scale need richer values |
 | `input::NumberInput` | — | ❌ | C | Extra `NumberInputState` + step semantics |
 | `input::OtpInput` | — | ❌ | C | Per-cell state |
@@ -126,11 +126,11 @@ Yes: keep **Clojure as the semantic owner**, keep **Rust widget state only where
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
 | `slider` | `:on-change` | number |
-| `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | option id (string) |
-| `accordion` | `:on-change` | open id (string) or vector of ids when `:multiple true` |
+| `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
+| `accordion` | `:on-change` | open id, or a vector of ids when `:multiple true` |
 | `alert` | `:on-close` | none (0-arg) |
 | `clipboard` | `:on-copied` | copied string |
 | `text-field` | `:on-change` / `:on-submit` / `:on-blur` | string (unchanged) |
 | `button` / `checkbox` | `:on-click` | none (unchanged) |
 
-Ids are JSON strings. Keywords such as `:light` are sent as `"light"`.
+The wire still uses JSON strings. `gpui.ui` keeps a map of wire id → original Clojure id and restores it in the callback. `{:id :dark}` yields `:dark`; `{:id "custom-id"}` yields `"custom-id"`. If two options share a wire id (`:dark` and `"dark"`), the first wins.

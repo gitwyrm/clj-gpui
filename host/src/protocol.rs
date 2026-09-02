@@ -234,8 +234,27 @@ impl Node {
             Some(Value::String(s)) => Some(s.clone()),
             Some(Value::Number(n)) => Some(n.to_string()),
             Some(Value::Bool(b)) => Some(b.to_string()),
+            Some(Value::Null) | None => None,
             Some(other) => Some(other.to_string()),
-            None => None,
+        }
+    }
+
+    /// Selected ids. JSON arrays (accordion `:multiple`) stay as separate
+    /// ids; a single string is one id. `null` / omitted is empty.
+    pub fn string_values(&self) -> Vec<String> {
+        match &self.value {
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Number(n) => Some(n.to_string()),
+                    Value::Bool(b) => Some(b.to_string()),
+                    Value::Null => None,
+                    other => Some(other.to_string()),
+                })
+                .collect(),
+            Some(Value::Null) | None => Vec::new(),
+            Some(_) => self.string_value().into_iter().collect(),
         }
     }
 
@@ -442,6 +461,37 @@ mod tests {
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
         assert_eq!(PROTOCOL_VERSION, 4);
+    }
+
+    #[test]
+    fn accordion_multiple_value_is_a_json_array() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "accordion",
+            "value": ["audio", "audio,advanced"],
+            "multiple": true,
+            "items": [
+                {"id": "audio", "label": "Audio"},
+                {"id": "audio,advanced", "label": "Mixed"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            node.string_values(),
+            vec!["audio".to_string(), "audio,advanced".to_string()]
+        );
+        assert!(node.multiple);
+    }
+
+    #[test]
+    fn json_null_value_is_not_the_string_null() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "select",
+            "value": null,
+            "options": [{"id": "clj", "label": "Clojure"}]
+        }))
+        .unwrap();
+        assert_eq!(node.string_value(), None);
+        assert!(node.string_values().is_empty());
     }
 
     #[test]

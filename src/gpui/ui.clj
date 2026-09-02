@@ -5,7 +5,6 @@
   translates that data into GPUI elements. Application logic stays
   in Clojure: atoms, functions, sequences, macros, and namespaces
   are the real Clojure runtime."
-  (:require [clojure.string :as str])
   (:refer-clojure :exclude []))
 
 (def protocol-version
@@ -152,6 +151,59 @@
                    (str ns "/" (name x))
                    (name x))
     :else (str x)))
+
+(defn option-identity
+  "Original Clojure identity for an option, before `wire-id`."
+  [x]
+  (cond
+    (nil? x) nil
+    (map? x) (or (:id x) (:value x) (:label x) (:text x) (:title x))
+    :else x))
+
+(defn option-id-map
+  "Map of wire id → original Clojure id.
+
+  First option wins when two identities share a wire id (`:dark` and
+  `\"dark\"` both become `\"dark\"`)."
+  [xs]
+  (reduce
+   (fn [m x]
+     (let [orig (option-identity x)
+           wire (wire-id orig)]
+       (if (or (nil? wire) (contains? m wire))
+         m
+         (assoc m wire orig))))
+   {}
+   (remove nil? xs)))
+
+(defn resolve-option-id
+  "Restore the original Clojure id for a host callback value.
+
+  Vectors (accordion `:multiple`) are mapped element-wise. Unknown
+  wire ids are returned as received. `nil` stays `nil`."
+  [id-map wire-value]
+  (cond
+    (nil? wire-value) nil
+    (sequential? wire-value) (mapv #(resolve-option-id id-map %) wire-value)
+    :else (get id-map
+               (if (string? wire-value)
+                 wire-value
+                 (wire-id wire-value))
+               wire-value)))
+
+(defn- wrap-option-callback
+  [on-change xs]
+  (if (fn? on-change)
+    (let [id-map (option-id-map xs)]
+      (fn [wire-value]
+        (on-change (resolve-option-id id-map wire-value))))
+    on-change))
+
+(defn- with-option-callback
+  [opts xs]
+  (let [on-change (:on-change opts)]
+    (cond-> opts
+      (fn? on-change) (assoc :on-change (wrap-option-callback on-change xs)))))
 
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
@@ -411,6 +463,9 @@
 (defn radio-group
   "Radio group. `value` is the selected option id; `on-change` receives that id.
 
+  Keyword ids round-trip as keywords (`:dark` not `\"dark\"`). String
+  ids stay strings.
+
   (ui/radio-group selected
     {:options [{:id :light :label \"Light\"} {:id :dark :label \"Dark\"}]
      :on-change #(swap! !state assoc :mode %)
@@ -419,11 +474,12 @@
    {:type :radio-group :value (wire-id value) :options []})
   ([value opts]
    (let [opts (if (map? opts) opts {:on-change opts})
-         options (option-items (or (:options opts) (:items opts)))]
+         raw (or (:options opts) (:items opts))
+         opts (with-option-callback (dissoc opts :options :items) raw)]
      (merge-widget {:type :radio-group
                     :value (wire-id value)
-                    :options options}
-                   (dissoc opts :options :items)))))
+                    :options (option-items raw)}
+                   opts))))
 
 (defn slider
   "Numeric slider. `on-change` receives a number.
@@ -564,6 +620,7 @@
   "Tab bar. `value` is the selected tab id; `on-change` receives that id.
 
   Content is not included — render the selected panel in Clojure.
+  Keyword ids round-trip as keywords.
 
   (ui/tabs selected
     {:items [{:id :general :label \"General\"}
@@ -573,27 +630,35 @@
   ([value]
    {:type :tabs :value (wire-id value) :items []})
   ([value opts]
-   (let [opts (if (map? opts) opts {:on-change opts})]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:items opts) (:options opts))
+         opts (with-option-callback (dissoc opts :items :options) raw)]
      (merge-widget {:type :tabs
                     :value (wire-id value)
-                    :items (option-items (or (:items opts) (:options opts)))}
-                   (dissoc opts :items :options)))))
+                    :items (option-items raw)}
+                   opts))))
 
 (defn select
   "Dropdown select. `value` is the selected option id; `on-change` receives that id.
 
+  `nil` clears the selection. `:searchable true` filters options by
+  label as the user types. Keyword ids round-trip as keywords.
+
   (ui/select selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
      :placeholder \"Language\"
+     :searchable true
      :on-change #(swap! !state assoc :lang %)})"
   ([value]
    {:type :select :value (wire-id value) :options []})
   ([value opts]
-   (let [opts (if (map? opts) opts {:on-change opts})]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:options opts) (:items opts))
+         opts (with-option-callback (dissoc opts :options :items) raw)]
      (merge-widget {:type :select
                     :value (wire-id value)
-                    :options (option-items (or (:options opts) (:items opts)))}
-                   (dissoc opts :options :items)))))
+                    :options (option-items raw)}
+                   opts))))
 
 (defn icon
   "Bundled gpui-component icon. `name` is a kebab keyword such as `:check`.
@@ -616,14 +681,15 @@
 
 (defn breadcrumb
   "Breadcrumb trail. Non-last items with `:on-click` are links.
-  Group `:on-change` receives the clicked item id.
+  Group `:on-change` receives the clicked item id (original Clojure id).
 
   (ui/breadcrumb [{:id :home :label \"Home\" :on-click go-home!}
                   {:label \"Project\"}])"
   ([items]
    {:type :breadcrumb :items (option-items items)})
   ([items opts]
-   (merge {:type :breadcrumb :items (option-items items)} opts)))
+   (merge {:type :breadcrumb :items (option-items items)}
+          (with-option-callback opts items))))
 
 (defn avatar
   "Initials avatar from a display name.
@@ -641,8 +707,11 @@
    (merge-widget {:type :avatar :text (str name)} opts)))
 
 (defn accordion
-  "Exclusive accordion. `value` is the open item id (`nil` when all closed).
+  "Accordion. `value` is the open item id (`nil` when all closed).
   `on-change` receives that id, or a vector of ids when `:multiple true`.
+
+  Keyword ids round-trip as keywords. Multiple open ids are a JSON
+  array on the wire, not a comma-joined string.
 
   (ui/accordion open-id
     {:on-change set-open!
@@ -652,6 +721,7 @@
    {:type :accordion :value (wire-id value) :items []})
   ([value opts]
    (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:items opts) [])
          items (mapv (fn [item]
                        (let [n (option-item
                                 (cond-> item
@@ -664,13 +734,14 @@
                                              (if (ui-node? c)
                                                c
                                                (first (flatten-children [c]))))))))
-                     (or (:items opts) []))]
+                     raw)
+         opts (with-option-callback (dissoc opts :items) raw)]
      (merge-widget {:type :accordion
                     :value (if (sequential? value)
-                             (str/join "," (map wire-id value))
+                             (mapv wire-id value)
                              (wire-id value))
                     :items items}
-                   (dissoc opts :items)))))
+                   opts))))
 
 (defn description-list
   "Key/value description list.
