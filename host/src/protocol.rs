@@ -132,6 +132,10 @@ pub fn menu_selection_calls(
 /// Dialog OK or Cancel chain flushed from `on_close`.
 /// OK: on-ok, on-close, on-open-change false.
 /// Cancel: on-cancel, on-close, on-open-change false.
+///
+/// Overlay accumulates the same order from crate `on_ok`/`on_cancel` then
+/// `on_close`; this helper is the documented sequence for tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn dialog_action_calls(
     first: Option<String>,
     on_close: Option<String>,

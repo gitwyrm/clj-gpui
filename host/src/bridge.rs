@@ -104,7 +104,11 @@ fn apply_callback_batch(
     let flags = crate::protocol::defer_render_flags(calls.len());
     let mut failed = None;
     for (call, defer) in calls.into_iter().zip(flags) {
-        let request = crate::protocol::callback_rpc(call.id, call.value, defer);
+        let request = if defer {
+            crate::protocol::callback_rpc(call.id, call.value, true)
+        } else {
+            crate::protocol::callback_request(call.id, call.value)
+        };
         match rpc(writer, pending, next_id, request) {
             Ok(resp) => {
                 if let Some(err) = callback_failed(&resp) {
@@ -304,53 +308,38 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
                             }
                         }
-                        other => {
-                            match other {
-                                Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
-                                Cmd::Render => {
-                                    let result = rpc(
-                                        &writer,
-                                        &pending,
-                                        &next_id,
-                                        json!({"op": "render"}),
-                                    )
-                                    .and_then(|value| parse_tree(&value))
-                                    .map(|(node, themes)| HostEvent::Tree(node, None, themes));
-                                    send_event(&event_tx, result);
-                                }
-                                Cmd::Callback { id, value, seq } => {
-                                    apply_callback_batch(
-                                        &writer,
-                                        &pending,
-                                        &next_id,
-                                        &event_tx,
-                                        vec![crate::protocol::CallbackCall { id, value }],
-                                        seq,
-                                    );
-                                }
-                                Cmd::CallbackBatch { callbacks, seq } => {
-                                    apply_callback_batch(
-                                        &writer,
-                                        &pending,
-                                        &next_id,
-                                        &event_tx,
-                                        callbacks,
-                                        seq,
-                                    );
-                                }
-                                Cmd::Reload => {
-                                    let result = rpc(
-                                        &writer,
-                                        &pending,
-                                        &next_id,
-                                        json!({"op": "reload"}),
-                                    )
-                                    .and_then(|value| parse_tree(&value))
-                                    .map(|(node, themes)| HostEvent::Tree(node, None, themes));
-                                    send_event(&event_tx, result);
-                                }
+                        other => match other {
+                            Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
+                            Cmd::Render => {
+                                let result =
+                                    rpc(&writer, &pending, &next_id, json!({"op": "render"}))
+                                        .and_then(|value| parse_tree(&value))
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                send_event(&event_tx, result);
                             }
-                        }
+                            Cmd::Callback { id, value, seq } => {
+                                apply_callback_batch(
+                                    &writer,
+                                    &pending,
+                                    &next_id,
+                                    &event_tx,
+                                    vec![crate::protocol::CallbackCall { id, value }],
+                                    seq,
+                                );
+                            }
+                            Cmd::CallbackBatch { callbacks, seq } => {
+                                apply_callback_batch(
+                                    &writer, &pending, &next_id, &event_tx, callbacks, seq,
+                                );
+                            }
+                            Cmd::Reload => {
+                                let result =
+                                    rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
+                                        .and_then(|value| parse_tree(&value))
+                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                send_event(&event_tx, result);
+                            }
+                        },
                     }
                 }
             }

@@ -1512,7 +1512,7 @@ impl RootView {
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &ListEvent, cx| match event {
             ListEvent::Select(ix) => {
-                emit_list_id(this, &key_owned, ListCallback::Change, *ix, cx);
+                emit_list_change(this, &key_owned, *ix, cx);
             }
             ListEvent::Confirm(ix) => {
                 // 0.5.1: arrows emit Select only; mouse click and Enter emit
@@ -2195,20 +2195,11 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
-enum ListCallback {
-    Change,
-    Confirm,
-}
-
-fn emit_list_id(this: &RootView, key: &str, which: ListCallback, ix: IndexPath, cx: &App) {
+fn emit_list_change(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
     let Some(slot) = this.lists.get(key) else {
         return;
     };
-    let callback = match which {
-        ListCallback::Change => slot.on_change.clone(),
-        ListCallback::Confirm => slot.on_confirm.clone(),
-    };
-    let Some(callback) = callback else {
+    let Some(callback) = slot.on_change.clone() else {
         return;
     };
     if let Some(id) = slot.state.read(cx).delegate().id_at(ix) {

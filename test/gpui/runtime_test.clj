@@ -259,7 +259,7 @@
                        (ui/dialog true {:on-cancel #(swap! cancel-log conj :cancel)
                                         :on-close #(swap! cancel-log conj :close)
                                         :on-open-change #(swap! cancel-log conj [:open %])}
-                                 (ui/label "x")))]
+                                  (ui/label "x")))]
       (is (:ok (runtime/invoke-callback-batch!
                 [{:id (:on-cancel cancel-tree)}
                  {:id (:on-close cancel-tree)}
