@@ -198,7 +198,7 @@
         (ui/button "shifted-b" (fn []))])
      (map (fn [i]
             (ui/button (str "tbl-canary-" i) (fn [])))
-          (range (or table-shift 0))
+          (range (or table-shift 0)))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "List A→B" #(swap! !state assoc :list-sel :beta))
