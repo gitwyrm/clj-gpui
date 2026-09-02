@@ -196,9 +196,10 @@
      (when batch-shift?
        [(ui/button "shifted-a" (fn []))
         (ui/button "shifted-b" (fn []))])
-     (map (fn [i]
-            (ui/button (str "tbl-canary-" i) (fn [])))
-          (range (or table-shift 0)))
+     (mapcat (fn [i]
+               [(ui/button (str "tbl-canary-" i "-a") (fn []))
+                (ui/button (str "tbl-canary-" i "-b") (fn []))])
+             (range (or table-shift 0)))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "List A→B" #(swap! !state assoc :list-sel :beta))

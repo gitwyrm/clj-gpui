@@ -280,6 +280,9 @@
         !shift (atom false)
         tree (fn []
                (ui/vstack
+                ;; Two leading widgets so a render between A and B would
+                ;; assign confirm's old cb-N to X, not back to the table.
+                (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" #(swap! x-fired inc)))
                 (ui/table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
@@ -300,13 +303,17 @@
                {:id id-confirm :value "ada"}])))
     (is (= [[:change :ada] [:confirm :ada]] @seen))
     (is (= 1 @confirm-fired) "confirm ran against the pre-export registry")
-    (is (zero? @x-fired) "X must not own confirm's old id")
+    (is (zero? @x-fired) "X must not run during the same-generation batch")
     (let [gen2 (runtime/export-tree tree)
-          new-table (exported-table gen2)]
-      (is (= "X" (get-in gen2 [:children 0 :text])))
-      (is (= id-confirm (:on-change new-table))
-          "after a render, confirm's old id is reused by a different function")
-      (runtime/invoke-callback! id-confirm "ada")
+          new-table (exported-table gen2)
+          x-id (get-in gen2 [:children 1 :on-click])]
+      (is (= "pad" (get-in gen2 [:children 0 :text])))
+      (is (= "X" (get-in gen2 [:children 1 :text])))
+      (is (= id-confirm x-id)
+          "after a render, confirm's old id is X, not the table")
+      (is (not= id-confirm (:on-confirm new-table)))
+      (runtime/invoke-callback! id-confirm)
+      (is (= 1 @x-fired) "stale confirm id now invokes X")
       (is (= 1 @confirm-fired) "stale confirm id no longer invokes confirm"))))
 
 (deftest table-empty-batch-is-ok
@@ -326,6 +333,21 @@
     (is (:ok (runtime/invoke-callback-batch!
               [{:id (:on-change table) :value "grace"}])))
     (is (= [[:change :grace]] @log))))
+
+(deftest table-double-click-alias-batches-with-on-change
+  (runtime/reset-callbacks!)
+  (let [log (atom [])
+        table (exported-table
+               (runtime/export-tree
+                (ui/table {:columns [{:id :n :label "N"}]
+                           :rows [{:id :ada :cells ["Ada"]}]
+                           :on-change #(swap! log conj [:change %])
+                           :on-double-click #(swap! log conj [:dbl %])})))]
+    (is (nil? (:on-confirm table)))
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id (:on-change table) :value "ada"}
+               {:id (:on-double-click table) :value "ada"}])))
+    (is (= [[:change :ada] [:dbl :ada]] @log))))
 
 (deftest table-confirm-only-still-fires
   (runtime/reset-callbacks!)
@@ -361,6 +383,7 @@
         tree (fn []
                (swap! exports inc)
                (ui/vstack
+                (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" (fn [] :x)))
                 (ui/table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]

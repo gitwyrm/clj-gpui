@@ -130,38 +130,41 @@ pub fn table_activation_calls(
 /// Crate order in `TableState::on_row_left_click`:
 /// `set_selected_row` (always `cx.emit(SelectRow)` then `cx.notify()`),
 /// then if `click_count() == 2`, `cx.emit(DoubleClickedRow)`.
-/// `Context::emit` queues `Effect::Emit`. A count-1 click is only
-/// `SelectRow`. A count-2 click is `SelectRow` then `DoubleClickedRow`
-/// from that same call. The host records the select and flushes a lone
-/// `:on-change` on the **next GPUI frame** so a same-click
-/// `DoubleClickedRow` can consume it first and send one
-/// `:on-change` + `:on-confirm` batch. No timers or debounce windows.
+/// `Context::emit` only queues `Effect::Emit`; subscribers run later in
+/// `flush_effects` FIFO. After that call returns the queue is:
+/// `Emit(SelectRow)`, `Notify`, then maybe `Emit(DoubleClickedRow)`.
+///
+/// The host records the select and schedules `Effect::Defer` (`cx.defer_in`)
+/// to flush a lone `:on-change`. Defer is pushed behind those already-queued
+/// emits, so a same-click `DoubleClickedRow` runs first, consumes the
+/// pending row, and sends one `:on-change` + `:on-confirm` batch. A
+/// count-1 click has no second emit; the deferred flush sends `:on-change`.
+/// No timers, sleeps, or debounce windows.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TableClickCoalesce {
     pending_row: Option<usize>,
-    frame_flush_scheduled: bool,
+    flush_scheduled: bool,
 }
 
 impl TableClickCoalesce {
-    /// Returns whether the caller should schedule a next-frame
-    /// single-select flush. `false` when suppressed or a frame flush
-    /// is already pending for this table.
+    /// Returns whether the caller should schedule a deferred single-select
+    /// flush. `false` when suppressed or a flush is already pending.
     pub fn on_select_row(&mut self, row_ix: usize, suppress: bool) -> bool {
         if suppress {
             self.pending_row = None;
             return false;
         }
         self.pending_row = Some(row_ix);
-        if self.frame_flush_scheduled {
+        if self.flush_scheduled {
             return false;
         }
-        self.frame_flush_scheduled = true;
+        self.flush_scheduled = true;
         true
     }
 
     /// `true` when `SelectRow` for this row is already pending, so the
     /// activation batch should include `:on-change`. Consumes the pending
-    /// row so a next-frame single-select flush is a no-op. A double-click
+    /// row so the deferred single-select flush is a no-op. A double-click
     /// for a different row leaves the pending select in place.
     pub fn on_double_clicked_row(&mut self, row_ix: usize) -> bool {
         if self.pending_row == Some(row_ix) {
@@ -173,7 +176,7 @@ impl TableClickCoalesce {
     }
 
     pub fn take_pending_select(&mut self) -> Option<usize> {
-        self.frame_flush_scheduled = false;
+        self.flush_scheduled = false;
         self.pending_row.take()
     }
 }
@@ -821,9 +824,9 @@ mod tests {
             "mismatched DoubleClickedRow must not drop the pending select"
         );
 
-        // A Defer that runs before DoubleClickedRow splits one native
-        // click into two cmds (the generation-crossing bug). Nested
-        // defer lets DoubleClickedRow consume first.
+        // A flush that runs before DoubleClickedRow splits one native
+        // click into two cmds (the generation-crossing bug). Defer is
+        // queued behind the already-pushed DoubleClickedRow emit.
         let mut premature = TableClickCoalesce::default();
         assert!(premature.on_select_row(0, false));
         assert_eq!(premature.take_pending_select(), Some(0));
@@ -835,10 +838,14 @@ mod tests {
         assert!(scheduled.on_select_row(0, false));
         assert!(
             !scheduled.on_select_row(0, false),
-            "second SelectRow before the frame flush must not stack another callback"
+            "second SelectRow before the deferred flush must not stack another callback"
         );
         assert!(scheduled.on_double_clicked_row(0));
         assert!(scheduled.take_pending_select().is_none());
+        assert!(
+            scheduled.on_select_row(1, false),
+            "deferred flush must clear the schedule so a later click can fire"
+        );
 
         let (tx, rx) = std::sync::mpsc::channel();
         send_callbacks(

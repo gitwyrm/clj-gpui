@@ -116,8 +116,8 @@ struct TableSlot {
     on_change: Option<String>,
     on_confirm: Option<String>,
     suppress_select: bool,
-    /// SelectRow from this effect cycle, flushed unless DoubleClickedRow
-    /// consumes it for a same-event activation batch.
+    /// SelectRow from this effect cycle, flushed by Defer unless
+    /// DoubleClickedRow consumes it for a same-click activation batch.
     coalesce: protocol::TableClickCoalesce,
 }
 
@@ -1601,14 +1601,19 @@ impl RootView {
                         .tables
                         .get(&key_owned)
                         .is_some_and(|s| s.suppress_select);
-                    let defer = this
+                    let schedule = this
                         .tables
                         .get_mut(&key_owned)
                         .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
-                    if !defer {
+                    if !schedule {
                         return;
                     }
-                    Self::schedule_pending_table_select_flush(window, cx, key_owned.clone());
+                    // End of this effect cycle: after already-queued
+                    // DoubleClickedRow, or as the lone count-1 :on-change.
+                    let key = key_owned.clone();
+                    cx.defer_in(window, move |this, _, cx| {
+                        this.flush_pending_table_select(&key, cx);
+                    });
                 }
                 TableEvent::DoubleClickedRow(ix) => {
                     let include_change = this
@@ -1669,35 +1674,27 @@ impl RootView {
     }
 
     /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
-    /// not follow from the same `on_row_left_click`.
-    ///
-    /// A trailing `Defer` can still run before `DoubleClickedRow` if
-    /// `SelectRow` is flushed before that second emit is queued. The
-    /// next platform frame runs after the click's `on_row_left_click`
-    /// has finished, so a same-click `DoubleClickedRow` consumes the
-    /// pending row first. Count-1 `:on-change` is one frame later; that
-    /// is a GPUI frame boundary, not a timer.
-    fn schedule_pending_table_select_flush(window: &Window, cx: &mut Context<Self>, key: String) {
-        let entity = cx.entity();
-        window.on_next_frame(move |_, app| {
-            let _ = entity.update(app, |this, cx| {
-                this.flush_pending_table_select(&key, cx);
-            });
-        });
-    }
-
+    /// not follow from the same `on_row_left_click`. Always consume the
+    /// pending row so a change-less table cannot leave a stuck flush.
     fn flush_pending_table_select(&mut self, key: &str, cx: &App) {
-        let Some((callback, state, ix)) = self.tables.get_mut(key).and_then(|slot| {
-            let ix = slot.coalesce.take_pending_select()?;
-            let callback = slot.on_change.clone()?;
-            Some((callback, slot.state.clone(), ix))
-        }) else {
+        let Some(slot) = self.tables.get_mut(key) else {
+            return;
+        };
+        let Some(ix) = slot.coalesce.take_pending_select() else {
+            return;
+        };
+        let callback = slot.on_change.clone();
+        let state = slot.state.clone();
+        let Some(callback) = callback else {
             return;
         };
         let Some(row_id) = state.read(cx).delegate().id_at(ix) else {
             return;
         };
-        self.emit_value(callback, json!(row_id));
+        protocol::send_callbacks(
+            &self.cmd_tx,
+            protocol::table_activation_calls(Some(callback), None, row_id),
+        );
     }
 
     fn render_tree(
