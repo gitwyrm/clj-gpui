@@ -181,37 +181,62 @@ impl TableClickCoalesce {
     }
 }
 
-/// Coalesce `InputEvent::Change` from one GPUI effect flush.
+/// Coalesce `InputEvent::Change` across one GPUI effect flush **and**
+/// across the Clojure callback round-trip.
 ///
 /// gpui-component `InputState::undo` / `redo` applies every history item
 /// in a version group, and each `replace_text_in_range` emits `Change`.
-/// `Context::emit` queues `Effect::Emit`; subscribers run FIFO. Sending
-/// one `Cmd::Callback` per emit lets the bridge `export-tree` after the
+/// Fast typing does the same across consecutive frames. Sending one
+/// `Cmd::Callback` per emit lets the bridge `export-tree` after the
 /// first, so later callbacks are unknown ids (`cb-N` is monotonic).
 ///
-/// Record the latest value and schedule one deferred flush behind those
-/// already-queued Change emits. The flush sends one `:on-change` with
-/// the final string. Same pattern as `TableClickCoalesce`.
+/// Record the latest value, schedule at most one deferred flush, and
+/// after that send stay `in_flight` until the next tree assigns a new
+/// `:on-change` id. Further edits only update `pending`; the refreshed
+/// id flushes the final string. Same idea as `TableClickCoalesce`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct InputChangeCoalesce {
     pending: Option<String>,
     flush_scheduled: bool,
+    in_flight: bool,
 }
 
 impl InputChangeCoalesce {
     /// Returns whether the caller should schedule a deferred flush.
     pub fn on_change(&mut self, value: String) -> bool {
         self.pending = Some(value);
-        if self.flush_scheduled {
+        if self.flush_scheduled || self.in_flight {
             return false;
         }
         self.flush_scheduled = true;
         true
     }
 
+    /// Take the value to send. Marks the slot in-flight so another
+    /// callback is not scheduled until `on_ids_refreshed`.
     pub fn take_pending(&mut self) -> Option<String> {
         self.flush_scheduled = false;
-        self.pending.take()
+        let value = self.pending.take()?;
+        self.in_flight = true;
+        Some(value)
+    }
+
+    /// New export assigned a fresh `:on-change` id. Returns whether to
+    /// schedule a flush for edits that arrived during the round-trip.
+    pub fn on_ids_refreshed(&mut self) -> bool {
+        self.in_flight = false;
+        if self.pending.is_some() && !self.flush_scheduled {
+            self.flush_scheduled = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.pending = None;
+        self.flush_scheduled = false;
+        self.in_flight = false;
     }
 }
 
@@ -993,10 +1018,36 @@ mod tests {
         assert_eq!(c.take_pending(), Some("".into()));
         assert!(c.take_pending().is_none());
         assert!(
-            c.on_change("x".into()),
-            "after flush a later Change can schedule again"
+            !c.on_change("x".into()),
+            "after send, further Changes wait for a new callback id"
+        );
+        assert!(
+            c.on_ids_refreshed(),
+            "tree apply with leftover text schedules one flush on the new id"
         );
         assert_eq!(c.take_pending(), Some("x".into()));
+        assert!(
+            !c.on_ids_refreshed(),
+            "a tree with no pending edits must not emit again"
+        );
+        assert!(
+            c.on_change("y".into()),
+            "after ids refresh with no leftover, a later Change can schedule"
+        );
+        assert_eq!(c.take_pending(), Some("y".into()));
+    }
+
+    #[test]
+    fn input_change_coalesce_clear_unsticks_in_flight() {
+        let mut c = InputChangeCoalesce::default();
+        assert!(c.on_change("a".into()));
+        assert_eq!(c.take_pending(), Some("a".into()));
+        c.clear();
+        assert!(
+            c.on_change("b".into()),
+            "clear drops in-flight so a new edit can flush"
+        );
+        assert_eq!(c.take_pending(), Some("b".into()));
     }
 
     #[test]

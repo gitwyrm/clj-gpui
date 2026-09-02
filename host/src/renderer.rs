@@ -78,7 +78,8 @@ struct InputSlot {
     number_max: Option<f32>,
     number_step: Option<f32>,
     number_stepped: bool,
-    /// Undo/redo groups emit several Change events; flush once. See
+    /// Undo/redo groups and fast typing emit several Change events;
+    /// flush once per callback-id generation. See
     /// `protocol::InputChangeCoalesce`.
     change: protocol::InputChangeCoalesce,
 }
@@ -358,6 +359,10 @@ impl RootView {
                             for slot in view.inputs.values_mut() {
                                 slot.wait_for_seq = None;
                                 slot.submitted = None;
+                                slot.change.clear();
+                            }
+                            for slot in view.editors.values_mut() {
+                                slot.change.clear();
                             }
                             view.error = Some(err);
                         }
@@ -592,21 +597,24 @@ impl RootView {
             return;
         };
         if slot.wait_for_seq.is_some() {
-            let _ = slot.change.take_pending();
+            slot.change.clear();
             return;
         }
         let Some(value) = slot.change.take_pending() else {
             return;
         };
         if slot.submitted.as_ref() == Some(&value) {
+            slot.change.clear();
             return;
         }
         slot.submitted = None;
         let Some(id) = slot.on_change.clone() else {
+            slot.change.clear();
             return;
         };
         let payload = if slot.as_number {
             let Some(n) = extra::number_from_input(&value) else {
+                slot.change.clear();
                 return;
             };
             json!(n)
@@ -626,10 +634,12 @@ impl RootView {
         self.used_inputs.insert(key.to_string());
 
         if let Some(slot) = self.inputs.get_mut(key) {
+            let id_changed = slot.on_change != node.on_change;
             slot.on_change = node.on_change.clone();
             slot.on_submit = node.on_submit.clone();
             slot.on_blur = node.on_blur.clone();
             slot.on_escape = node.on_escape.clone();
+            let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
             let force = matches!(
                 (slot.wait_for_seq, self.tree_seq),
@@ -654,6 +664,9 @@ impl RootView {
             }
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
                 state.read(cx).focus_handle(cx).focus(window);
+            }
+            if refresh {
+                Self::schedule_input_change_flush(key.to_string(), false, window, cx);
             }
             return state;
         }
@@ -2553,10 +2566,12 @@ impl RootView {
         let language = extra::editor_language(node);
         let wanted = node.text.clone().unwrap_or_default();
         if let Some(slot) = self.editors.get_mut(key) {
+            let id_changed = slot.on_change != node.on_change;
             slot.on_change = node.on_change.clone();
             slot.on_submit = node.on_submit.clone();
             slot.on_blur = node.on_blur.clone();
             slot.on_escape = node.on_escape.clone();
+            let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let current = state.read(cx).value().to_string();
@@ -2565,6 +2580,9 @@ impl RootView {
             }
             let lang = language.clone();
             state.update(cx, |input, cx| input.set_highlighter(lang, cx));
+            if refresh {
+                Self::schedule_input_change_flush(key.to_string(), true, window, cx);
+            }
             return state;
         }
         let placeholder = node.placeholder.clone().unwrap_or_default();
