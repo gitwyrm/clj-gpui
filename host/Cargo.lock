@@ -888,7 +888,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "image",
- "objc",
+ "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "raw-window-handle",

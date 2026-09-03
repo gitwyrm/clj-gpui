@@ -7,9 +7,12 @@
 //! `kCGWindowListOptionIncludingWindow` from the window server backing
 //! store instead, using the NSWindow's `windowNumber`.
 
+// CGWindowListCreateImage is deprecated in favor of ScreenCaptureKit; it is
+// still the occlusion-friendly backing-store read on current GPUI macOS SDKs.
+#![allow(deprecated)]
+
 use image::RgbaImage;
-#[allow(unused_imports)]
-use objc::{msg_send, sel, sel_impl};
+use objc2_app_kit::NSView;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDataProvider, CGImage, CGWindowID, CGWindowImageOption, CGWindowListCreateImage,
@@ -41,21 +44,11 @@ pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
         return None;
     };
-    unsafe {
-        let view: *mut objc::runtime::Object = appkit.ns_view.as_ptr().cast();
-        if view.is_null() {
-            return None;
-        }
-        let ns_window: *mut objc::runtime::Object = msg_send![view, window];
-        if ns_window.is_null() {
-            return None;
-        }
-        let number: isize = msg_send![ns_window, windowNumber];
-        (number > 0).then_some(number as u32)
-    }
+    let view = unsafe { appkit.ns_view.cast::<NSView>().as_ref() };
+    let number = view.window()?.windowNumber();
+    (number > 0).then_some(number as u32)
 }
 
-#[allow(deprecated)]
 pub fn capture_window_id(window_id: u32) -> Option<RgbaImage> {
     let cg_image = CGWindowListCreateImage(
         cg_rect_null(),
