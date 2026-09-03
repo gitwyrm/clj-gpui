@@ -1,10 +1,12 @@
 # clj-gpui
 
+[![CI](https://github.com/gitwyrm/clj-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/gitwyrm/clj-gpui/actions/workflows/ci.yml)
+
 A library for writing **native GPUI applications in real Clojure**.
 
 This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [gpui-component](https://crates.io/crates/gpui-component) widgets.
 
-There is no Clojars release and no CI yet. Depend on this repo with `:local/root` or a git SHA.
+There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (host tests, Clojure tests, cljfmt, windowless protocol-test).
 
 ## Quick start
 
@@ -28,6 +30,9 @@ clojure -M:cljfmt fix
 
 # End-to-end bridge test without opening a window
 clojure -M:protocol-test
+
+# All of the above plus host `cargo test` (what GitHub Actions runs)
+./scripts/ci.sh
 
 # Example native window (plain counter)
 cd examples/counter && clj -M:dev

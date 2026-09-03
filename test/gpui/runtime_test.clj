@@ -25,6 +25,21 @@
     (require 'gpui.reload-probe.app :reload)
     (catch Exception _)))
 
+(defn- request-render-on-wire?
+  [buf]
+  (str/includes? (str buf) "request-render"))
+
+(defn- wait-for-request-render
+  "schedule-render! debounce is 16ms on a future; GHA macOS can start that
+  later than a fixed Thread/sleep."
+  [buf timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond
+        (request-render-on-wire? buf) true
+        (>= (System/currentTimeMillis) deadline) false
+        :else (do (Thread/sleep 5) (recur))))))
+
 (deftest require-reload-on-root-does-not-reload-deps
   (restore-probe!)
   (require 'gpui.reload-probe.app :reload)
@@ -124,8 +139,7 @@
     (try
       (testing "swap! outside a host callback still requests a render"
         (swap! !state update :n inc)
-        (Thread/sleep 40)
-        (is (str/includes? (str buf) "request-render")))
+        (is (wait-for-request-render buf 2000)))
       (let [before (str buf)
             exported (runtime/export-tree
                       (fn []
@@ -430,10 +444,6 @@
         (runtime/reset-callbacks!)
         (runtime/bind-connection! nil)))))
 
-(defn- request-render-on-wire?
-  [buf]
-  (str/includes? (str buf) "request-render"))
-
 (deftest host-style-batch-does-not-export-between-items
   (let [buf (java.io.StringWriter.)
         exports (atom 0)
@@ -511,8 +521,7 @@
         (is (false? (request-render-on-wire? buf))
             "callback-depth covers the single RPC; host still fetches the tree")
         (swap! !n inc)
-        (Thread/sleep 40)
-        (is (request-render-on-wire? buf)
+        (is (wait-for-request-render buf 2000)
             "a later atom watch is not stuck behind a leftover batch hold"))
       (finally
         (runtime/reset-callbacks!)
