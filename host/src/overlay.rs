@@ -11,7 +11,7 @@ use gpui::{
     App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
-    Disableable as _,
+    Disableable as _, Icon, IconName,
     button::{Button, ButtonVariants as _},
     dialog::{AlertDialog, DialogButtonProps},
     h_flex,
@@ -352,6 +352,13 @@ pub fn static_child_path(prefix: &str, index: usize) -> String {
     format!("{prefix}/{index}")
 }
 
+/// Paint a chart label node without overlay padding or min-width.
+/// Clicks are ignored (radar spoke labels are not action hosts).
+pub fn paint_chart_label(node: &Node, path: &str) -> gpui::AnyElement {
+    let emit: ActionEmitter = Rc::new(|_, _| {});
+    paint_static_node(node, path, emit)
+}
+
 /// Relative path under a `paint_static` prefix (`0`, `0/1`, …).
 fn static_rel<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     path.strip_prefix(prefix)?
@@ -451,6 +458,11 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
             }))
             .into_any_element(),
         "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
+        "icon" => {
+            let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");
+            let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+            Icon::new(icon).into_any_element()
+        }
         _ => div()
             .id(SharedString::from(path.to_string()))
             .child(node.text.clone().unwrap_or_default())

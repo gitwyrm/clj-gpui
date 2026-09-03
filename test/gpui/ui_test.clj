@@ -736,6 +736,40 @@
       (is (= 55 (get-in n [:links 0 :value])))
       (is (= "left" (:node-align n)))
       (is (= "sqrt" (:value-scale n))))
+    (let [n (ui/chart :bar [{:id :a :label "A" :value 1}]
+                      {:name "Size"
+                       :tick-margin 0
+                       :fill-gradient true
+                       :fill-gradient-mode :chart
+                       :corner-radii 4
+                       :stroke-style :linear})]
+      (is (= "Size" (:name n)))
+      (is (= 0 (:tick-margin n)))
+      (is (true? (:fill-gradient n)))
+      (is (= "chart" (:fill-gradient-mode n)))
+      (is (= 4 (:corner-radii n)))
+      (is (= "linear" (:stroke-style n))))
+    (let [n (ui/area-chart [{:id :mon :label "Mon" :values [4 8]}]
+                           {:series [{:id :desk :label "Desktop" :fill "#3366ff"
+                                      :stroke-style :step-after}
+                                     {:id :mob :label "Mobile"}]})]
+      (is (= "area" (:variant n)))
+      (is (= [4 8] (get-in n [:items 0 :values])))
+      (is (= "#3366ff" (get-in n [:series 0 :fill])))
+      (is (= "step-after" (get-in n [:series 0 :stroke-style]))))
+    (let [n (ui/pie-chart [{:id :a :label "A" :value 2}]
+                          {:inner-radius 40 :labels true :pad-angle 0.04})]
+      (is (= 40 (:inner-radius n)))
+      (is (true? (:labels n)))
+      (is (= 0.04 (:pad-angle n))))
+    (let [n (ui/sankey-chart [{:id :rev :label "Revenue"
+                               :label-lines [{:text "Rev" :font-size 11}]}]
+                             {:links [{:source :rev :target :cost :value 1}]
+                              :node-width 14
+                              :node-label false})]
+      (is (= 14 (:node-width n)))
+      (is (false? (:node-label n)))
+      (is (= "Rev" (get-in n [:items 0 :label-lines 0 :text]))))
     (is (= :markdown (:type (ui/markdown "# Hi"))))
     (is (= :html (:type (ui/html "<p>x</p>"))))
     (let [n (ui/sidebar [{:id :home :label "Home" :icon :check}]

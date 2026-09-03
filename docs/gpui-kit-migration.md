@@ -413,7 +413,7 @@ If a Kit default changes visible behavior (alert dialogs ignoring backdrop click
 
 ### Phase 5 — remaining Kit widgets (separate PR, after the migration)
 
-Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module. This is the follow-up PR (protocol 9). Extra chart kinds shipped as protocol 10 (`ui/horizontal-bar-chart`, radar, candlestick, sankey). `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module. This is the follow-up PR (protocol 9). Extra chart kinds shipped as protocol 10 (`ui/horizontal-bar-chart`, radar, candlestick, sankey), then the same protocol version opened the rest of Kit 0.6 chart builders on `ui/chart`. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ## 9. Testing plan (when we implement)
 
