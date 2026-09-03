@@ -1,22 +1,22 @@
 //! Capture this process's GPUI window, including when Evalight covers it.
 //!
-//! A helper process is a different PID. On recent macOS, `CGWindowListCreateImage`
-//! from another process can snapshot an on-screen window (side-by-side) and
-//! still return empty once that window is occluded. Capture therefore runs
-//! in-process: ScreenCaptureKit's desktop-independent window filter first,
-//! then CoreGraphics `CGWindowListCreateImageFromArray` of only our window.
+//! Two separate jobs:
 //!
-//! GPUI 0.2.2 also **stops painting** when AppKit reports the window occluded
-//! ([zed#63217](https://github.com/zed-industries/zed/issues/63217)):
-//! `start_display_link` returns early unless `occlusionState` contains
-//! `NSWindowOcclusionStateVisible`, and `windowDidChangeOcclusionState:` stops
-//! the CVDisplayLink when that bit is clear. Zed's later
+//! 1. Keep GPUI painting. 0.2.2 stops the CVDisplayLink unless
+//!    `NSWindowOcclusionStateVisible` is set
+//!    ([zed#63217](https://github.com/zed-industries/zed/issues/63217)).
+//!    Override `-[GPUIWindow occlusionState]` (and `GPUIPanel`, not
+//!    `NSWindow`) so the display link keeps presenting.
+//! 2. Read those pixels in-process with ScreenCaptureKit's
+//!    desktop-independent window filter. A helper is a different PID;
+//!    recent macOS will not give that process an occluded window.
+//!    `CGWindowListCreateImage` is a fallback if ScreenCaptureKit is
+//!    missing or refuses.
+//!
 //! `WindowOptions::inactive_frame_interval`
-//! ([zed#62628](https://github.com/zed-industries/zed/pull/62628)) is unrelated:
-//! it only throttles animation while unfocused, is not in crates.io `gpui`
-//! 0.2.2, and does not keep the display link running while covered.
-//! This module overrides `-[GPUIWindow occlusionState]` (and `GPUIPanel`) so
-//! GPUI keeps presenting into the Metal layer that ScreenCaptureKit reads.
+//! ([zed#62628](https://github.com/zed-industries/zed/pull/62628)) is not in
+//! 0.2.2 and only throttles unfocused animation. It does not keep the
+//! display link running while covered.
 
 #![allow(deprecated)] // CGWindowListCreateImage*; ScreenCaptureKit is preferred.
 
@@ -32,10 +32,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
 use objc2::{msg_send, sel, AnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::NSView;
-use objc2_core_foundation::{CFArray, CFNumber, CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDataProvider, CGImage, CGWindowID, CGWindowImageOption, CGWindowListCreateImage,
-    CGWindowListCreateImageFromArray, CGWindowListOption,
+    CGWindowListOption,
 };
 use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
@@ -159,27 +159,16 @@ fn kick_gpui_windows_to_paint() {
 /// not the window owner, so occluded snapshots are rejected.
 pub fn capture_this_process(window_id: Option<u32>) -> Option<RgbaImage> {
     let window_id = window_id.filter(|id| *id > 0);
-    capture_sck(window_id)
-        .or_else(|| window_id.and_then(capture_from_array))
-        .or_else(|| window_id.and_then(capture_window_id))
+    capture_sck(window_id).or_else(|| window_id.and_then(capture_window_id))
 }
 
-pub fn capture_window_id(window_id: u32) -> Option<RgbaImage> {
+fn capture_window_id(window_id: u32) -> Option<RgbaImage> {
     let cg_image = CGWindowListCreateImage(
         cg_rect_null(),
         CGWindowListOption::OptionIncludingWindow,
         window_id as CGWindowID,
         IMAGE_OPTIONS,
     );
-    cg_image_to_rgba(cg_image.as_deref())
-}
-
-fn capture_from_array(window_id: u32) -> Option<RgbaImage> {
-    let id = CFNumber::new_i32(window_id as i32);
-    let array = CFArray::from_retained_objects(&[id]);
-    let array: CFRetained<CFArray> = unsafe { CFRetained::cast_unchecked(array) };
-    let cg_image =
-        unsafe { CGWindowListCreateImageFromArray(cg_rect_null(), &array, IMAGE_OPTIONS) };
     cg_image_to_rgba(cg_image.as_deref())
 }
 

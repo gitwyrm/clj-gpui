@@ -60,13 +60,13 @@ Ask the host for a PNG of the current native window. Clojure waits on the matchi
 {"op":"capture-preview","request-id":"cap-1"}
 ```
 
-The host does **not** read the GPUI framebuffer. Capture runs on a background thread after dirtying the window. GPUI 0.2.2 stops its macOS CVDisplayLink unless `NSWindowOcclusionStateVisible` is set ([zed#63217](https://github.com/zed-industries/zed/issues/63217)), so a window covered by Evalight would otherwise never present and ScreenCaptureKit would read an empty backing store. Waiting for `on_next_frame` used to hang for the same reason. The host overrides `-[GPUIWindow occlusionState]` (not global `NSWindow`) so the display link keeps running; it then `notify`s the root view so an unfocused window still `present`s.
+The host does **not** read the GPUI framebuffer. Capture runs on a background thread after dirtying the window. GPUI 0.2.2 stops its macOS CVDisplayLink unless `NSWindowOcclusionStateVisible` is set ([zed#63217](https://github.com/zed-industries/zed/issues/63217)), so a window covered by Evalight would otherwise never present. The host overrides `-[GPUIWindow occlusionState]` (not global `NSWindow`) so the display link keeps running, then ScreenCaptureKit-reads the window in-process.
 
-`WindowOptions::inactive_frame_interval` from [zed#62628](https://github.com/zed-industries/zed/pull/62628) is not in crates.io `gpui` 0.2.2 and only throttles animation while unfocused. Inactive is not the same as occluded; that field would not keep the display link alive under Evalight.
+`WindowOptions::inactive_frame_interval` from [zed#62628](https://github.com/zed-industries/zed/pull/62628) is not in crates.io `gpui` 0.2.2 and only throttles animation while unfocused. Inactive is not the same as occluded.
 
 Linux and Windows spawn a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) and [xcap](https://crates.io/crates/xcap). A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked.
 
-macOS captures **in-process**. A helper has a different PID, and recent macOS will snapshot a visible foreign window while returning empty once that window is covered. The host uses ScreenCaptureKit `SCContentFilter(desktopIndependentWindow:)` for our own window, then `CGWindowListCreateImageFromArray` of that `windowNumber`.
+macOS captures **in-process** with ScreenCaptureKit `SCContentFilter(desktopIndependentWindow:)`. A helper has a different PID and cannot snapshot a covered window. `CGWindowListCreateImage` is a fallback if ScreenCaptureKit is unavailable.
 
 No window, minimized, headless, or a Wayland portal refusal is an omitted `png` field (`nil` in Clojure). The helper must not print the image anywhere except its stdout. The UI-tree schema is unchanged from v6.
 

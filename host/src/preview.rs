@@ -1,7 +1,8 @@
 //! Snapshot the live native window for Evalight's Preview pane.
 //!
-//! GPUI does not expose framebuffer readback. Linux and Windows spawn this
-//! same binary as a helper (PID B):
+//! GPUI does not expose framebuffer readback.
+//!
+//! **Linux/Windows:** spawn this same binary as a helper (PID B):
 //!
 //! ```text
 //! clj-gpui --capture-preview --pid <host-pid> [--title <window-title>] [--wid <id>]
@@ -13,14 +14,9 @@
 //! the GPUI message loop. The parent waits on a background thread, never the
 //! UI thread, because Windows capture may `PrintWindow` the host.
 //!
-//! macOS captures in-process. A helper is a different PID, and recent macOS
-//! will snapshot a visible window from that process while refusing the same
-//! window once Evalight covers it. ScreenCaptureKit's desktop-independent
-//! window filter reads our own window's backing store. GPUI 0.2.2 stops its
-//! display link while occluded (zed#63217); this host overrides
-//! `GPUIWindow`'s `occlusionState` so painting continues. Zed's
-//! `inactive_frame_interval` (zed#62628) is not in 0.2.2 and does not
-//! control occlusion.
+//! **macOS:** capture in-process. Keep GPUI's display link running while
+//! occluded (zed#63217), then ScreenCaptureKit-read the window. A helper is a
+//! different PID and cannot snapshot a covered window.
 //!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
@@ -194,24 +190,25 @@ fn capture_pid(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(target_os = "macos")]
         {
-            if let Some(image) = preview_macos::capture_this_process(window_id) {
-                return rgba_to_png(&image);
-            }
+            let _ = (pid, title);
+            return preview_macos::capture_this_process(window_id)
+                .and_then(|image| rgba_to_png(&image));
         }
         #[cfg(not(target_os = "macos"))]
         {
             let _ = window_id;
+            if pid == 0 {
+                return None;
+            }
+            let window = select_window(pid, title)?;
+            let image = window.capture_image().ok()?;
+            rgba_to_png(&image)
         }
-        if pid == 0 {
-            return None;
-        }
-        let window = select_window(pid, title)?;
-        let image = window.capture_image().ok()?;
-        rgba_to_png(&image)
     }));
     result.ok().flatten()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn select_window(pid: u32, title: Option<&str>) -> Option<xcap::Window> {
     let windows = xcap::Window::all().ok()?;
     windows
@@ -224,13 +221,11 @@ fn select_window(pid: u32, title: Option<&str>) -> Option<xcap::Window> {
         .map(|(_, window)| window)
 }
 
+#[cfg(not(target_os = "macos"))]
 fn window_rank(window: &xcap::Window, pid: u32, title: Option<&str>) -> Option<(u8, u64)> {
     if window.pid().ok()? != pid {
         return None;
     }
-    // xcap's macOS is_minimized is `!kCGWindowIsOnscreen`, which is also true
-    // for occluded / other-Space windows. Skip that filter there.
-    #[cfg(not(target_os = "macos"))]
     if window.is_minimized().ok()? {
         return None;
     }
