@@ -427,9 +427,9 @@ Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **
 | Counter / TodoMVC | existing examples | 3 |
 | Preview | `gpui.runtime/preview-png` after connect | 3 |
 
-Do not add GitHub Actions in the migration PR. Run the host and Clojure commands above on the implementation branch before review. The Cloud Agent environment for this repo is meant to have the Linux pieces those commands need (`libdbus-1-dev`, Mesa lavapipe, `libstdc++` for clang's selected GCC, Clojure CLI).
+GitHub Actions on Ubuntu and macOS already covers the first four rows (`./scripts/ci.sh`; see the CI PR if it is not on `main` yet). The migration PR should stay green there. Do not add a second workflow in the Kit bump. Gallery, themes, examples, and `preview-png` stay manual: they need a real window.
 
-Baseline on the current 0.5.1 host (2026-09-03, this agent): `cargo test --locked --manifest-path host/Cargo.toml` — 116 passed; `clojure -M:test` — 103 tests / 626 assertions; `clojure -M:cljfmt check`; `clojure -M:protocol-test` with a debug `host/target/debug/clj-gpui`. A first `cargo test` after a cold crates.io fetch is on the order of two minutes of compile once D-Bus and libstdc++ are installed; the linker fails with `unable to find library -lstdc++` if `cc` is clang and the GCC install it selects has no `libstdc++-N-dev`.
+Baseline on the current 0.5.1 host (2026-09-03): `cargo test --locked --manifest-path host/Cargo.toml` — 116 passed; `clojure -M:test` — 103 tests / 626 assertions; `clojure -M:cljfmt check`; `clojure -M:protocol-test` with a debug `host/target/debug/clj-gpui`. A first `cargo test` after a cold crates.io fetch is on the order of two minutes of compile once D-Bus and libstdc++ are installed; the linker fails with `unable to find library -lstdc++` if `cc` is clang and the GCC install it selects has no `libstdc++-N-dev`.
 
 Browser verification does not apply (native GPUI, not a web app). Closest substitute is the widget gallery + protocol-test.
 
@@ -463,7 +463,7 @@ Locked before implementation:
 ## 12. What this plan PR will not do
 
 - Implement the crate bump or the name remap (this PR is still the plan).
-- Publish to Clojars or add CI.
+- Publish to Clojars or upload prebuilt host binaries (CI tests now; `--release` artifacts are a later tag workflow).
 - Take a git dependency on Kit `main`.
 - Introduce `gpui-shell` or WebView.
 - Keep `ui/text-field`, `ui/divider`, or a DataTable-backed `ui/table` "for compatibility."
