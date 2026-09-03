@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **8**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **9**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **8**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":8,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":9,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -72,7 +72,9 @@ No window, minimized, headless, native Wayland (this xcap path), or a missing ma
 
 v7 added this capture pair. A v6 host ignores `capture-preview`, so the version must match exactly.
 
-v8 is the GPUI Kit 0.6 rename: `text-field` → `input`, `divider` → `separator`, `table` → `data-table`, plus `textarea` and `alert-dialog`. A v7 host would paint “Unknown GPUI node” for those types. `table` is unused (reserved for a later declarative Table). Editor is Kit `EditorState`, not `InputState::code_editor`.
+v8 is the GPUI Kit 0.6 rename: `text-field` → `input`, `divider` → `separator`, `table` → `data-table`, plus `textarea` and `alert-dialog`. Editor is Kit `EditorState`, not `InputState::code_editor`.
+
+v9 adds Kit's remaining first-pass widgets: declarative `table`, `combobox`, `rating`, `stepper`, and the `gpui-fps` HUD on `:chrome :dev`.
 
 ## Host → Clojure ops
 
@@ -161,36 +163,36 @@ From a running `clj -M:dev` nREPL:
 (gpui.runtime/preview-png)
 ```
 
-## Node schema (version 8)
+## Node schema (version 9)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
 | Field | Type | Used by |
 |---|---|---|
-| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `input`, `textarea`, `switch`, `toggle`, `radio-group`, `slider`, `progress`, `separator`, `spinner`, `tag`, `alert`, `skeleton`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `accordion`, `description-list`, `dialog`, `alert-dialog`, `popover`, `dropdown-menu`, `context-menu`, `list`, `data-table`, `tree`, `sheet`, `notification`, `number-input`, `otp-input`, `color-picker`, `date-picker`, `editor`, `virtual-list`, `chart`, `markdown`, `html`, `sidebar`, `settings`, `dock`, `resizable`) |
-| `id` | string | optional stable identity, especially `input`, `textarea`, `slider`, `select`, `list`, `data-table`, `tree`, `dialog`, `alert-dialog`, `sheet`, `notification`, `editor` |
-| `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input` |
-| `placeholder` | string | `input`, `textarea`, `select`, `date-picker`, `number-input` |
+| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `input`, `textarea`, `switch`, `toggle`, `radio-group`, `slider`, `progress`, `separator`, `spinner`, `tag`, `alert`, `skeleton`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `combobox`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `accordion`, `description-list`, `dialog`, `alert-dialog`, `popover`, `dropdown-menu`, `context-menu`, `list`, `data-table`, `table`, `tree`, `sheet`, `notification`, `number-input`, `otp-input`, `color-picker`, `date-picker`, `editor`, `virtual-list`, `chart`, `markdown`, `html`, `sidebar`, `settings`, `dock`, `resizable`, `rating`, `stepper`) |
+| `id` | string | optional stable identity, especially `input`, `textarea`, `slider`, `select`, `combobox`, `list`, `data-table`, `tree`, `dialog`, `alert-dialog`, `sheet`, `notification`, `editor`, `rating`, `stepper` |
+| `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input`, `table` (caption) |
+| `placeholder` | string | `input`, `textarea`, `select`, `combobox`, `date-picker`, `number-input` |
 | `children` | array of nodes | layouts, `scroll`, `group-box`, `badge`, `dialog`, `popover`, `context-menu`, `sheet`, `resizable` |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,checked,icon,expanded,value,height,side,variant,min,max,step}` | `radio-group`, `select`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Table **columns** are `options`; table **rows** are `items` with `cells`. Chart points use `value`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,height,side,variant,min,max,step}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table and declarative `table` **columns** are `options`; **rows** are `items` with `cells`. Declarative table footer is a last item with `variant: "footer"`. Chart points use `value`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs |
 | `trigger` | node | `popover`, `dropdown-menu` (usually a `button`) |
 | `footer` | node | `sheet` footer |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link`, `notification` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`); `data-table` double-click row (row id) |
-| `on-change` | string callback id | `input`/`textarea`/`editor` (string), `switch`/`toggle` (bool), `slider`/`number-input` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion`/`list`/`data-table`/`tree`/`dropdown-menu`/`context-menu`/`virtual-list`/`sidebar` (wire id; Clojure restores the original id). Accordion `:multiple` sends a JSON array in original item order. `otp-input` string when full. `color-picker` hex or `null`. `date-picker` ISO string or `[start, end]`. `settings` `{"id","value"}`. `resizable` array of px sizes |
+| `on-change` | string callback id | `input`/`textarea`/`editor` (string), `switch`/`toggle` (bool), `slider`/`number-input`/`rating` (number), `select`/`combobox`/`radio-group`/`tabs`/`breadcrumb`/`accordion`/`list`/`data-table`/`tree`/`dropdown-menu`/`context-menu`/`virtual-list`/`sidebar`/`stepper` (wire id; Clojure restores the original id). Accordion / combobox `:multiple` sends a JSON array in original item order. `otp-input` string when full. `color-picker` hex or `null`. `date-picker` ISO string or `[start, end]`. `settings` `{"id","value"}`. `resizable` array of px sizes |
 | `on-submit` | string callback id | `input` (Enter). `textarea`: when set, Enter submits and Shift+Enter inserts a newline (Kit `submit_on_enter`); omitted, both keys insert a newline |
 | `on-blur` | string callback id | `input`, `textarea`, `otp-input`, `editor` (called with the current string) |
 | `on-escape` | string callback id | `input`, `textarea`, `editor` (0-arg) |
 | `on-close` | string callback id | `alert`, `dialog`, `alert-dialog`, `sheet`, `notification` (0-arg) |
 | `on-ok` / `on-cancel` | string callback id | `dialog`, `alert-dialog` (0-arg; crate then closes and fires `on-close`) |
-| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `data-table`: count-1 click is only `on-change` (end of the GPUI effect cycle). Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
+| `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `data-table`: count-1 click is only `on-change` (end of the GPUI effect cycle). Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`). `combobox`: menu closed (same payload as `:on-change`) |
 | `on-open-change` | string callback id | `popover` (boolean); `dialog` / `alert-dialog` / `sheet` (`false` on dismiss) |
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `input`, `textarea`: request keyboard focus |
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
-| `value` | JSON number, string, array, bool, or null | `slider`/`progress`/`number-input` (number), `select`/`radio-group`/`tabs`/`list`/`data-table`/`tree`/`virtual-list`/`sidebar` (selected id or `null` to clear), `accordion` (id, `null`, or array of ids when `multiple`), `otp-input` (string), `color-picker` (hex), `date-picker` (ISO string or `[start, end]`) |
-| `min`, `max`, `step` | number | `slider`, `number-input`. Slider `step` is drag granularity; the host applies Clojure's controlled value even when it is off-step, then clamps to `min`/`max` |
-| `orientation` | string | `radio-group`, `slider`, `separator`, `resizable`: `horizontal` (default) or `vertical`. `virtual-list` and `description-list`: `vertical` (default) or `horizontal` |
+| `value` | JSON number, string, array, bool, or null | `slider`/`progress`/`number-input`/`rating` (number), `select`/`combobox`/`radio-group`/`tabs`/`list`/`data-table`/`tree`/`virtual-list`/`sidebar`/`stepper` (selected id or `null` to clear), `accordion` / combobox `:multiple` (id, `null`, or array of ids), `otp-input` (string), `color-picker` (hex), `date-picker` (ISO string or `[start, end]`) |
+| `min`, `max`, `step` | number | `slider`, `number-input`. `rating` uses `max` (default 5). Slider `step` is drag granularity; the host applies Clojure's controlled value even when it is off-step, then clamps to `min`/`max` |
+| `orientation` | string | `radio-group`, `slider`, `separator`, `resizable`, `stepper`: `horizontal` (default) or `vertical`. `virtual-list` and `description-list`: `vertical` (default) or `horizontal` |
 | `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
 | `disabled` | bool | buttons and most controls |
 | `tooltip` | string | any node: GPUI Kit tooltip |
@@ -201,7 +203,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `dot` | bool | `badge` |
 | `dashed` | bool | `separator` |
 | `outline` | bool | `tag` |
-| `searchable` | bool | `select`: show a filter field; host uses `SearchableVec` so typing actually filters. `list`: filter rows by label |
+| `searchable` | bool | `select` / `combobox`: show a filter field; host uses `SearchableVec` so typing actually filters. Combobox defaults true in `ui/combobox`. `list`: filter rows by label |
 | `open` | bool | `dialog`, `alert-dialog`, `popover`, `sheet`: controlled open (`:open?` in Clojure). Omitted/false dialogs/sheets are not shown. `notification`: omitted/true shows; `false` hides |
 | `overlay-closable` | bool | `dialog`, `sheet`: click the dimmed overlay to dismiss (default true). `alert-dialog` is not backdrop-dismissible |
 | `placement` | string | `sheet`: `left` / `right` / `top` / `bottom` (default `right`) |
@@ -213,7 +215,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center` |
 | `format` | string | `markdown` vs `html` (node `type` `html` is enough) |
 | `range` | bool | `date-picker` range mode |
-| `multiple` | bool | `accordion` |
+| `multiple` | bool | `accordion`, `combobox` |
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
@@ -231,7 +233,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
 | `color` | hex string (`#b83f45`) | text |
 | `theme` | string | any node: `system` (default), `light`, `dark`, a shipped GPUI Kit palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
-| `chrome` | string | `window` (or any root): `dev` (default, nREPL footer) or `app` (no host chrome) |
+| `chrome` | string | `window` (or any root): `dev` (default, nREPL footer + `gpui-fps` HUD) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:content` / `:trigger` / `:footer` are walked too. The registry is rebuilt on every export.
@@ -245,6 +247,8 @@ A `scroll` node is a vertical overflow viewport. Without `height`, the host give
 `context-menu` is a flex column host (`v_flex` + `min-height: 0`), not a block `div`. A `:flex 1` list/table/tree inside a non-flex wrapper skips default viewport height and collapses. If the menu omitted `:flex`, leftover height is inherited from any flex-fill child so wrapping a listing does not drop it.
 
 GPUI Kit 0.6 `Root::render` does not paint dialog / sheet / notification layers; the host calls `Root::render_dialog_layer`, `Root::render_sheet_layer`, and `Root::render_notification_layer` from `RootView`. Open/close for dialogs and the single crate sheet still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. Builders read a live spec cell (latest callback ids, title, body, children, footer) so an unrelated Clojure rerender cannot leave a stale `cb-7` on an already-open overlay. Overlay click dismisses dialogs/sheets by default (`:overlay-closable false` restores the crate lock). After overlay/Escape dismiss the host does not re-open until Clojure’s tree drops `open`. Notifications are a stack: presence shows unless `open` is false; unchanged title/message/variant/autohide is not re-pushed. Tree removal dismisses without a second `:on-close`. Static overlay children (dialog/sheet/dock panels) use a full path element id. `popover` is in-tree; its trigger must be a button (`Selectable`). Menu item clicks send the original Clojure id; item `:on-click` then menu `:on-change` is one batch. List `:on-change` is selection and `:on-confirm` is activation; both restore the original Clojure id and, on click/Enter, run as one batch before the next tree. Table single click is `:on-change`; a double-click is crate `SelectRow` then `DoubleClickedRow` from one `on_row_left_click`, batched as `:on-change` then `:on-confirm`.
+
+Declarative `table` is Kit `Table` (not `DataTable`): content-sized, not virtualized, no selection callbacks. Columns are `options` (`label`, `width`, `align`, `span`); rows are `items` with `cells`; a last item with `variant: "footer"` is `TableFooter`; caption is node `text`. `combobox` keeps host `ComboboxState` (recreated if `searchable` / `multiple` change). `rating` is 0..=`max` (default 5). `stepper` `value` is the selected item id.
 
 `otp-input` `:on-change` fires only when every cell is filled. `editor` is Kit `Editor` / `EditorState` (highlighter language, no LSP). Dock panel bodies are the static overlay subset plus `markdown`/`chart`, not list/data-table/editor.
 
@@ -273,7 +277,7 @@ GPUI Kit's `Theme` is process-global. Nested scopes work because layout, prepain
 Window chrome is Clojure-owned on a `window` node (the host still reads these keys from whatever node is the tree root):
 
 * `:title` sets the native window title (default `clj-gpui`)
-* `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides host chrome
+* `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps` HUD; `:chrome :app` hides host chrome
 * `:window-width` / `:window-height` resize the window when those values change in the tree. On `ui/window`, Clojure maps `:width` / `:height` to these keys so they are not layout. If the root is not a `window`, root `:width` / `:height` are still used when the `window-*` keys are omitted.
 
 The size is applied when the tree’s requested size changes, not on every user drag.

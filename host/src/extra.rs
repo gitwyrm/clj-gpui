@@ -101,6 +101,74 @@ pub fn textarea_submit_on_enter(on_submit: Option<&str>) -> bool {
     on_submit.is_some()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlign {
+    Start,
+    Center,
+    End,
+}
+
+/// Declarative `ui/table` column/cell alignment. `end` / `right` are Kit
+/// `text_right`; omitted is start.
+pub fn table_align(item: &Item) -> TableAlign {
+    match item.align.as_deref().map(|s| s.to_ascii_lowercase()) {
+        Some(s) if s == "end" || s == "right" => TableAlign::End,
+        Some(s) if s == "center" => TableAlign::Center,
+        _ => TableAlign::Start,
+    }
+}
+
+/// Last row with `variant: "footer"` is Kit `TableFooter`; the rest is body.
+pub fn split_table_footer(items: &[Item]) -> (&[Item], Option<&Item>) {
+    match items.split_last() {
+        Some((last, rest)) if last.variant.as_deref() == Some("footer") => (rest, Some(last)),
+        _ => (items, None),
+    }
+}
+
+/// Kit `Rating` value is `0..=max`. `:max` omitted is 5.
+pub fn rating_max(node: &Node) -> usize {
+    node.max.unwrap_or(5.0).round().clamp(1.0, 32.0) as usize
+}
+
+pub fn rating_value(node: &Node) -> usize {
+    let max = rating_max(node);
+    let raw = match &node.value {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
+    };
+    raw.min(max)
+}
+
+/// Stepper selected index from a wire id, falling back to a numeric index.
+pub fn stepper_selected_index(items: &[Item], value: Option<&str>) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+    if let Some(ix) = items.iter().position(|item| item.id_or_label() == value) {
+        return ix;
+    }
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|ix| *ix < items.len())
+        .unwrap_or(0)
+}
+
+/// Combobox `:on-change` payload: a JSON array when `:multiple`, else one
+/// id or `null`.
+pub fn combobox_payload(multiple: bool, values: &[SharedString]) -> Value {
+    if multiple {
+        json!(values.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+    } else {
+        values
+            .first()
+            .map(|v| json!(v.to_string()))
+            .unwrap_or(Value::Null)
+    }
+}
+
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
     match value {
         Some(Value::String(s)) => {
@@ -729,6 +797,82 @@ mod tests {
     fn textarea_submit_on_enter_follows_on_submit() {
         assert!(!textarea_submit_on_enter(None));
         assert!(textarea_submit_on_enter(Some("cb-submit")));
+    }
+
+    #[test]
+    fn table_align_and_footer_split() {
+        assert_eq!(
+            table_align(&Item {
+                align: Some("end".into()),
+                ..Item::default()
+            }),
+            TableAlign::End
+        );
+        assert_eq!(
+            table_align(&Item {
+                align: Some("right".into()),
+                ..Item::default()
+            }),
+            TableAlign::End
+        );
+        assert_eq!(
+            table_align(&Item {
+                align: Some("center".into()),
+                ..Item::default()
+            }),
+            TableAlign::Center
+        );
+        let items = vec![
+            Item {
+                id: Some("a".into()),
+                cells: vec!["A".into()],
+                ..Item::default()
+            },
+            Item {
+                id: Some("footer".into()),
+                variant: Some("footer".into()),
+                cells: vec!["Total".into()],
+                ..Item::default()
+            },
+        ];
+        let (body, foot) = split_table_footer(&items);
+        assert_eq!(body.len(), 1);
+        assert_eq!(foot.unwrap().cells, vec!["Total".to_string()]);
+    }
+
+    #[test]
+    fn rating_and_stepper_selection() {
+        let rating: Node = serde_json::from_value(json!({
+            "type": "rating",
+            "value": 7,
+            "max": 5
+        }))
+        .unwrap();
+        assert_eq!(rating_max(&rating), 5);
+        assert_eq!(rating_value(&rating), 5);
+        let steps = vec![
+            Item {
+                id: Some("cart".into()),
+                label: Some("Cart".into()),
+                ..Item::default()
+            },
+            Item {
+                id: Some("pay".into()),
+                label: Some("Pay".into()),
+                ..Item::default()
+            },
+        ];
+        assert_eq!(stepper_selected_index(&steps, Some("pay")), 1);
+        assert_eq!(stepper_selected_index(&steps, Some("0")), 0);
+        assert_eq!(stepper_selected_index(&steps, None), 0);
+    }
+
+    #[test]
+    fn combobox_payload_single_and_multiple() {
+        let values = [SharedString::from("clj"), SharedString::from("rs")];
+        assert_eq!(combobox_payload(false, &values), json!("clj"));
+        assert_eq!(combobox_payload(false, &[]), Value::Null);
+        assert_eq!(combobox_payload(true, &values), json!(["clj", "rs"]));
     }
 
     #[test]

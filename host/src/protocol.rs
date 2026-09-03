@@ -3,7 +3,7 @@ use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub const PROTOCOL_VERSION: u64 = 8;
+pub const PROTOCOL_VERSION: u64 = 9;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -314,6 +314,9 @@ pub struct Item {
     /// Table column width in pixels; tree/menu unused.
     #[serde(default)]
     pub width: Option<f32>,
+    /// Table column / cell text alignment (`start` / `center` / `end`).
+    #[serde(default)]
+    pub align: Option<String>,
     /// Menu item check mark; tree unused.
     #[serde(default)]
     pub checked: Option<bool>,
@@ -456,7 +459,8 @@ pub struct Node {
     /// Also used as the title for `alert` and `group-box`.
     #[serde(default)]
     pub title: Option<String>,
-    /// `window` (or any root): `"dev"` (default, nREPL footer) or `"app"` (no host chrome).
+    /// `window` (or any root): `"dev"` (default, nREPL footer + fps HUD)
+    /// or `"app"` (no host chrome).
     #[serde(default)]
     pub chrome: Option<String>,
     #[serde(default, rename = "window-width")]
@@ -1077,7 +1081,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -1225,7 +1229,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -1287,5 +1291,19 @@ mod tests {
         .unwrap();
         assert!(date.range);
         assert_eq!(date.string_value().as_deref(), Some("2026-09-02"));
+
+        let table: Node = serde_json::from_value(json!({
+            "type": "table",
+            "text": "Invoices",
+            "options": [{"label": "Amount", "align": "end", "width": 80.0}],
+            "items": [
+                {"cells": ["Ada", "$250"]},
+                {"cells": ["Total"], "variant": "footer"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(table.text.as_deref(), Some("Invoices"));
+        assert_eq!(table.options[0].align.as_deref(), Some("end"));
+        assert_eq!(table.items[1].variant.as_deref(), Some("footer"));
     }
 }

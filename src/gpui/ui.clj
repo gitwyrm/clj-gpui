@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  8)
+  9)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -152,6 +152,14 @@
                    (str ns "/" (name x))
                    (name x))
     :else (str x)))
+
+(defn- wire-selected
+  "Single selected id, or a vector of ids for `:multiple` widgets."
+  [value]
+  (cond
+    (nil? value) nil
+    (and (sequential? value) (not (string? value))) (mapv wire-id value)
+    :else (wire-id value)))
 
 (defn option-identity
   "Original Clojure identity for an option, before `wire-id`."
@@ -382,7 +390,8 @@
   "Native window. Return this from `app`. Only one makes sense.
 
   `:title` is the OS window title (default `clj-gpui`).
-  `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+  `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps`
+  HUD; `:chrome :app` hides host chrome.
   `:width` / `:height` are the native window size in pixels
   (`:window-width` / `:window-height` are accepted as aliases).
   Those size keys are not layout: children fill the window.
@@ -781,6 +790,37 @@
                     :options (option-items raw)}
                    opts))))
 
+(defn combobox
+  "Searchable dropdown. Kit `Combobox`. `value` is the selected option
+  id, or a vector of ids when `:multiple true`. `:on-change` receives
+  that id (or vector). `:on-confirm` fires when the menu closes.
+  Search is on by default.
+
+  (ui/combobox selected
+    {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
+     :placeholder \"Language\"
+     :on-change set-lang!})
+  (ui/combobox picked
+    {:options langs :multiple true :on-change set-picked!})"
+  ([value]
+   {:type :combobox :searchable true :value (wire-selected value) :options []})
+  ([value opts]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:options opts) (:items opts))
+         searchable (if (contains? opts :searchable)
+                      (boolean (:searchable opts))
+                      true)
+         opts (with-id-callbacks
+                (-> opts
+                    (dissoc :options :items)
+                    (assoc :searchable searchable))
+                raw
+                [:on-change :on-confirm])]
+     (merge-widget {:type :combobox
+                    :value (wire-selected value)
+                    :options (option-items raw)}
+                   opts))))
+
 (defn icon
   "Bundled GPUI Kit icon. `name` is a kebab keyword such as `:check`.
 
@@ -932,11 +972,16 @@
 (defn- table-column [x]
   (let [n (option-item x)]
     (cond-> n
-      (and (map? x) (some? (:width x))) (assoc :width (:width x)))))
+      (and (map? x) (some? (:width x))) (assoc :width (:width x))
+      (and (map? x) (some? (:span x))) (assoc :span (:span x))
+      (and (map? x) (some? (:align x)))
+      (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x)))))))
 
 (defn- table-row [x]
   (cond
     (nil? x) nil
+    (and (sequential? x) (not (string? x)))
+    (table-row {:cells (mapv str x)})
     (map? x)
     (let [cells (mapv str (or (:cells x) []))
           id (or (:id x) (:value x) (first cells) (:label x))
@@ -946,6 +991,17 @@
                :cells cells}
         (empty? cells) (assoc :cells [(str (or label id))])))
     :else {:id (str x) :label (str x) :cells [(str x)]}))
+
+(defn- table-footer-row [footer]
+  (when (some? footer)
+    (let [cells (cond
+                  (map? footer) (mapv str (or (:cells footer) []))
+                  (and (sequential? footer) (not (string? footer))) (mapv str footer)
+                  :else [(str footer)])]
+      {:id "footer"
+       :label "footer"
+       :cells cells
+       :variant "footer"})))
 
 (defn dialog
   "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
@@ -1134,7 +1190,7 @@
   then `:on-confirm` as one batch against one callback generation, then
   one tree fetch. Programmatic `:selected` does not emit `:on-change`.
 
-  `ui/table` is reserved for a later declarative Kit Table constructor.
+  `ui/table` is Kit's declarative (non-virtualized) Table.
 
   (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
                   :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
@@ -1157,6 +1213,34 @@
                    :value (wire-id selected)
                    :options (into [] (keep table-column) columns)
                    :items (into [] (keep table-row) rows)}
+                  opts)))
+
+(defn table
+  "Declarative Kit Table. Not virtualized — use `ui/data-table` for
+  large row sets. `:columns` are strings or `{label, width, align, span}`
+  maps. `:rows` are cell vectors or `{id, cells}`. `:caption` is visible
+  text below the table. `:footer` is a cell vector painted as
+  `TableFooter`.
+
+  (ui/table {:columns [{:label \"Name\"} {:label \"Amount\" :align :end}]
+             :rows [[\"Ada\" \"$250\"] [\"Rich\" \"$150\"]]
+             :footer [\"Total\" \"$400\"]
+             :caption \"Recent invoices\"})"
+  [opts]
+  (let [opts (if (map? opts) opts {})
+        columns (or (:columns opts) (:options opts) [])
+        rows (or (:rows opts) (:items opts) [])
+        footer (table-footer-row (:footer opts))
+        caption (or (:caption opts) (:text opts))
+        opts (-> opts
+                 (dissoc :columns :rows :items :options :footer :caption :text)
+                 apply-control-size)
+        items (cond-> (into [] (keep table-row) rows)
+                (some? footer) (conj footer))]
+    (merge-widget (cond-> {:type :table
+                           :options (into [] (keep table-column) columns)
+                           :items items}
+                    (some? caption) (assoc :text (str caption)))
                   opts)))
 
 (defn tree
@@ -1258,6 +1342,41 @@
                   :text (str (or value 0))
                   :on-change on-change}
                  opts)))
+
+(defn rating
+  "Star rating. `value` is 0..=`:max` (default 5). `:on-change` receives
+  the new integer. Optional `:color` is a hex fill.
+
+  (ui/rating 3 {:max 5 :on-change set!})"
+  ([value]
+   {:type :rating :value (or value 0)})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :rating :value (or value 0)} on-change-or-opts)
+     {:type :rating :value (or value 0) :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :rating :value (or value 0) :on-change on-change}
+                 opts)))
+
+(defn stepper
+  "Step progress. `value` is the selected item id. `:on-change` receives
+  that original id. `:orientation :vertical` stacks the steps.
+
+  (ui/stepper :pay
+    {:items [{:id :cart :label \"Cart\"}
+             {:id :pay :label \"Pay\"}
+             {:id :done :label \"Done\"}]
+     :on-change set-step!})"
+  ([value]
+   {:type :stepper :value (wire-id value) :items []})
+  ([value opts]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:items opts) (:options opts) [])
+         opts (with-id-callbacks (dissoc opts :items :options) raw [:on-change])]
+     (merge-widget {:type :stepper
+                    :value (wire-id value)
+                    :items (option-items raw)}
+                   opts))))
 
 (defn otp-input
   "Fixed-length digit cells. `:on-change` fires when every cell is

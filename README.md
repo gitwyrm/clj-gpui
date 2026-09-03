@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. `ui/table` is reserved for Kit's declarative Table (not wrapped yet). Data tables are `ui/data-table`. `ui/textarea` and `ui/alert-dialog` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, and `ui/stepper` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -287,6 +287,17 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
                 :rows [{:id :ada :cells ["Ada" "Clojure"]}]
                 :selected :ada
                 :on-change set-row!})
+(ui/table {:columns [{:label "Name"} {:label "Amount" :align :end}]
+           :rows [["Ada" "$250"] ["Rich" "$150"]]
+           :footer ["Total" "$400"]
+           :caption "Recent invoices"})
+(ui/combobox selected {:options [{:id :clj :label "Clojure"} :rs]
+                       :placeholder "Language"
+                       :on-change set-lang!})
+(ui/combobox picked {:options langs :multiple true :on-change set-picked!})
+(ui/rating 3 {:max 5 :on-change set!})
+(ui/stepper :pay {:items [{:id :cart :label "Cart"} {:id :pay :label "Pay"}]
+                  :on-change set-step!})
 (ui/tree [{:id :src :label "src" :expanded true
            :items [{:id :lib :label "lib.rs"}]}]
          {:on-change set-node!})
@@ -309,11 +320,11 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 
-`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` clears the selection. `:searchable true` filters select options by label.
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select options by label; `ui/combobox` defaults search on.
 
 GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 
-Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps` HUD; `:chrome :app` hides host chrome.
 
 Native platform actions (folder picker, reveal in Finder / the file manager) live in `[gpui.platform :as platform]`:
 

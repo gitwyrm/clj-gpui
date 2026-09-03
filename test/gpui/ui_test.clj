@@ -9,12 +9,15 @@
 (deftest kit-06-names-are-not-aliased
   (is (nil? (ns-resolve 'gpui.ui 'text-field)))
   (is (nil? (ns-resolve 'gpui.ui 'divider)))
-  (is (nil? (ns-resolve 'gpui.ui 'table)))
+  (is (some? (ns-resolve 'gpui.ui 'table)))
   (is (some? (ns-resolve 'gpui.ui 'input)))
   (is (some? (ns-resolve 'gpui.ui 'separator)))
   (is (some? (ns-resolve 'gpui.ui 'data-table)))
   (is (some? (ns-resolve 'gpui.ui 'textarea)))
-  (is (some? (ns-resolve 'gpui.ui 'alert-dialog))))
+  (is (some? (ns-resolve 'gpui.ui 'alert-dialog)))
+  (is (some? (ns-resolve 'gpui.ui 'combobox)))
+  (is (some? (ns-resolve 'gpui.ui 'rating)))
+  (is (some? (ns-resolve 'gpui.ui 'stepper))))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
@@ -560,6 +563,44 @@
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
       (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
+  (testing "declarative table columns, vector rows, footer, caption"
+    (let [n (ui/table {:columns [{:label "Name"} {:label "Amount" :align :end :width 80}]
+                       :rows [["Ada" "$250"] {:id :rich :cells ["Rich" "$150"]}]
+                       :footer ["Total" "$400"]
+                       :caption "Invoices"})]
+      (is (= :table (:type n)))
+      (is (= "Name" (get-in n [:options 0 :label])))
+      (is (= "end" (get-in n [:options 1 :align])))
+      (is (= 80 (get-in n [:options 1 :width])))
+      (is (= ["Ada" "$250"] (get-in n [:items 0 :cells])))
+      (is (= "rich" (get-in n [:items 1 :id])))
+      (is (= "footer" (get-in n [:items 2 :variant])))
+      (is (= ["Total" "$400"] (get-in n [:items 2 :cells])))
+      (is (= "Invoices" (:text n)))
+      (is (nil? (:caption n)))
+      (is (nil? (:columns n)))))
+  (testing "combobox defaults searchable and restores ids"
+    (let [n (ui/combobox :clj {:options [{:id :clj :label "Clojure"} :rs]})]
+      (is (= :combobox (:type n)))
+      (is (true? (:searchable n)))
+      (is (= "clj" (:value n)))
+      (is (= ["clj" "rs"] (mapv :id (:options n)))))
+    (let [n (ui/combobox [:clj :rs]
+                         {:options [{:id :clj :label "Clojure"} {:id :rs :label "Rust"}]
+                          :multiple true
+                          :searchable false})]
+      (is (true? (:multiple n)))
+      (is (false? (:searchable n)))
+      (is (= ["clj" "rs"] (:value n)))))
+  (testing "rating and stepper"
+    (let [n (ui/rating 3 {:max 5})]
+      (is (= :rating (:type n)))
+      (is (= 3 (:value n)))
+      (is (= 5 (:max n))))
+    (let [n (ui/stepper :pay {:items [{:id :cart :label "Cart"} {:id :pay :label "Pay"}]})]
+      (is (= :stepper (:type n)))
+      (is (= "pay" (:value n)))
+      (is (= ["cart" "pay"] (mapv :id (:items n))))))
   (testing "tree nested items and expanded"
     (let [n (ui/tree [{:id :src :label "src" :expanded true
                        :items [{:id :lib :label "lib.rs"}]}]

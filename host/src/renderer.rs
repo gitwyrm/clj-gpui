@@ -22,6 +22,7 @@ use gpui_component::{
     checkbox::Checkbox,
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    combobox::{Combobox, ComboboxEvent, ComboboxState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
@@ -39,17 +40,23 @@ use gpui_component::{
     popover::Popover,
     progress::Progress,
     radio::{Radio, RadioGroup},
+    rating::Rating,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
+    searchable_list::SearchableListItem,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     separator::Separator,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     spinner::Spinner,
+    stepper::{Stepper, StepperItem},
     switch::Switch,
     tab::{Tab, TabBar},
-    table::{DataTable, TableEvent, TableState},
+    table::{
+        DataTable, Table, TableBody, TableCaption, TableCell, TableEvent, TableFooter, TableHead,
+        TableHeader, TableRow, TableState,
+    },
     tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
     tooltip::Tooltip,
@@ -141,6 +148,37 @@ struct SelectSlot {
     state: Entity<SelectState<SearchableVec<SelectOpt>>>,
     searchable: bool,
     on_change: Option<String>,
+}
+
+#[derive(Clone)]
+struct ComboOpt {
+    id: SharedString,
+    label: SharedString,
+    disabled: bool,
+}
+
+impl SearchableListItem for ComboOpt {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+struct ComboboxSlot {
+    state: Entity<ComboboxState<SearchableVec<ComboOpt>>>,
+    searchable: bool,
+    multiple: bool,
+    on_change: Option<String>,
+    on_confirm: Option<String>,
 }
 
 struct ListSlot {
@@ -290,6 +328,7 @@ pub struct RootView {
     /// dropping the entity on unmount remounts at size 0 (100% fill).
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
+    comboboxes: HashMap<String, ComboboxSlot>,
     lists: HashMap<String, ListSlot>,
     tables: HashMap<String, TableSlot>,
     trees: HashMap<String, TreeSlot>,
@@ -315,6 +354,7 @@ pub struct RootView {
     note_waiting: HashSet<String>,
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
+    used_comboboxes: HashSet<String>,
     used_lists: HashSet<String>,
     used_tables: HashSet<String>,
     used_trees: HashSet<String>,
@@ -429,6 +469,7 @@ impl RootView {
             inputs: HashMap::new(),
             sliders: HashMap::new(),
             selects: HashMap::new(),
+            comboboxes: HashMap::new(),
             lists: HashMap::new(),
             tables: HashMap::new(),
             trees: HashMap::new(),
@@ -454,6 +495,7 @@ impl RootView {
             note_waiting: HashSet::new(),
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
+            used_comboboxes: HashSet::new(),
             used_lists: HashSet::new(),
             used_tables: HashSet::new(),
             used_trees: HashSet::new(),
@@ -1212,6 +1254,8 @@ impl RootView {
             "toggle" => self.render_toggle(node, &key, cx),
             "radio-group" => self.render_radio_group(node, &key, cx),
             "slider" => self.render_slider(node, &key, window, cx),
+            "rating" => self.render_rating(node, &key, cx),
+            "stepper" => self.render_stepper(node, &key, cx),
             "progress" => self.render_progress(node, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
@@ -1224,6 +1268,7 @@ impl RootView {
             "badge" => self.render_badge(node, path, window, cx),
             "tabs" => self.render_tabs(node, &key, cx),
             "select" => self.render_select(node, &key, window, cx),
+            "combobox" => self.render_combobox(node, &key, window, cx),
             "icon" => self.render_icon(node, cx),
             "clipboard" => self.render_clipboard(node, &key, cx),
             "breadcrumb" => self.render_breadcrumb(node, &key, cx),
@@ -1236,6 +1281,7 @@ impl RootView {
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
+            "table" => self.render_table(node, &key, cx),
             "tree" => self.render_tree(node, &key, window, cx),
             "sheet" => div().into_any_element(),
             "notification" => div().into_any_element(),
@@ -1610,6 +1656,183 @@ impl RootView {
         }
         select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
         apply_style(select, node, cx).into_any_element()
+    }
+
+    fn render_combobox(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.combobox_slot(key, node, window, cx);
+        let mut combo = Combobox::new(&state);
+        if let Some(placeholder) = node.placeholder.clone() {
+            combo = combo.placeholder(placeholder);
+        }
+        if node.disabled {
+            combo = combo.disabled(true);
+        }
+        combo = combo.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        apply_style(combo, node, cx).into_any_element()
+    }
+
+    fn combobox_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ComboboxState<SearchableVec<ComboOpt>>> {
+        self.used_comboboxes.insert(key.to_string());
+        let items = combo_opts(node);
+        let selected: Vec<SharedString> = node
+            .string_values()
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        if let Some(slot) = self.comboboxes.get_mut(key) {
+            if slot.searchable == node.searchable && slot.multiple == node.multiple {
+                slot.on_change = node.on_change.clone();
+                slot.on_confirm = node.on_confirm.clone();
+                let state = slot.state.clone();
+                state.update(cx, |state, cx| {
+                    state.set_items(SearchableVec::new(items.clone()), window, cx);
+                    state.set_selected_values(&selected, window, cx);
+                });
+                return state;
+            }
+        }
+        let searchable = node.searchable;
+        let multiple = node.multiple;
+        let state = cx.new(|cx| {
+            ComboboxState::new(SearchableVec::new(items), Vec::new(), window, cx)
+                .searchable(searchable)
+                .multiple(multiple)
+        });
+        state.update(cx, |state, cx| {
+            state.set_selected_values(&selected, window, cx);
+        });
+        let key_owned = key.to_string();
+        cx.subscribe(
+            &state,
+            move |this, _, event: &ComboboxEvent<SearchableVec<ComboOpt>>, _cx| {
+                let (callback, values, multiple) = {
+                    let Some(slot) = this.comboboxes.get(&key_owned) else {
+                        return;
+                    };
+                    match event {
+                        ComboboxEvent::Change(values) => {
+                            (slot.on_change.clone(), values.clone(), slot.multiple)
+                        }
+                        ComboboxEvent::Confirm(values) => {
+                            (slot.on_confirm.clone(), values.clone(), slot.multiple)
+                        }
+                    }
+                };
+                let Some(id) = callback else {
+                    return;
+                };
+                this.emit_value(id, extra::combobox_payload(multiple, &values));
+            },
+        )
+        .detach();
+        self.comboboxes.insert(
+            key.to_string(),
+            ComboboxSlot {
+                state: state.clone(),
+                searchable,
+                multiple,
+                on_change: node.on_change.clone(),
+                on_confirm: node.on_confirm.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_table(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+        let size = mapping::parse_scale(node.control_size.as_deref());
+        let columns = node.options.as_slice();
+        let (body, footer) = extra::split_table_footer(&node.items);
+        let mut table = Table::new().with_size(size);
+        if !columns.is_empty() {
+            let mut header_row = TableRow::new();
+            for col in columns {
+                header_row = header_row.child(style_table_head(
+                    TableHead::new().child(col.label_or_id()),
+                    col,
+                ));
+            }
+            table = table.child(TableHeader::new().child(header_row));
+        }
+        let mut body_el = TableBody::new();
+        for row in body {
+            body_el = body_el.child(paint_table_row(row, columns));
+        }
+        table = table.child(body_el);
+        if let Some(foot) = footer {
+            table = table.child(TableFooter::new().child(paint_table_row(foot, columns)));
+        }
+        if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
+            table = table.child(TableCaption::new().child(caption));
+        }
+        apply_style(table, node, cx).into_any_element()
+    }
+
+    fn render_rating(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let mut rating = Rating::new(eid(key))
+            .value(extra::rating_value(node))
+            .max(extra::rating_max(node))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled);
+        if let Some(color) = node.color.as_deref().and_then(extra::parse_hex_color) {
+            rating = rating.color(color);
+        }
+        if let Some(id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            rating = rating.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(rating, node, cx).into_any_element()
+    }
+
+    fn render_stepper(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let selected = extra::stepper_selected_index(items, node.string_value().as_deref());
+        let mut stepper = Stepper::new(eid(key))
+            .selected_index(selected)
+            .layout(mapping::parse_axis(node.orientation.as_deref()))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled);
+        for item in items {
+            let mut step = StepperItem::new().child(item.label_or_id());
+            if item.disabled {
+                step = step.disabled(true);
+            }
+            if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                step = step.icon(icon);
+            }
+            stepper = stepper.item(step);
+        }
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            stepper = stepper.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(stepper, node, cx).into_any_element()
     }
 
     fn render_icon(&self, node: &Node, cx: &App) -> AnyElement {
@@ -3318,6 +3541,7 @@ impl Render for RootView {
         self.native_window_id = preview::native_window_id(window);
         self.used_inputs.clear();
         self.used_selects.clear();
+        self.used_comboboxes.clear();
         self.used_lists.clear();
         self.used_tables.clear();
         self.used_trees.clear();
@@ -3355,6 +3579,9 @@ impl Render for RootView {
         // stay for the window lifetime (see docs/gpui-component.md).
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
+        let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
+        self.comboboxes
+            .retain(|key, _| used_comboboxes.contains(key));
         let used_lists = std::mem::take(&mut self.used_lists);
         self.lists.retain(|key, _| used_lists.contains(key));
         let used_tables = std::mem::take(&mut self.used_tables);
@@ -3406,6 +3633,7 @@ impl Render for RootView {
                         .text_color(cx.theme().muted_foreground)
                         .child(status),
                 )
+                .child(gpui_fps::fps_monitor(window, cx))
             })
             // gpui-component 0.5.1 Root::render does not paint this layer.
             .children(dialog_layer)
@@ -3530,6 +3758,74 @@ fn select_opts(node: &Node) -> Vec<SelectOpt> {
             label: SharedString::from(item.label_or_id()),
         })
         .collect()
+}
+
+fn combo_opts(node: &Node) -> Vec<ComboOpt> {
+    node.collection()
+        .iter()
+        .map(|item| ComboOpt {
+            id: SharedString::from(item.id_or_label()),
+            label: SharedString::from(item.label_or_id()),
+            disabled: item.disabled,
+        })
+        .collect()
+}
+
+fn style_table_head(el: TableHead, col: &Item) -> TableHead {
+    let el = match extra::table_align(col) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if col.span > 1 {
+        el.col_span(col.span as usize)
+    } else {
+        el
+    };
+    match col.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn style_table_cell(el: TableCell, col: &Item) -> TableCell {
+    let el = match extra::table_align(col) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if col.span > 1 {
+        el.col_span(col.span as usize)
+    } else {
+        el
+    };
+    match col.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn paint_table_row(row: &Item, columns: &[Item]) -> TableRow {
+    let mut table_row = TableRow::new();
+    if columns.is_empty() {
+        let cells = if row.cells.is_empty() {
+            vec![row.label_or_id()]
+        } else {
+            row.cells.clone()
+        };
+        for text in cells {
+            table_row = table_row.child(TableCell::new().child(text));
+        }
+        return table_row;
+    }
+    for (ix, col) in columns.iter().enumerate() {
+        let text = row.cells.get(ix).cloned().unwrap_or_default();
+        table_row = table_row.child(style_table_cell(TableCell::new().child(text), col));
+    }
+    for text in row.cells.iter().skip(columns.len()) {
+        table_row = table_row.child(TableCell::new().child(text.clone()));
+    }
+    table_row
 }
 
 fn select_selected_index(
