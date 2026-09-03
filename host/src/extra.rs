@@ -435,6 +435,7 @@ pub fn chart_tick_margin(node: &Node) -> usize {
 /// Theme tokens Kit cycles for radar / sankey / line-area series (`chart_1`…`chart_5`).
 const CHART_SERIES_TOKENS: [&str; 5] = ["chart_1", "chart_2", "chart_3", "chart_4", "chart_5"];
 
+#[cfg(test)]
 pub fn chart_series_token(index: usize) -> &'static str {
     CHART_SERIES_TOKENS[index % CHART_SERIES_TOKENS.len()]
 }
