@@ -2,7 +2,7 @@ use gpui_component::theme::ThemeSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub const PROTOCOL_VERSION: u64 = 6;
+pub const PROTOCOL_VERSION: u64 = 7;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -697,6 +697,10 @@ pub enum Cmd {
         error: Option<String>,
         cancelled: bool,
     },
+    PreviewCaptured {
+        request_id: String,
+        png: Option<String>,
+    },
     Shutdown,
 }
 
@@ -720,6 +724,9 @@ pub enum HostEvent {
     },
     OpenPath {
         path: String,
+    },
+    CapturePreview {
+        request_id: String,
     },
 }
 
@@ -1065,7 +1072,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
     }
 
     #[test]
@@ -1213,7 +1220,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
     }
 
     #[test]

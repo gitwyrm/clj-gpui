@@ -14,6 +14,7 @@ Requirements:
 * Java 21+ and the [Clojure CLI](https://clojure.org/guides/install_clojure)
 * Linux or macOS (GPUI's current platforms)
 * A working display. On Linux, GPUI needs Vulkan. Software rendering via Mesa lavapipe is enough for a first window.
+* Linux host builds also need `libdbus-1-dev` (window capture for `gpui.runtime/preview-png`).
 
 From a checkout of this repository:
 
@@ -64,6 +65,8 @@ Then, while the native window is running:
 (swap! !state assoc :count 100)
 (defn app [] (gpui.ui/label "Redefined from nREPL"))
 (gpui.ui/request-render!)
+;; Snapshot the native window (Evalight Preview uses this)
+(gpui.runtime/preview-png) ; nil, or a base64 PNG string
 ```
 
 Atom watches already request a rerender. Redefining `app` without changing an atom needs `(gpui.ui/request-render!)`.
@@ -387,6 +390,7 @@ JSON still works: put extra theme-set files (same schema as [gpui-component them
 * **gpui-component Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
+* **`preview-png` is an OS window shot**, not GPU readback. The host spawns `clj-gpui --capture-preview --pid <host-pid>` and [xcap](https://crates.io/crates/xcap) captures that process's window. Wayland portals and missing macOS Screen Recording permission return `nil`. Xvfb/X11 is the deterministic Linux CI path.
 * **Packaging** is native-only (macOS `.app` on macOS, AppImage/deb on Linux). See [Packaging](#packaging).
 
 ## Packaging

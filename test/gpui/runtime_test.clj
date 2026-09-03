@@ -527,3 +527,49 @@
                                  {:on-change #(reset! seen %)})))]
     (is (:ok (runtime/invoke-callback-batch! [{:id id :value nil}])))
     (is (nil? @seen) "explicit JSON null is (f nil), not a 0-arg call")))
+
+(def ^:private tiny-png
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+(defn- png-header?
+  [s]
+  (when (string? s)
+    (let [payload (if (str/starts-with? s "data:image/png;base64,")
+                    (subs s (count "data:image/png;base64,"))
+                    s)
+          decoded (.decode (java.util.Base64/getDecoder) ^String payload)]
+      (and (>= (alength decoded) 8)
+           (= (vec (take 8 decoded))
+              [-119 80 78 71 13 10 26 10])))))
+
+(deftest preview-png-var-exists-and-is-nil-without-host
+  (runtime/bind-connection! nil)
+  (is (var? (resolve 'gpui.runtime/preview-png)))
+  (is (nil? (runtime/preview-png))))
+
+(deftest preview-png-roundtrip-via-host
+  (let [buf (java.io.StringWriter.)]
+    (runtime/bind-connection! {:out buf})
+    (try
+      (let [fut (future (#'runtime/preview-png* 2000))]
+        (loop [n 0]
+          (let [wire (str buf)
+                id (second (re-find #"\"request-id\":\"(cap-[^\"]+)\"" wire))]
+            (cond
+              id (do
+                   (runtime/handle {:op "preview-captured" :id 1 :request-id id :png tiny-png})
+                   (let [got @fut]
+                     (is (= tiny-png got))
+                     (is (png-header? got))))
+              (> n 50) (is false "host never received capture-preview")
+              :else (do (Thread/sleep 20) (recur (inc n)))))))
+      (finally
+        (runtime/bind-connection! nil)))))
+
+(deftest preview-png-timeout-is-nil
+  (let [buf (java.io.StringWriter.)]
+    (runtime/bind-connection! {:out buf})
+    (try
+      (is (nil? (#'runtime/preview-png* 50)))
+      (finally
+        (runtime/bind-connection! nil)))))

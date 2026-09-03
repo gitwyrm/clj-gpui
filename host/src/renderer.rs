@@ -2,6 +2,7 @@ use crate::catalog;
 use crate::extra;
 use crate::mapping;
 use crate::overlay;
+use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
@@ -309,6 +310,7 @@ pub struct RootView {
     tree_seq: Option<u64>,
     applied_title: String,
     applied_window_size: Option<(i32, i32)>,
+    pending_captures: Vec<String>,
 }
 
 impl RootView {
@@ -381,6 +383,16 @@ impl RootView {
                         HostEvent::OpenPath { path } => {
                             cx.open_with_system(Path::new(&path));
                         }
+                        HostEvent::CapturePreview { request_id } => {
+                            if view.tree.is_none() {
+                                let _ = view.cmd_tx.send(Cmd::PreviewCaptured {
+                                    request_id,
+                                    png: None,
+                                });
+                            } else {
+                                view.pending_captures.push(request_id);
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -437,6 +449,7 @@ impl RootView {
             tree_seq: None,
             applied_title: String::new(),
             applied_window_size: None,
+            pending_captures: Vec::new(),
         }
     }
 
@@ -563,6 +576,32 @@ impl RootView {
             let _ = cmd_tx.send(cmd);
         })
         .detach();
+    }
+
+    fn flush_preview_captures(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        if self.pending_captures.is_empty() {
+            return;
+        }
+        let ids = std::mem::take(&mut self.pending_captures);
+        let title = if self.applied_title.is_empty() {
+            "clj-gpui".to_string()
+        } else {
+            self.applied_title.clone()
+        };
+        let cmd_tx = self.cmd_tx.clone();
+        window.on_next_frame(move |_window, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    let png = preview::capture_host_window(&title);
+                    for request_id in ids {
+                        let _ = cmd_tx.send(Cmd::PreviewCaptured {
+                            request_id,
+                            png: png.clone(),
+                        });
+                    }
+                })
+                .detach();
+        });
     }
 
     fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -3043,6 +3082,7 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
+        self.flush_preview_captures(window, cx);
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_lists.clear();
