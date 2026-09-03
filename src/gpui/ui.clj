@@ -285,7 +285,8 @@
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
   `:label` / `:text`, `:disabled`, `:on-click`, and `:content`. Chart
-  items also keep `:fill`, `:stroke-style`, and `:label-lines`."
+  items also keep `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
+  `:outer-radius`, and `:label-lines`."
   [x]
   (cond
     (nil? x) nil
@@ -316,7 +317,10 @@
         (some? (:max x)) (assoc :max (:max x))
         (some? (:step x)) (assoc :step (:step x))
         (some? (:color x)) (assoc :color (str (:color x)))
+        (some? (:stroke x)) (assoc :stroke (str (:stroke x)))
         (some? (:fill x)) (assoc :fill (str (:fill x)))
+        (some? (:inner-radius x)) (assoc :inner-radius (:inner-radius x))
+        (some? (:outer-radius x)) (assoc :outer-radius (:outer-radius x))
         (some? (:stroke-style x)) (assoc :stroke-style (if (keyword? (:stroke-style x))
                                                          (name (:stroke-style x))
                                                          (str (:stroke-style x))))
@@ -1729,11 +1733,14 @@
   Kit-named options include `:name`, `:stroke`, `:stroke-style`
   (`:natural` / `:linear` / `:step-after`), `:dot`, `:tick-margin`
   (clamped to ≥1 on the host), `:x-axis`, `:grid`, `:corner-radii`,
-  `:fill-gradient`, `:inner-radius` (donut), `:outer-radius`,
-  `:pad-angle`, `:label-color`, `:label-gap`, `:grid-levels`,
-  `:body-width-ratio`, and Sankey `:node-width` / `:node-padding` /
-  `:iterations` / `:node-corner-radius` / `:link-opacity` /
-  `:min-link-width` / `:label-lines`.
+  `:fill-gradient` (stop `at` is unclamped), `:inner-radius` (donut),
+  `:outer-radius`, `:pad-angle`, `:label-color`, `:label-gap`,
+  `:grid-levels`, `:body-width-ratio` (unclamped), `:interactive`
+  (Kit hover tooltip; default off), and Sankey `:node-width` /
+  `:node-padding` / `:iterations` / `:node-corner-radius` /
+  `:link-opacity` / `:min-link-width` / `:label-lines`. Pie slices may
+  set per-item `:inner-radius` / `:outer-radius` and `:color` (Kit
+  `chart_2` when omitted). Radar `:content` is any clj-gpui widget.
 
   (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})
   (ui/chart :bar dirs {:alignment :left :labels true :value-axis true})"
@@ -1772,18 +1779,21 @@
   ([points opts] (chart :area points opts)))
 
 (defn pie-chart
-  "See `chart` with `:pie`. `:inner-radius` makes a donut; `:labels true` draws slice labels."
+  "See `chart` with `:pie`. `:inner-radius` makes a donut; `:labels true` draws slice labels.
+  Per-slice `:inner-radius` / `:outer-radius` map to Kit `inner_radius_fn` / `outer_radius_fn`.
+  Omit slice `:color` to keep Kit `chart_2`."
   ([points] (chart :pie points nil))
   ([points opts] (chart :pie points opts)))
 
 (defn radar-chart
-  "See `chart` with `:radar`. Dimension `:content` is a Kit `RadarLabel::Element`."
+  "See `chart` with `:radar`. Dimension `:content` is a Kit `RadarLabel::Element`
+  (badge, avatar, and other clj-gpui widgets, not only the static overlay subset)."
   ([points] (chart :radar points nil))
   ([points opts] (chart :radar points opts)))
 
 (defn candlestick-chart
   "See `chart` with `:candlestick`. Points need `:open` `:high` `:low` `:close`.
-  `:body-width-ratio` and `:x-axis` map to Kit."
+  `:body-width-ratio` and `:x-axis` map to Kit (ratio is not clamped)."
   ([points] (chart :candlestick points nil))
   ([points opts] (chart :candlestick points opts)))
 

@@ -421,16 +421,18 @@
                     {:id :b :label "Tue" :value 8}
                     {:id :c :label "Wed" :value 6}
                     {:id :d :label "Thu" :value 10}]
-             {:name "Desktop" :height 160 :flex 1})
+             {:name "Desktop" :height 160 :flex 1 :interactive true})
    (ui/bar-chart [{:id :a :label "A" :value 3}
                   {:id :b :label "B" :value 7}]
                  {:name "Count" :width 220 :height 140 :corner-radii 4 :fill-gradient true})
    (ui/area-chart [{:id :a :label "Mon" :values [4 2]}
                    {:id :b :label "Tue" :values [8 5]}
                    {:id :c :label "Wed" :values [6 4]}]
-                  {:series [{:id :desk :label "Desktop"} {:id :mob :label "Mobile"}]
+                  {:series [{:id :desk :label "Desktop" :stroke "#ff0000"}
+                            {:id :mob :label "Mobile"}]
                    :height 140})
-   (ui/radar-chart [{:id :speed :label "Speed" :values [80 55]}
+   (ui/radar-chart [{:id :speed :label "Speed" :values [80 55]
+                     :content (ui/badge 1 (ui/label "Sp"))}
                     {:id :range :label "Range" :values [40 90]}
                     {:id :rel :label "Reliability" :values [70 60]}]
                    {:series [{:id :a :label "A"} {:id :b :label "B"}]
@@ -448,7 +450,7 @@
                              {:source :rev :target :cost :value 55}]
                      :height 180
                      :node-corner-radius 3})
-   (ui/pie-chart [{:id :a :label "A" :value 2}
+   (ui/pie-chart [{:id :a :label "A" :value 2 :color "#3366ff"}
                   {:id :b :label "B" :value 5}]
                  {:width 180 :height 160 :inner-radius 42 :labels true})
    (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"

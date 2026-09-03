@@ -430,9 +430,18 @@ pub struct Item {
     /// Area / radar series fill (hex). Distinct from `color` (stroke / bar fill).
     #[serde(default)]
     pub fill: Option<String>,
+    /// Area / radar series stroke (hex). `:color` is the same stroke when `stroke` is omitted.
+    #[serde(default)]
+    pub stroke: Option<String>,
     /// Line / area series stroke style: `natural`, `linear`, `step-after`.
     #[serde(default, rename = "stroke-style")]
     pub stroke_style: Option<String>,
+    /// Pie per-slice inner radius (pixels). Kit `inner_radius_fn` from this value.
+    #[serde(default, rename = "inner-radius")]
+    pub inner_radius: Option<f32>,
+    /// Pie per-slice outer radius (pixels). Kit `outer_radius_fn` from this value.
+    #[serde(default, rename = "outer-radius")]
+    pub outer_radius: Option<f32>,
     /// Sankey custom label lines. When any node sets this, Kit `.labels()` wins.
     #[serde(default, rename = "label-lines")]
     pub label_lines: Vec<ChartLabelLine>,
@@ -592,6 +601,10 @@ pub struct Node {
     pub disabled: bool,
     #[serde(default)]
     pub tooltip: Option<String>,
+    /// Chart hover tooltip. Kit default is `id: None` (non-interactive). `true` calls `.id(...)`.
+    /// Not the string `tooltip` field on any node.
+    #[serde(default)]
+    pub interactive: Option<bool>,
     /// Selected / numeric / string value. JSON number, string, or bool.
     #[serde(default)]
     pub value: Option<Value>,

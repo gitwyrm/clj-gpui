@@ -76,7 +76,7 @@ v8 is the GPUI Kit 0.6 rename: `text-field` → `input`, `divider` → `separato
 
 v9 adds Kit's remaining first-pass widgets: declarative `table`, `combobox`, `rating`, `stepper`, and the `gpui-fps` HUD on `:chrome :dev`.
 
-v10 adds the rest of Kit's chart kinds (`radar`, `candlestick`, `sankey`) and Kit `BarChart` alignment (`left` / `right` for horizontal bars, plus `:labels` / `:value-axis`). The same protocol version also exposes the remaining Kit 0.6 chart builders on `ui/chart` (line/area/pie/bar/radar/candlestick/sankey options). A v9 host would paint the new kinds as a line chart and ignore the extra fields.
+v10 adds the rest of Kit's chart kinds (`radar`, `candlestick`, `sankey`) and Kit `BarChart` alignment (`left` / `right` for horizontal bars, plus `:labels` / `:value-axis`). The same protocol version also exposes Kit 0.6 chart builders on `ui/chart` (line/area/pie/bar/radar/candlestick/sankey options) without imposing extra limits Kit itself does not. A v9 host would paint the new kinds as a line chart and ignore the extra fields.
 
 ## Host → Clojure ops
 
@@ -176,7 +176,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input`, `table-head` / `table-cell` / `table-caption` (when they have no children) |
 | `placeholder` | string | `input`, `textarea`, `select`, `combobox`, `date-picker`, `number-input` |
 | `children` | array of nodes | layouts, `scroll`, `group-box`, `badge`, `dialog`, `popover`, `context-menu`, `sheet`, `resizable`, declarative `table` and its Kit primitives (`table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`) |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,values,height,side,variant,min,max,step,color,fill,stroke-style,label-lines,open,high,low,close,source,target}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value` (or `values` for radar/area series). Candlestick points use `open`/`high`/`low`/`close`. Sankey links use `source`/`target`/`value`; sankey nodes may set `label-lines`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,values,height,side,variant,min,max,step,color,stroke,fill,stroke-style,inner-radius,outer-radius,label-lines,open,high,low,close,source,target}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value` (or `values` for radar/area series). Candlestick points use `open`/`high`/`low`/`close`. Pie slices may set `inner-radius` / `outer-radius` (Kit radius fns) and `color` (Kit `chart_2` when omitted). Area/radar series maps may set `stroke` (alias `color`) / `fill` / `stroke-style`. Sankey links use `source`/`target`/`value`; sankey nodes may set `label-lines`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
 | `links` | array of items | `chart` `:sankey` flows (`source`, `target`, `value`) |
 | `series` | array of items | `chart` `:radar` / `:area` series names, stroke/fill colors, and stroke styles, in value-index order |
 | `trigger` | node | `popover`, `dropdown-menu` (usually a `button`) |
@@ -200,6 +200,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `columns` | number | `description-list`: grid columns 1–10 (default 1). The crate's own default is 3; the host does not use that |
 | `disabled` | bool | buttons and most controls |
 | `tooltip` | string | any node: GPUI Kit tooltip |
+| `interactive` | bool | `chart` `:line` / `:bar` / `:area` / `:radar`: Kit hover tooltip via `.id(...)`. Default false (Kit `id: None`). Not the string `tooltip` field |
 | `accessibility-label` | string | declarative `table`: Kit `Table::accessibility_label` (screen-reader name). A visible `table-caption` is not used as that name |
 | `href` | string | `link` |
 | `icon` | string | `icon`, `spinner` (kebab `circle-check`) |
@@ -233,20 +234,20 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `grid` | bool | `chart`: grid lines (default true) |
 | `labels` | bool | `chart` `:bar`: paint numeric labels on bars (default false). `:pie`: draw slice labels |
 | `name` | string | `chart` `:line` / `:bar`: Kit tooltip series name |
-| `stroke` | hex string | `chart` `:line` / `:area`: series stroke. Not layout `color` |
-| `stroke-style` | string | `chart` `:line` / `:area`: `natural` (default), `linear`, `step-after` |
+| `stroke` | hex string | `chart` `:line`: series stroke. `:area` series maps: per-series stroke (`:color` is an alias). Unspecified area series keep Kit `chart_2`. Not layout `color` |
+| `stroke-style` | string | `chart` `:line` / `:area`: `natural` (default), `linear`, `step-after`. Unspecified area series keep Kit `natural` |
 | `x-axis` | bool | `chart` `:line` / `:area` / `:candlestick`: category axis (default true). Not an alias of bar `label-axis` |
 | `corner-radius` / `corner-radii` | number or `{top-left,top-right,bottom-right,bottom-left}` | `chart` `:bar`: Kit `Corners` |
-| `fill-gradient` | bool, `bar`, `chart`, or two `{color,at}` stops | `chart` `:bar`: Kit `fill_gradient` (clears solid `fill`) |
+| `fill-gradient` | bool, `bar`, `chart`, or two `{color,at}` stops | `chart` `:bar`: Kit `fill_gradient` (clears solid `fill`). Stop `at` is forwarded unclamped; Kit clips/interpolates |
 | `fill-gradient-mode` | string | `chart` `:bar`: `bar` (default) or `chart` when `fill-gradient` is true |
-| `inner-radius` | number | `chart` `:pie`: donut hole in pixels (Kit default 0) |
-| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted uses Kit's height×0.4 default |
+| `inner-radius` | number | `chart` `:pie`: donut hole in pixels (Kit default 0). Also a per-slice item field for Kit `inner_radius_fn` |
+| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted uses Kit's height×0.4 default. Also a per-slice item field for Kit `outer_radius_fn` |
 | `pad-angle` | number | `chart` `:pie` |
 | `label-color` | hex string | `chart` `:pie` / `:radar` |
 | `label-line-color` | hex string | `chart` `:pie` leader lines |
 | `label-gap` | number | `chart` `:pie` / `:radar` / `:sankey` |
 | `grid-levels` | number | `chart` `:radar`: concentric rings (Kit default 4, ≥1) |
-| `body-width-ratio` | number | `chart` `:candlestick`: body width vs band (Kit default 0.8) |
+| `body-width-ratio` | number | `chart` `:candlestick`: body width vs band (Kit default 0.8). Forwarded unclamped |
 | `node-align` | string | `chart` `:sankey`: `justify` (default), `left`, `right`, `center` |
 | `value-scale` | string | `chart` `:sankey`: `linear` (default) or `sqrt` |
 | `node-width` / `node-padding` / `iterations` / `node-corner-radius` / `link-opacity` / `min-link-width` | number | `chart` `:sankey` layout |
@@ -282,7 +283,7 @@ GPUI Kit 0.6 `Root::render` does not paint dialog / sheet / notification layers;
 
 Declarative `table` is Kit `Table` (not `DataTable`): content-sized, not virtualized, no selection callbacks. The wire is Kit primitives — `table-header` / `table-body` / `table-footer` / `table-row` / `table-head` / `table-cell` / `table-caption` — so `col_span`, alignment, and children belong on individual cells. `table-head` and `table-cell` children are ordinary clj-gpui nodes. Clojure `{:columns :rows :footer :caption}` shorthand expands into those primitives; column `:span` applies to the header cell only. `accessibility-label` is Kit `Table::accessibility_label` (a visible caption is not the accessible name). A host fallback still paints the older `options`/`items`/`variant: footer` shape. `combobox` keeps host `ComboboxState` (recreated if `searchable` / `multiple` change). Same-action Kit `Change` then `Confirm` is one `:on-change` + `:on-confirm` batch. Native `Change` updates the slot's cached selection so a Clojure echo of those ids does not call `set_selected_values` (which clears the search query). An item-collection change still rebuilds selection so renamed/removed options do not stick. A different Clojure value still overrides native state. `rating` is 0..=`max` (default 5); the host calls `.max` then `.value` because Kit clamps `.value` to the current max. `stepper` `value` is the selected item id.
 
-`otp-input` `:on-change` fires only when every cell is filled. `editor` is Kit `Editor` / `EditorState` (highlighter language, no LSP). Dock panel bodies are the static overlay subset plus `markdown`/`chart`, not list/data-table/editor. `chart` kinds are Kit's: `line`, `bar` (including `:alignment left` horizontal bars), `area`, `pie`, `radar`, `candlestick`, `sankey`. Convenience helpers may simplify Kit; `ui/chart` must not hide Kit 0.6 builders. Horizontal bar default height grows with category count on both the RootView and Dock wrappers. Stacked bars are a story-only `Plot`, not a Kit widget; they are not wrapped.
+`otp-input` `:on-change` fires only when every cell is filled. `editor` is Kit `Editor` / `EditorState` (highlighter language, no LSP). Dock panel bodies are the static overlay subset plus `markdown`/`chart`, not list/data-table/editor. `chart` kinds are Kit's: `line`, `bar` (including `:alignment left` horizontal bars), `area`, `pie`, `radar`, `candlestick`, `sankey`. Convenience helpers may simplify Kit; `ui/chart` must not hide Kit 0.6 builders or add limits Kit does not. Hover tooltips stay off unless `:interactive true`. Unspecified area series and pie slices keep Kit `chart_2` (area fill at 0.4 opacity). Radar `:content` paints ordinary clj-gpui widgets (badge, avatar, …), not only the static overlay subset. Horizontal bar default height grows with category count on both the RootView and Dock wrappers. Stacked bars are a story-only `Plot`, not a Kit widget; they are not wrapped.
 
 `spinner`, `badge`, and `clipboard` are not GPUI Kit `Styled` types. The host wraps them in a `div` that receives the usual layout and visual keys (`width`, `height`, `size`, `flex`, `padding`, `bg`, …). `accordion` and `description-list` use the same outer-owns-layout pattern, but the wrapper defaults to `flex-none` and full width so crate `size_full()` cannot steal leftover column height. Inner chrome is not styled twice.
 

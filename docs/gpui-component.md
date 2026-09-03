@@ -79,7 +79,7 @@ Classification:
 | `resizable::*` | `ui/resizable` | ✅ | C | Host `ResizableState`. `:on-change` is px size array |
 | `sidebar::*` | `ui/sidebar` | ✅ | C | `{id, label, icon}` menu. `:collapsed`, `:side` |
 | `setting::*` | `ui/settings` | ✅ | C | Pages / groups / fields. `:on-change` is `{:id :value}` with original field id |
-| `chart::*` / `plot::*` | `ui/chart` | ✅ | C | Full Kit 0.6 chart surface. `:line` / `:bar` / `:area` / `:pie` / `:radar` / `:candlestick` / `:sankey`. Helpers (`horizontal-bar-chart`, …) stay. Bar `:alignment :left` is horizontal (cljdu). Area/radar `:values` + `:series`. Pie `:inner-radius` donut. Line `:dot` is opt-in (Kit default). Stacked bars are a Kit story `Plot`, not wrapped |
+| `chart::*` / `plot::*` | `ui/chart` | ✅ | C | Kit 0.6 chart surface without extra host limits. `:line` / `:bar` / `:area` / `:pie` / `:radar` / `:candlestick` / `:sankey`. Helpers (`horizontal-bar-chart`, …) stay. `:interactive true` enables Kit hover tooltips (default off). Unspecified area series / pie slices keep Kit `chart_2`. Bar `:alignment :left` is horizontal (cljdu). Area/radar `:values` + `:series`. Pie `:inner-radius` donut; per-slice radii map to Kit radius fns. Line `:dot` is opt-in (Kit default). Radar `:content` is any clj-gpui widget. Stacked bars are a Kit story `Plot`, not wrapped |
 | `text::TextView` (markdown/HTML) | `ui/markdown`, `ui/html` | ✅ | C | Selectable; scrollable when `:height` or `:flex 1` |
 | `highlighter::*` | — | ❌ | E | Tree-sitter internals for the editor |
 | `form::{v,h}_form` / `field` | — | ❌ | E | Layout sugar; `vstack` is enough |
@@ -98,7 +98,7 @@ Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints o
 
 ## Category C — remaining
 
-Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, Pagination / ProgressCircle / Shimmer / HoverCard, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped at full builder parity on `ui/chart` (helpers such as `ui/horizontal-bar-chart` stay). `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, Pagination / ProgressCircle / Shimmer / HoverCard, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 

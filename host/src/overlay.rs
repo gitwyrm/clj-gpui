@@ -8,14 +8,28 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
-    App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+    App, Axis, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
+    Styled, Window, div, px,
 };
 use gpui_component::{
-    Disableable as _, Icon, IconName,
+    Colorize as _, Disableable as _, Icon, IconName, Sizable as _,
+    alert::Alert,
+    avatar::Avatar,
+    badge::Badge,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _},
+    clipboard::Clipboard,
     dialog::{AlertDialog, DialogButtonProps},
+    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
+    kbd::Kbd,
+    link::Link,
     menu::{PopupMenu, PopupMenuItem},
+    progress::Progress,
+    separator::Separator,
+    skeleton::Skeleton,
+    spinner::Spinner,
+    tag::Tag,
     v_flex,
 };
 use gpui_kit as gpui;
@@ -354,9 +368,237 @@ pub fn static_child_path(prefix: &str, index: usize) -> String {
 
 /// Paint a chart label node without overlay padding or min-width.
 /// Clicks are ignored (radar spoke labels are not action hosts).
+/// Kit accepts an arbitrary `AnyElement`; this paints the same RenderOnce
+/// widgets as the main tree (badge, avatar, tag, …), not only the static
+/// overlay subset used by dialogs.
 pub fn paint_chart_label(node: &Node, path: &str) -> gpui::AnyElement {
-    let emit: ActionEmitter = Rc::new(|_, _| {});
-    paint_static_node(node, path, emit)
+    paint_chart_element(node, path)
+}
+
+fn chart_hex(text: Option<&str>) -> Option<Hsla> {
+    text.and_then(|s| Hsla::parse_hex(s.trim()).ok())
+}
+
+fn chart_layout<E: Styled>(mut el: E, node: &Node) -> E {
+    if let Some(gap) = node.gap {
+        el = el.gap(px(gap));
+    }
+    if let Some(padding) = node.padding {
+        el = el.p(px(padding));
+    }
+    if let Some(width) = node.width {
+        el = el.w(px(width));
+    }
+    if let Some(height) = node.height {
+        el = el.h(px(height));
+    }
+    if let Some(size) = node.size {
+        el = el.size(px(size));
+    }
+    if let Some(font_size) = node.font_size {
+        el = el.text_size(px(font_size));
+    }
+    if let Some(color) = chart_hex(node.color.as_deref()) {
+        el = el.text_color(color);
+    }
+    el
+}
+
+fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElement {
+    chart_layout(div().id(SharedString::from(path.to_string())), node)
+        .child(child)
+        .into_any_element()
+}
+
+fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
+    match node.kind.as_str() {
+        "button" => {
+            let label = node.text.clone().unwrap_or_default();
+            let mut button = Button::new(SharedString::from(path.to_string())).label(label);
+            button = apply_button_chrome(button, node);
+            button.into_any_element()
+        }
+        "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
+            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_chart_element(child, &static_child_path(path, child_ix))
+            }))
+            .into_any_element(),
+        "vstack" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
+            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_chart_element(child, &static_child_path(path, child_ix))
+            }))
+            .into_any_element(),
+        "spacer" => {
+            let mut el = chart_layout(div().id(SharedString::from(path.to_string())), node);
+            if node.size.is_none() && node.flex.is_none() {
+                el = el.flex_1();
+            }
+            el.into_any_element()
+        }
+        "separator" => {
+            let mut separator =
+                if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+                    Separator::vertical()
+                } else {
+                    Separator::horizontal()
+                };
+            if node.dashed {
+                separator = separator.dashed();
+            }
+            if let Some(label) = node.text.clone().filter(|s| !s.is_empty()) {
+                separator = separator.label(label);
+            }
+            chart_layout(separator, node).into_any_element()
+        }
+        "spinner" => {
+            let mut spinner =
+                Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+            if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+                spinner = spinner.icon(icon);
+            }
+            chart_host(spinner, node, path)
+        }
+        "tag" => {
+            let mut tag =
+                Tag::new().with_variant(mapping::parse_tag_variant(node.variant.as_deref()));
+            if node.outline {
+                tag = tag.outline();
+            }
+            tag = tag.with_size(mapping::parse_scale(node.control_size.as_deref()));
+            chart_layout(tag.child(node.text.clone().unwrap_or_default()), node).into_any_element()
+        }
+        "alert" => {
+            let message = node
+                .message
+                .clone()
+                .or_else(|| node.text.clone())
+                .unwrap_or_default();
+            let id = SharedString::from(path.to_string());
+            let mut alert = match node
+                .variant
+                .as_deref()
+                .map(crate::catalog::normalize)
+                .as_deref()
+            {
+                Some("info") => Alert::info(id, message),
+                Some("success") => Alert::success(id, message),
+                Some("warning") => Alert::warning(id, message),
+                Some("error") | Some("danger") => Alert::error(id, message),
+                _ => Alert::new(id, message),
+            };
+            if let Some(title) = node.title.clone() {
+                alert = alert.title(title);
+            }
+            alert = alert.with_size(mapping::parse_scale(node.control_size.as_deref()));
+            chart_layout(alert, node).into_any_element()
+        }
+        "skeleton" => chart_layout(Skeleton::new(), node).into_any_element(),
+        "kbd" => {
+            let text = node.text.clone().unwrap_or_default();
+            match Keystroke::parse(&text) {
+                Ok(stroke) => chart_layout(Kbd::new(stroke), node).into_any_element(),
+                Err(_) => chart_layout(div().child(text), node).into_any_element(),
+            }
+        }
+        "link" => {
+            let mut link = Link::new(SharedString::from(path.to_string()));
+            if let Some(href) = node.href.clone().filter(|s| !s.is_empty()) {
+                link = link.href(href);
+            }
+            if node.disabled {
+                link = link.disabled(true);
+            }
+            let label = node
+                .text
+                .clone()
+                .unwrap_or_else(|| node.href.clone().unwrap_or_default());
+            chart_layout(link.child(label), node).into_any_element()
+        }
+        "badge" => {
+            let mut badge = Badge::new();
+            if node.dot {
+                badge = badge.dot();
+            } else if let Some(count) = node.count {
+                badge = badge.count(count as usize);
+            } else if let Some(n) = node.number_value() {
+                badge = badge.count(n.max(0.0) as usize);
+            }
+            badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
+            badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_chart_element(child, &static_child_path(path, child_ix))
+            }));
+            chart_host(badge, node, path)
+        }
+        "icon" => {
+            let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");
+            let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+            chart_layout(Icon::new(icon), node).into_any_element()
+        }
+        "clipboard" => {
+            let clip = Clipboard::new(SharedString::from(path.to_string()))
+                .value(node.text.clone().unwrap_or_default());
+            chart_host(clip, node, path)
+        }
+        "breadcrumb" => {
+            let items = node.collection();
+            let mut crumb = Breadcrumb::new();
+            for item in items.iter() {
+                crumb =
+                    crumb.child(BreadcrumbItem::new(item.label_or_id()).disabled(item.disabled));
+            }
+            chart_layout(crumb, node).into_any_element()
+        }
+        "avatar" => {
+            let mut avatar =
+                Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+            if let Some(name) = node.text.clone().or(node.title.clone()) {
+                avatar = avatar.name(name);
+            }
+            chart_layout(avatar, node).into_any_element()
+        }
+        "progress" => {
+            let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
+            chart_layout(
+                Progress::new(SharedString::from(path.to_string())).value(value),
+                node,
+            )
+            .into_any_element()
+        }
+        "group-box" => {
+            let mut box_ = GroupBox::new()
+                .id(SharedString::from(path.to_string()))
+                .with_variant(mapping::parse_group_variant(node.variant.as_deref()));
+            if let Some(title) = node.title.clone() {
+                box_ = box_.title(title);
+            }
+            chart_layout(box_, node)
+                .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_chart_element(child, &static_child_path(path, child_ix))
+                }))
+                .into_any_element()
+        }
+        "label" => chart_layout(
+            div()
+                .id(SharedString::from(path.to_string()))
+                .child(node.text.clone().unwrap_or_default()),
+            node,
+        )
+        .into_any_element(),
+        _ if !node.children.is_empty() => {
+            chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
+                .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_chart_element(child, &static_child_path(path, child_ix))
+                }))
+                .into_any_element()
+        }
+        _ => chart_layout(
+            div()
+                .id(SharedString::from(path.to_string()))
+                .child(node.text.clone().unwrap_or_default()),
+            node,
+        )
+        .into_any_element(),
+    }
 }
 
 /// Relative path under a `paint_static` prefix (`0`, `0/1`, …).
@@ -1020,5 +1262,19 @@ mod tests {
             queue.push(QueuedAction::ButtonClick { key: key.into() });
             assert_eq!(queue.next(&tree).unwrap()[0].id, expected, "{key}");
         }
+    }
+
+    #[test]
+    fn paint_chart_label_accepts_badge_and_avatar() {
+        let badge = node(json!({
+            "type": "badge",
+            "count": 3,
+            "children": [{"type": "label", "text": "N"}]
+        }));
+        let _ = paint_chart_label(&badge, "radar-label/0");
+        let avatar = node(json!({"type": "avatar", "text": "AB"}));
+        let _ = paint_chart_label(&avatar, "radar-label/1");
+        let tag = node(json!({"type": "tag", "text": "Hot", "variant": "primary"}));
+        let _ = paint_chart_label(&tag, "radar-label/2");
     }
 }
