@@ -4,32 +4,38 @@ Status: **plan only**. No host or Clojure code has been changed yet.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
-This document is the course of action for moving clj-gpui off **gpui-component 0.5.1 + crates.io `gpui` 0.2.2** onto **GPUI Kit 0.6**. It is written so we can discuss the strategy before spending a compile cycle on the host.
+This document is the course of action for moving clj-gpui off **gpui-component 0.5.1 + crates.io `gpui` 0.2.2** onto **GPUI Kit 0.6**. Naming follows Kit (no 0.5.1 aliases); remaining open questions are in [§11](#11-open-questions-for-discussion).
 
 ## Recommendation (read this first)
 
-**Migrate the native host in one jump to `gpui-kit` 0.6. Keep the Clojure `gpui.ui` surface stable. Treat new Kit widgets as a second, optional coverage pass.**
+**Migrate the native host in one jump to `gpui-kit` 0.6, and take Kit's 0.6 names all the way through Clojure, the wire protocol, and the host. Do not keep 0.5.1 aliases.** Treat extra Kit widgets (Combobox, Rating, chat `Message`/`Bubble`, NavStack, …) as a second coverage pass after today's widgets paint under the new names.
 
-That is the best course of action for this repo, for three reasons:
+That is the right course of action because:
 
-1. **There is no incremental crate upgrade.** 0.6 does not sit on Zed's crates.io `gpui` 0.2.2. Kit publishes its own GPUI snapshot as `gpui-pre` 0.3.x (`package = "gpui-pre"`, imported as `gpui`). Mixing 0.5.1 widgets with 0.6 GPUI types will not compile. A "wrap one widget, then the next" crate bump is not available.
-2. **Clojure apps should not feel the rename.** clj-gpui's public API is maps (`:type :divider`, `ui/table`, `ui/text-field`, `ui/editor`). Most 0.6 breaks are Rust-side names (`Divider` → `Separator`, `Table` → `DataTable`, `InputState::code_editor` → `EditorState`). We can absorb those in the host and keep protocol v7 unless a wire field must change.
-3. **New components are not the migration.** Combobox, Rating, Stepper, Command palette, NavStack, chat `Message`/`Bubble`, `Textarea`, radar/sankey charts, and so on are why 0.6 is attractive, but they are product work. Shipping a compiling host that still paints today's widgets is the gate. Coverage expansion is a follow-up PR, the same way 0.5.1 coverage landed in layers.
+1. **There is no incremental crate upgrade.** 0.6 does not sit on Zed's crates.io `gpui` 0.2.2. Kit publishes its own GPUI snapshot as `gpui-pre` 0.3.x (`package = "gpui-pre"`, imported as `gpui`). Mixing 0.5.1 widgets with 0.6 GPUI types will not compile.
+2. **There is no compatibility audience.** clj-gpui is two days old, unpublished, and has no users. Keeping `ui/divider` / `ui/table` / `ui/text-field` would only freeze a 0.5.1 vocabulary we invented before Kit renamed the types. Matching Kit now means `gpui.ui` stays a thin naming layer over gpui-kit.com instead of a translation table we have to document forever.
+3. **The three text controls should exist together.** 0.6 split `Input` / `Textarea` / `Editor`. Shipping `ui/input` and `ui/editor` while omitting `ui/textarea` would recreate the old "multiline lives on the wrong type" trap.
 
 Do **not** adopt `gpui-shell` (JavaScript host). Clojure is already our scriptable layer. Do **not** adopt `gpui-wry` (WebView); that remains out of scope. `gpui-fps` is optional later for `:chrome :dev`, not part of the compile.
 
 ```text
-today                         after (recommended)
-─────                         ───────────────────
-Clojure gpui.ui  ──maps──►    Clojure gpui.ui  ──maps──►  (same constructors)
-host (gpui 0.2.2              host (gpui-kit 0.6 facade
-      + gpui-component 0.5.1)       → gpui-pre 0.3.x
-                                    → gpui-base 0.6
-                                    → gpui-component 0.6
-                                    → gpui-kit-assets 0.6)
+today                              after
+─────                              ─────
+ui/text-field, :text-field         ui/input,     :input
+ui/divider,    :divider            ui/separator, :separator
+ui/table,      :table              ui/data-table,:data-table
+(none)                             ui/textarea,  :textarea
+ui/editor,     :editor             ui/editor,    :editor   (EditorState)
+host gpui 0.2.2 + component 0.5.1  host gpui-kit 0.6
+                                   → gpui-pre 0.3.x
+                                   → gpui-base 0.6
+                                   → gpui-component 0.6
+                                   → gpui-kit-assets 0.6
 ```
 
-Decision needed before implementation: agree on the dependency shape in [§3](#3-dependency-shape) and the phase split in [§8](#8-implementation-phases). Everything else in this file is inventory for that work.
+`ui/table` is reserved for Kit's new declarative `Table`. It is not an alias for DataTable.
+
+Decision still needed before implementation: dependency shape in [§3](#3-dependency-shape) and the remaining items in [§11](#11-open-questions-for-discussion). The naming policy in [§4](#4-naming-policy-adopt-kit-06) is settled.
 
 ## 1. What changed upstream
 
@@ -76,7 +82,7 @@ The host files that import GPUI / gpui-component:
 | `host/src/preview.rs`, `preview_macos.rs` | Window capture vs GPUI 0.2.2 occlusion (`zed#63217`). `inactive_frame_interval` was missing on 0.2.2; `gpui-pre` 0.3.x may have it. |
 | `host/themes/*.json` | Copied from gpui-component 0.5.1 |
 
-Clojure constructors in `src/gpui/ui.clj` already describe several widgets as 0.5.1-specific (`InputState::code_editor`, table click batching, one crate sheet). Those comments will need a 0.6 pass even if the function names stay.
+Clojure constructors in `src/gpui/ui.clj` still use 0.5.1 names (`text-field`, `divider`, `table`) and 0.5.1-specific comments (`InputState::code_editor`, table click batching). The migration rewrites those constructors and the examples/tests that call them.
 
 ## 3. Dependency shape
 
@@ -140,26 +146,55 @@ Options:
 - **Git dependency on `longbridge/gpui-kit`.** Unnecessary; 0.6.0 is on crates.io.
 - **Staying on 0.5.1.** Fine as a "not now" product decision, but then this branch is closed. 0.5.1 will not grow Combobox/Stepper/etc., and it is stuck on GPUI 0.2.2 forever.
 
-## 4. Clojure compatibility policy
+## 4. Naming policy: adopt Kit 0.6
 
-The migration PR should be **host-internal** unless a Kit API cannot be expressed with the current tree.
+No compatibility aliases. `gpui.ui` constructors, wire `:type` strings, and host `node.kind` arms use the same words Kit uses. `gpui.core` re-exports whatever `gpui.ui` interned; it must not keep the old symbols.
 
-| Clojure name | 0.6 host mapping | Public change? |
-|---|---|---|
-| `ui/divider` | `separator::Separator` | No. Keep `:type :divider` on the wire. |
-| `ui/table` | `table::DataTable` + existing `TableDelegate` | No. The new declarative `Table` is a different widget; do not steal this name. |
-| `ui/text-field` | `Input` / `InputState` (already documented single-line) | No. |
-| `ui/editor` | `Editor` / `EditorState` (was `InputState::code_editor`) | No constructor change. Host slot type changes. |
-| `ui/number-input` | still `NumberInput` wrapping `InputState` | Likely no. Re-verify step events. |
-| `ui/otp-input` | still `OtpInput` / `OtpState` | Likely no. |
-| `ui/dialog` | still `WindowExt::open_dialog` + `Dialog::new(cx)` | No, if confirm/alert/overlay-closable still exist (they do on the styled `Dialog`). |
-| `ui/dock` | `DockLayout` + `panel_handle` + `DockSkin` | No Clojure shape if we keep `{id, label, side, content}`. |
+Bump **protocol-version to 8** in the same change: `:text-field` / `:divider` / `:table` on the wire would be a second vocabulary.
 
-**Do not** rename `ui/divider` → `ui/separator` or `ui/table` → `ui/data-table` in the same PR as the crate bump. If we want those aliases later, add them without removing the old names.
+### 4.1 Constructor and wire map
 
-Protocol version stays **7** unless we add fields (`:rows` for textarea auto-grow, `:language` grammar that must round-trip a Kit enum, dock persistence JSON, …). New widgets in a later PR bump the protocol when they need new node kinds.
+| Kit 0.6 | Today (`gpui.ui` / wire) | After | Host |
+|---|---|---|---|
+| `Input` / `InputState` | `ui/text-field` / `:text-field` | **`ui/input` / `:input`** | already the right types |
+| `Textarea` / `TextareaState` | (none) | **`ui/textarea` / `:textarea`** | new slot map, wrap in the same PR as Input/Editor |
+| `Editor` / `EditorState` | `ui/editor` / `:editor` | **`ui/editor` / `:editor`** | drop `InputState::code_editor` |
+| `Separator` | `ui/divider` / `:divider` | **`ui/separator` / `:separator`** | `separator::Separator` |
+| `DataTable` | `ui/table` / `:table` | **`ui/data-table` / `:data-table`** | `DataTable` + `TableDelegate` |
+| declarative `Table` | (none; name was taken) | **`ui/table` / `:table`** | new wrapper, Phase 5 unless it is cheap after DataTable compiles |
+| `NumberInput` | `ui/number-input` | keep | still wraps `InputState` |
+| `OtpInput` | `ui/otp-input` | keep | |
+| `Dialog` | `ui/dialog` | keep | `Dialog::new(cx)` |
+| `AlertDialog` | `:variant :alert` on `ui/dialog` | **`ui/alert-dialog`** | `WindowExt::open_alert_dialog`; no overlay-dismiss |
+| `DescriptionList::separator` | (none as a Clojure method) | if we expose a row kind, call it separator not divider | |
+| `row_header` | (unset) | if we expose row checkboxes, `:row-header` not `:row-selector` | |
+| `has_more` | (unset) | if we expose list/table pagination, `:has-more` not `:eof` | |
 
-`gpui.theme/register!` already passes unknown ThemeConfig keys through. New tokens (`selection.background`, `radius.lg`, focus ring, markdown-table colors, …) work for custom sets without a Clojure schema change. Required tokens in the 0.6 JSON schema are still the old core set (`background`, `foreground`, `primary.*`, `base.*`, …).
+Names that already match Kit stay: `button`, `checkbox`, `switch`, `slider`, `select`, `list`, `tree`, `sheet`, `popover`, `notification`, `sidebar`, `dock`, `resizable`, `spinner`, `skeleton`, `badge`, `avatar`, `tabs`, …
+
+`clojure.core` has no `input`, so `ui/input` does not need an `:exclude`. `ui/list` already does.
+
+### 4.2 No shims
+
+Do not leave `ui/text-field`, `ui/divider`, or `ui/table` as aliases that paint DataTable. A two-day-old tree is cheaper to rewrite than to explain.
+
+Call sites that must move in the same implementation:
+
+- `src/gpui/ui.clj`, `src/gpui/core.clj` (re-export)
+- `test/gpui/ui_test.clj`, `runtime_test.clj`, `core_test.clj`
+- `examples/widgets`, `examples/todomvc`, `examples/themes/catppuccin-violet`
+- `README.md`, `docs/protocol.md`, `docs/gpui-component.md` (replaced by a 0.6 coverage doc)
+- Host: `renderer.rs` (`"text-field"` / `"divider"` / `"table"`), `overlay.rs` static paint, protocol tests that build `kind: "table"`
+
+### 4.3 Theme tokens
+
+`gpui.theme/register!` already passes unknown ThemeConfig keys through. New 0.6 tokens work without a Clojure schema change.
+
+Palette *names* follow Kit's 0.6 `themes/` directory. If Kit dropped Matrix or Adventure Time, we drop them too (same "no users" argument as the widget names). Add Aurora and Asciinema.
+
+### 4.4 Dialog overlay-closable
+
+Follow Kit: `AlertDialog` is not backdrop-dismissible (`overlay_closable` is deprecated there). `ui/dialog` can keep `:overlay-closable` for the generic dialog. Stop forcing overlay-dismiss on `:confirm` / `:alert` variants; those become `ui/alert-dialog` or Kit's confirm/alert styling without the host override.
 
 ## 5. Breaking changes that hit *this* host
 
@@ -174,38 +209,41 @@ Mapped from the [v0.6.0 notes](https://github.com/longbridge/gpui-kit/releases/t
 
 ### 5.2 Input / Textarea / Editor split (compile + behavior)
 
-0.6: `InputState` is **single-line only**. Multiline and code editing are separate entities.
+0.6: `InputState` is **single-line only**. Multiline and code editing are separate entities. The Clojure API should show that split, not hide it.
 
-| Today | 0.6 |
+| After | Host |
 |---|---|
-| `ui/text-field` → `InputState::new` + `Input::new` | Same types. Good: our docs already say single-line. |
-| `ui/editor` → `InputState::new().code_editor(lang).rows(12)` + `Input::new` | `EditorState::new(lang, window, cx)` + `Editor::new(&state)`. No `.code_editor()`, no Input-only `prefix` / `suffix` / clear / mask. |
-| (none) | `Textarea` / `TextareaState` — **new Clojure widget**, not required to compile. |
+| `ui/input` | `InputState::new` + `Input::new` (today's text-field) |
+| `ui/textarea` | `TextareaState::new` + `Textarea::new` — `:rows`, auto-grow, chat-style submit. Same string callbacks as input. |
+| `ui/editor` | `EditorState::new(lang, window, cx)` + `Editor::new(&state)`. No `.code_editor()`, no Input-only `prefix` / `suffix` / clear / mask. |
 
-`NumberInput` / `OtpInput` remain in `gpui_component::input`. Number-input currently shares the text-field `InputSlot` and `as_number` flag; keep that pattern if `InputState` is still the inner entity.
+`NumberInput` / `OtpInput` remain in `gpui_component::input`. Number-input currently shares the input `InputSlot` and `as_number` flag; share with `ui/input` keys, not with textarea/editor.
 
-Editor change subscription (`InputEvent::Change` coalescing in `protocol::InputChangeCoalesce`) must be re-checked against `EditorState` events. Fast typing + undo grouping was already a host footgun on 0.5.1; do not assume the same `InputEvent` enum covers Editor.
+Editor change subscription (`InputEvent::Change` coalescing in `protocol::InputChangeCoalesce`) must be re-checked against `EditorState` and `TextareaState` events. Fast typing + undo grouping was already a host footgun on 0.5.1; do not assume one enum covers all three.
 
-Default editor font is now the theme monospace, row height from font size. Our outer `viewport_sized(..., 200.0)` wrapper should still own Clojure `:height` / `:flex`.
+Default editor font is now the theme monospace, row height from font size. Outer `viewport_sized` wrappers still own Clojure `:height` / `:flex`.
 
-### 5.3 Table rename (compile)
+### 5.3 Table → DataTable, and a free `ui/table` name (compile)
 
 - Element: `Table::new(&state)` → `DataTable::new(&state)`.
+- Clojure / wire: `ui/table` / `"table"` → **`ui/data-table` / `"data-table"`**.
 - Delegate: still `TableDelegate` + `TableState<D>` in 0.6 sources.
 - `fn column(&self, …) -> &Column` → `fn column(&self, …) -> Column` (**owned**). `rows.rs` must clone (or store columns in a way that returns owned values).
-- `row_selector` → `row_header` if we ever set that option (we do not today).
-- `is_eof` → `has_more` (default `false`). We do not implement `is_eof`, so lists/tables should compile without a rename.
+- If we expose the selector column, the Kit flag is `row_header` (Clojure `:row-header`).
+- Pagination: `has_more`, not `is_eof`. We do not implement `is_eof` today.
 
-Do not wrap the new declarative `Table` for `ui/table`. That would silently change virtualization, selection, and delegate behavior.
+Kit's new declarative `Table` is a different widget (no delegate, no virtualization story like DataTable). **`ui/table` is reserved for that.** Do not point `ui/table` at DataTable even temporarily. Wrapping declarative `Table` can wait for Phase 5; until then the name is simply unused, which is clearer than a lie.
 
-### 5.4 Divider → Separator (compile)
+### 5.4 Divider → Separator (compile + Clojure)
 
 ```rust
 gpui_component::divider::Divider  // gone
 gpui_component::separator::Separator
 ```
 
-Wire `:type "divider"` and `ui/divider` stay. Overlay static paint (`overlay.rs` `"divider" => Divider::horizontal()`) and `renderer.rs` vertical/horizontal constructors switch types. Mapping helpers for orientation/dashed stay conceptually the same if Separator still has them — verify at compile.
+Clojure / wire: `ui/divider` / `"divider"` → **`ui/separator` / `"separator"`**. Overlay static paint and `renderer.rs` constructors switch both type and kind string. Mapping helpers for orientation/dashed stay if Separator still has them — verify at compile.
+
+Description-list row chrome, if we ever expose Kit's `DescriptionList::separator()`, uses that name too.
 
 ### 5.5 Dialog (compile, then overlay tests)
 
@@ -213,8 +251,9 @@ Wire `:type "divider"` and `ui/divider` stay. Overlay static paint (`overlay.rs`
 - Styled `Dialog` still has `.title()`, `.confirm()`, `.alert()`, `.overlay_closable()`, `.on_ok` / `.on_cancel` / `.on_close`, and `ParentElement::extend` for children. Our live-spec builder in `overlay.rs` should port with the constructor change.
 - `Root::render` still does **not** paint dialog/sheet/notification layers (confirmed on `v0.6.0` `root.rs`). The host must keep calling `Root::render_dialog_layer` / `render_sheet_layer` / `render_notification_layer` from `RootView`. Next-frame `WindowExt::open_dialog` to avoid re-entering `Root` remains the right shape.
 - New **declarative** API (`trigger`, `content`, `DialogHeader`, `DialogTitle`, …) is for in-tree dialogs. Our model is controlled `:open?` via `WindowExt`. Do not switch to trigger-style in the migration PR.
-- `AlertDialog` is a convenience on `WindowExt::open_alert_dialog`. Optional later mapping for `:variant :alert` if the styled `Dialog::alert()` path drifts.
-- `AlertDialog::overlay_closable` is deprecated (alerts cannot dismiss on backdrop). Our host currently **forces** overlay-closable true even for confirm/alert unless Clojure sets `:overlay-closable false`. Revisit that override against 0.6 defaults; behavior change would need a README note, not necessarily a protocol bump.
+- Add **`ui/alert-dialog`** for `WindowExt::open_alert_dialog`. Kit's `AlertDialog::overlay_closable` is deprecated; alerts do not dismiss on backdrop. Drop the host override that forced overlay-closable on confirm/alert variants.
+- Keep `ui/dialog` for the generic / confirm dialog, including `:overlay-closable`.
+- New **declarative** Dialog parts (`trigger`, `content`, `DialogHeader`, …) are optional later. Controlled `:open?` via `WindowExt` remains the clj-gpui model.
 
 ### 5.6 Dock (largest behavioral rewrite)
 
@@ -244,7 +283,7 @@ Required host changes in `renderer.rs` + `extra.rs`:
 4. Split `CljPanel` traits:
    - `gpui_base::dock::Panel`: `panel_name`, `closable`, `zoomable() -> bool`, dump/active callbacks.
    - `gpui_component::dock::Panel`: `title`, `zoom_control() -> Option<PanelControl>` (replaces today's `zoomable() -> Option<PanelControl>`).
-5. Panel bodies stay the static overlay subset + markdown/chart (not list/table/editor). Persistence is still out of scope unless we decide to expose it.
+5. Panel bodies stay the static overlay subset + markdown/chart (not list/data-table/editor). Persistence is still out of scope unless we decide to expose it.
 
 Expect this to be the longest single chunk after "make it compile."
 
@@ -272,12 +311,7 @@ Vendored palettes live in `host/themes/`, listed in `catalog.rs` and `gpui.ui/na
 
 Tokyo Night variant names (`Tokyo Night` / `Tokyo Storm` / `Tokyo Moon`) still exist in 0.6 JSON. Token tweaks are small (e.g. `muted.background`, `input.border` presence). **Replace the vendored files from the 0.6 tag** rather than hand-merging, then diff `named-themes`.
 
-Policy for Matrix / Adventure Time if Kit dropped them:
-
-- **Keep shipping our 0.5.1 JSON** for names apps already pass as `:theme`, or
-- **Drop them** and document the break.
-
-Recommend **keep Matrix (and Adventure Time if missing)** as extra bundled files we own, until we know nobody relies on the string. Add Aurora / Asciinema to `named-themes` as an additive list change (not a protocol bump).
+If Kit dropped Matrix or Adventure Time, **drop them**. Add Aurora and Asciinema. `gpui.ui/named-themes` is generated from what we actually vendor from the 0.6 tag, not from 0.5.1 nostalgia.
 
 Schema docs: [gpui-kit.com](https://gpui-kit.com) / `.theme-schema.json`. Update `host/themes/README.md` links away from `longbridge.github.io/gpui-component`.
 
@@ -294,28 +328,27 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 5. **List confirm vs select** — 0.5.1 arrows = Select only; click/Enter = Confirm, host synthesizes `:on-change` then `:on-confirm`. If 0.6 list events changed, the widgets gallery (`:list-sel` / `:list-confirm`) will show it.
 6. **Table double-click batching** — `SelectRow` then `DoubleClickedRow` from one click.
 7. **Editor change coalescing** — `InputChangeCoalesce` + wait-for-seq around submit.
-8. **Number-input slot sharing** with text-field keys.
+8. **Number-input slot sharing** with `ui/input` keys.
 9. **Color picker `Some` → `nil` recreate.**
 10. **Date picker `set_date` skip when unchanged** (keeps the calendar open).
 11. **Nested `:theme` restore** — Theme still process-global; `ThemeScope` must still pop.
 12. **`preview-png`** on Linux X11/Xvfb and macOS occlusion.
 
-## 7. New Kit surface (explicitly later)
+## 7. New Kit surface (after today's widgets paint)
 
-Do not wrap these in the compile PR. They are the reason to migrate, scheduled after the host is green.
+`ui/input`, `ui/textarea`, `ui/editor`, `ui/separator`, `ui/data-table`, and `ui/alert-dialog` are **in** the migration, not this list.
 
-| Kit 0.6 | Suggested Clojure (later) | Notes |
+| Kit 0.6 | Clojure | Notes |
 |---|---|---|
-| `Textarea` / `TextareaState` | `ui/textarea` | First additive win. Same callback story as `text-field`. |
+| declarative `Table` | `ui/table` | Reserved name. Wrap once DataTable is stable. |
 | `Combobox` | `ui/combobox` | Replaces some of the deferred "searchable select sections" C item. |
 | `Rating`, `Stepper`, `Pagination` | `ui/rating`, `ui/stepper`, `ui/pagination` | Straightforward controlled widgets. |
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
-| `HoverCard`, `AlertDialog`, `FocusTrap` | maybe | AlertDialog may fold into `ui/dialog` variants. |
+| `HoverCard`, `FocusTrap` | maybe | |
 | `Command`, `NativeMenu`, `StatusBar` | maybe | OS menu / palette — think through whether Clojure owns the menu tree. |
 | `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | later | Chat/assistant layout. Large API. |
 | `NavStack` | `ui/nav-stack` | Push/back/forward + motion. Needs host history state. |
-| Declarative `Table` | **not** `ui/table` | New name (`ui/grid` / `ui/simple-table`) if we want it. |
-| `DataTable` extras | flags on `ui/table` | Multi-row headers, cell selection, custom row heights, export. |
+| `DataTable` extras | flags on `ui/data-table` | Multi-row headers, cell selection, custom row heights, export. |
 | `RadarChart`, `SankeyChart`, candlestick | `:kind` on `ui/chart` | Additive chart kinds; band scale `Eq + Hash`. |
 | `SelectableText`, window `TextSelection` | maybe | Cross-element copy. Preview/Evalight might care. |
 | Motion / spring | no widget | Only if we expose animation as a node. |
@@ -327,7 +360,7 @@ Update [docs/gpui-component.md](gpui-component.md) **after** the host compiles: 
 
 ## 8. Implementation phases
 
-Each phase is a discussion checkpoint. Phase 0 is this document. Implementation should not start until we pick the options in §3 and §5.8.
+Each phase is a discussion checkpoint. Phase 0 is this document. Naming (§4) is decided. Implementation should not start until we pick the remaining options in §3 and §11.
 
 ### Phase 0 — this plan (done when the PR merges)
 
@@ -344,46 +377,50 @@ Goal: `cd host && cargo check` with empty or stubbed modules **or** the real tre
 
 This phase is allowed to be an ugly compile dump. It answers "how large is GPUI 0.3, really?" before rewriting dock.
 
-### Phase 2 — mechanical compile of the existing host
+### Phase 2 — mechanical compile + name remap
 
-Goal: `cargo test --manifest-path host/Cargo.toml` unit tests (mapping, overlay regression, rows, extra, zenity) compile and pass **without** claiming overlay/editor/dock parity.
+Goal: host unit tests compile, and Clojure constructors already use Kit names (examples/tests may still be mid-rewrite).
 
 Order of remaps (cheapest first):
 
 1. `main.rs` application + assets + init.
-2. `Divider` → `Separator`.
-3. `Table` → `DataTable`; `column()` owned; imports.
-4. `Dialog::new(cx)`.
-5. `ui/editor` host: `EditorState` / `Editor`; drop `.code_editor()`.
-6. Dock last (see §5.6).
-7. IconName / theme JSON / leftover import paths.
+2. `Divider` → `Separator`; wire `"separator"`; `ui/separator`.
+3. `Table` → `DataTable`; wire `"data-table"`; `ui/data-table`; `column()` owned.
+4. `"text-field"` → `"input"`; `ui/input`.
+5. `Dialog::new(cx)`; add `ui/alert-dialog`.
+6. `ui/editor` host: `EditorState` / `Editor`; drop `.code_editor()`.
+7. `ui/textarea` + `TextareaState` slot (same change-coalesce pattern as input).
+8. Dock last (see §5.6).
+9. IconName / theme JSON / leftover import paths.
+10. Protocol version **8**.
 
-Do not add Clojure constructors here.
+No `ui/text-field`, `ui/divider`, or DataTable-backed `ui/table` left in the tree.
 
-### Phase 3 — behavioral parity for shipped widgets
+### Phase 3 — behavioral parity under the new names
 
-Goal: protocol-test, Clojure unit tests, and the widget gallery look like 0.5.1.
+Goal: protocol-test, Clojure unit tests, and the widget gallery work with `ui/input`, `ui/separator`, `ui/data-table`, `ui/textarea`, `ui/editor`, `ui/alert-dialog`.
 
 - Overlay tests + a real window smoke (`examples/widgets`).
-- Editor typing / blur / language switch (even if `clojure` highlighting is weak).
-- List/table/tree selection + confirm.
+- Input / textarea / editor typing, blur, language switch (even if `clojure` highlighting is weak).
+- List / data-table / tree selection + confirm.
 - Nested themes + Catppuccin Violet example.
 - `preview-png` on Linux Xvfb; note macOS for a machine with Screen Recording.
-- Counter, TodoMVC, template — no API changes expected.
+- Counter, TodoMVC, template rewritten to the new constructors.
 
-If a Kit default changes visible behavior (dialog overlay-closable, editor font, tab animation), document it in README rather than silently papering over it — unless it breaks a protocol test, in which case prefer preserving clj-gpui's documented contract.
+If a Kit default changes visible behavior (alert dialogs ignoring backdrop clicks, editor font, tab animation), **take Kit's default** and document it. Do not reintroduce 0.5.1 host overrides just to look like last week.
 
 ### Phase 4 — docs and inventory
 
 - Point README / protocol / `gpui.ui` docstrings at gpui-kit.com.
-- Replace 0.5.1 pins in `docs/protocol.md`.
+- Document the name map (`text-field` → `input`, `divider` → `separator`, `table` → `data-table`) once in README, then use only the new names.
+- Replace 0.5.1 pins in `docs/protocol.md` (protocol **8**).
 - Rewrite coverage doc for 0.6 (new class-C rows, dock/editor notes).
 - `host/themes/README.md` provenance.
 - LICENSE note: palettes still Apache-2.0, now from gpui-kit.
 
-### Phase 5 — new widgets (separate PR, after discussion)
+### Phase 5 — remaining Kit widgets (separate PR)
 
-Start with `ui/textarea`, then Combobox / Rating / Stepper / extra chart kinds. Each gets gallery coverage and protocol notes. Not a dump of every 0.6 module.
+Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. Each gets gallery coverage. Not a dump of every 0.6 module.
 
 ## 9. Testing plan (when we implement)
 
@@ -407,31 +444,33 @@ Browser verification does not apply (native GPUI, not a web app). Closest substi
 - **`gpui-pre` moves independently of Kit.** 0.3.3 published the same day as 0.6.0. Lock the first compiling tree; do not float `*` on GPUI.
 - **Compile time.** `tree-sitter-languages` plus GPUI/GPU stack is a long first build. Feature set B in §3.2 is the mitigation.
 - **Dock rewrite regresses chrome** if we forget `DockSkin` or `panel_handle` (blank tabs / `"clj-gpui-panel"` titles).
-- **Editor entity split** breaks slot reuse between `ui/text-field` and `ui/editor` if any example shared keys (they should not; keys are typed). Number-input sharing with text-field is the real slot hazard.
+- **Editor / textarea / input entity split** breaks slot reuse if an example reuses the same `:id` across kinds. Number-input sharing with `ui/input` is the real slot hazard.
 - **Preview / occlusion** still macOS-fragile; 0.3 may help or may rename `GPUIWindow`.
-- **Theme name churn** (Matrix, Adventure Time, new Aurora) surprises `ui/themes` consumers.
-- **No Clojure tree-sitter** — ` :language "clojure"` stays cosmetic.
+- **`ui/table` unused until Phase 5** may look like a missing widget in the README. Call that out: data tables are `ui/data-table`.
+- **No Clojure tree-sitter** — `:language "clojure"` stays cosmetic.
 - **Edition / MSRV** — fine on current stable; anyone on rustc &lt; 1.85 cannot build the host. README should say "recent stable" more firmly (1.85+).
 
 ## 11. Open questions for discussion
 
-Please answer these before Phase 1, or accept the defaults in **bold**:
+**Settled:** Clojure / wire / host names follow Kit 0.6 ([§4](#4-naming-policy-adopt-kit-06)). No 0.5.1 aliases. Protocol 8.
+
+Please answer the rest before Phase 1, or accept the defaults in **bold**:
 
 1. **Facade vs raw crates?** Default: **`gpui-kit` 0.6.0 with module aliases** (§3.1).
 2. **Tree-sitter feature set?** Default: **short list (B)**, not all languages.
-3. **Dropped palettes?** Default: **keep Matrix / Adventure Time if Kit omitted them**; add Aurora + Asciinema.
+3. **Dropped palettes?** Default: **follow Kit's 0.6 `themes/` list** (drop Matrix / Adventure Time if they did; add Aurora + Asciinema).
 4. **Host edition?** Default: **stay 2021**.
-5. **Dialog overlay-closable override** for `:confirm` / `:alert`? Default: **keep today's "Clojure can dismiss overlay unless it opts out"** and note if Kit fights it.
-6. **Phase 5 first widgets?** Default: **`ui/textarea`, then Combobox / Rating / Stepper**.
+5. **Wrap declarative `Table` as `ui/table` in the migration PR?** Default: **no** — reserve the name, implement in Phase 5. Data tables ship as `ui/data-table`.
+6. **Phase 5 first widgets after textarea/alert-dialog?** Default: **declarative `ui/table`, then Combobox / Rating / Stepper**.
 7. **`gpui-fps` in dev chrome?** Default: **no**, until someone wants it.
 8. **One migration PR vs spike PR + real PR?** Default: **spike can be the first commits on this branch**; land when Phase 3 is honestly done, not after Phase 5.
 
 ## 12. What this branch will not do
 
-- Implement the crate bump, widget remaps, or new `gpui.ui` constructors.
+- Implement the crate bump or the name remap (still plan-only).
 - Publish to Clojars or add CI.
 - Take a git dependency on Kit `main`.
 - Introduce `gpui-shell` or WebView.
-- Change protocol v7 "just in case."
+- Keep `ui/text-field`, `ui/divider`, or a DataTable-backed `ui/table` "for compatibility."
 
 When we decide to implement, start at Phase 1 and keep this file updated with the decisions from §11.
