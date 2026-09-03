@@ -527,6 +527,15 @@ pub fn pie_uses_outer_radius_fn(points: &[ChartPoint]) -> bool {
     points.iter().any(|p| p.outer_radius.is_some())
 }
 
+/// Kit pie *layout* uses `height × 0.4` when `outer_radius` is 0, but
+/// `get_outer_radius` still returns 0 into `arc.paint`. Kit then drops the
+/// path (`r1 < EPSILON`), so a donut with only `:inner-radius` shows labels
+/// and no ring. Forward that layout default so paint matches labels.
+pub fn pie_paint_outer_radius(node: &Node) -> f32 {
+    node.outer_radius
+        .unwrap_or_else(|| chart_viewport(node).1 * 0.4)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartFillGradient {
     PerBar,
@@ -915,7 +924,7 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             let any_inner = pie_uses_inner_radius_fn(&pie_data);
             let any_outer = pie_uses_outer_radius_fn(&pie_data);
             let node_inner = node.inner_radius.unwrap_or(0.0);
-            let node_outer = node.outer_radius.unwrap_or(0.0);
+            let paint_outer = pie_paint_outer_radius(node);
             let kit_chart_2 = cx.theme().chart_2;
             let mut pie = PieChart::new(pie_data).value(|p| p.series_y().unwrap_or(0.0) as f32);
             if install_color {
@@ -931,10 +940,11 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             } else if let Some(radius) = node.inner_radius {
                 pie = pie.inner_radius(radius);
             }
+            // Always install a paint outer radius. Kit's own default of 0 is
+            // only a layout sentinel; `arc.paint(Some(0))` draws nothing.
+            pie = pie.outer_radius(paint_outer);
             if any_outer {
-                pie = pie.outer_radius_fn(move |arc| arc.data.outer_radius.unwrap_or(node_outer));
-            } else if let Some(radius) = node.outer_radius {
-                pie = pie.outer_radius(radius);
+                pie = pie.outer_radius_fn(move |arc| arc.data.outer_radius.unwrap_or(paint_outer));
             }
             if let Some(angle) = node.pad_angle {
                 pie = pie.pad_angle(angle);
@@ -2379,6 +2389,18 @@ mod tests {
         assert_eq!(points[1].inner_radius, None);
         assert!(pie_uses_inner_radius_fn(&points));
         assert!(pie_uses_outer_radius_fn(&points));
+        let donut_only_inner: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "pie",
+            "height": 160,
+            "inner-radius": 42
+        }))
+        .unwrap();
+        assert_eq!(pie_paint_outer_radius(&donut_only_inner), 64.0);
+        assert_eq!(pie_paint_outer_radius(&pie), 70.0);
+        let default_h: Node =
+            serde_json::from_value(json!({"type": "chart", "variant": "pie"})).unwrap();
+        assert_eq!(pie_paint_outer_radius(&default_h), 180.0 * 0.4);
         let sankey: Node = serde_json::from_value(json!({
             "type": "chart",
             "variant": "sankey",

@@ -241,7 +241,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `fill-gradient` | bool, `bar`, `chart`, or two `{color,at}` stops | `chart` `:bar`: Kit `fill_gradient` (clears solid `fill`). Stop `at` is forwarded unclamped; Kit clips/interpolates |
 | `fill-gradient-mode` | string | `chart` `:bar`: `bar` (default) or `chart` when `fill-gradient` is true |
 | `inner-radius` | number | `chart` `:pie`: donut hole in pixels (Kit default 0). Also a per-slice item field for Kit `inner_radius_fn` |
-| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted uses Kit's height×0.4 default. Also a per-slice item field for Kit `outer_radius_fn` |
+| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted pie paint forwards Kit's layout default (`height × 0.4`) because Kit's paint path still uses 0 and drops the ring. Also a per-slice item field for Kit `outer_radius_fn` |
 | `pad-angle` | number | `chart` `:pie` |
 | `label-color` | hex string | `chart` `:pie` / `:radar` |
 | `label-line-color` | hex string | `chart` `:pie` leader lines |

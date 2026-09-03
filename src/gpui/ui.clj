@@ -1781,7 +1781,7 @@
 (defn pie-chart
   "See `chart` with `:pie`. `:inner-radius` makes a donut; `:labels true` draws slice labels.
   Per-slice `:inner-radius` / `:outer-radius` map to Kit `inner_radius_fn` / `outer_radius_fn`.
-  Omit slice `:color` to keep Kit `chart_2`."
+  Omit slice `:color` to keep Kit `chart_2`. Omitted `:outer-radius` uses the chart height × 0.4 so the ring paints (Kit's layout default; Kit's paint path does not)."
   ([points] (chart :pie points nil))
   ([points opts] (chart :pie points opts)))
 

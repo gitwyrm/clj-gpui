@@ -757,7 +757,8 @@ pub struct Node {
     /// Pie inner radius in pixels (donut). Kit default 0.
     #[serde(default, rename = "inner-radius")]
     pub inner_radius: Option<f32>,
-    /// Pie / radar outer radius in pixels. Omitted uses Kit's height×0.4 default.
+    /// Pie / radar outer radius in pixels. Omitted pie paint uses height×0.4
+    /// (Kit's layout default; Kit's paint path does not apply that fallback).
     #[serde(default, rename = "outer-radius")]
     pub outer_radius: Option<f32>,
     /// Pie pad angle.
