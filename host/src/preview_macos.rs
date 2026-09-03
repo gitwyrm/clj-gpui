@@ -24,6 +24,7 @@
 
 #![allow(deprecated)] // CGWindowListCreateImage*; ScreenCaptureKit is preferred.
 
+use gpui_kit as gpui;
 use std::ffi::c_char;
 use std::ptr::NonNull;
 use std::sync::{mpsc, Once};
@@ -103,13 +104,18 @@ unsafe fn override_occlusion_state(class_name: &std::ffi::CStr) {
         return;
     };
     let sel = sel!(occlusionState);
-    let imp: Imp = std::mem::transmute(
-        occlusion_state_always_visible as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> usize,
-    );
-    let types: *const c_char = c"Q@:".as_ptr() as *const c_char;
-    let cls_ptr = cls as *const AnyClass as *mut AnyClass;
-    if !class_addMethod(cls_ptr, sel, imp, types).as_bool() {
-        let _ = class_replaceMethod(cls_ptr, sel, imp, types);
+    // SAFETY: `imp` matches `-[NSWindow occlusionState]` (`Q@:`). Only
+    // GPUIWindow / GPUIPanel are patched, never NSWindow.
+    unsafe {
+        let imp: Imp = std::mem::transmute(
+            occlusion_state_always_visible
+                as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> usize,
+        );
+        let types: *const c_char = c"Q@:".as_ptr() as *const c_char;
+        let cls_ptr = cls as *const AnyClass as *mut AnyClass;
+        if !class_addMethod(cls_ptr, sel, imp, types).as_bool() {
+            let _ = class_replaceMethod(cls_ptr, sel, imp, types);
+        }
     }
 }
 

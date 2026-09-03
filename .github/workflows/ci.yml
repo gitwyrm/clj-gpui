@@ -46,6 +46,9 @@ jobs:
             libdbus-1-dev \
             libssl-dev \
             pkg-config \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libstdc++-14-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
             libwayland-dev \

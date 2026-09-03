@@ -1,11 +1,13 @@
-//! Mapping from clj-gpui JSON node fields onto gpui-component 0.5.1 types.
+//! Mapping from clj-gpui JSON node fields onto GPUI Kit 0.6 types.
 
 use crate::catalog;
 use gpui::Axis;
 use gpui_component::{
-    button::ToggleVariant, group_box::GroupBoxVariant, tab::TabVariant, tag::TagVariant, IconName,
-    Placement, Side, Size,
+    IconName, Placement, Side, Size, button::ToggleVariant, group_box::GroupBoxVariant,
+    tab::TabVariant, tag::TagVariant,
 };
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 
 #[cfg(test)]
 use gpui_component::slider::SliderScale;
@@ -43,7 +45,7 @@ pub fn parse_description_axis(value: Option<&str>) -> Axis {
 
 /// Virtual lists default to a vertical column of rows.
 ///
-/// `parse_axis` defaults to horizontal (sliders, dividers, resizable). A
+/// `parse_axis` defaults to horizontal (sliders, separators, resizable). A
 /// virtual-list without `:orientation` should still look like `ui/list`.
 pub fn parse_virtual_list_axis(value: Option<&str>) -> Axis {
     match value.map(catalog::normalize) {
@@ -166,7 +168,7 @@ pub fn parse_icon(name: &str) -> Option<IconName> {
         "folder open" => Some(IconName::FolderOpen),
         "frame" => Some(IconName::Frame),
         "gallery vertical end" => Some(IconName::GalleryVerticalEnd),
-        "github" => Some(IconName::GitHub),
+        "github" => Some(IconName::Github),
         "globe" => Some(IconName::Globe),
         "heart" => Some(IconName::Heart),
         "heart off" => Some(IconName::HeartOff),

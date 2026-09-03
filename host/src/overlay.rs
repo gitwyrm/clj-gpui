@@ -8,14 +8,18 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
-    div, px, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
+    App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
+    Disableable as _,
     button::{Button, ButtonVariants as _},
+    dialog::{AlertDialog, DialogButtonProps},
     h_flex,
     menu::{PopupMenu, PopupMenuItem},
-    v_flex, Disableable as _,
+    v_flex,
 };
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -26,6 +30,10 @@ use std::sync::mpsc;
 pub struct DialogSpec {
     pub key: String,
     pub node: Node,
+}
+
+fn is_dialog_kind(kind: &str) -> bool {
+    matches!(kind, "dialog" | "alert-dialog")
 }
 
 pub fn node_key(node: &Node, path: &str) -> String {
@@ -39,7 +47,7 @@ pub fn node_key(node: &Node, path: &str) -> String {
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
     let mut out = Vec::new();
     walk_nodes(root, "root", &mut |node, path| {
-        if node.kind == "dialog" && node.open.unwrap_or(false) {
+        if is_dialog_kind(&node.kind) && node.open.unwrap_or(false) {
             out.push(DialogSpec {
                 key: node_key(node, path),
                 node: node.clone(),
@@ -157,7 +165,7 @@ impl QueuedAction {
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
                 Self::ButtonClick { .. } => node.kind == "button",
-                Self::DialogClose { .. } => node.kind == "dialog",
+                Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => node.kind == "popover",
                 Self::MenuSelect { .. } => {
                     node.kind == "dropdown-menu" || node.kind == "context-menu"
@@ -321,7 +329,7 @@ pub fn fill_popup_menu(
 
 /// Popover content runs as `Fn` during Popover paint while `RootView` is
 /// borrowed, so it cannot consume `AnyElement`s from `render_node`. Rebuild
-/// a small static tree (label / stack / button / divider) from cloned nodes.
+/// a small static tree (label / stack / button / separator) from cloned nodes.
 ///
 /// `path` is a stable element-id prefix (`dialog-key/content`). Nested
 /// children append `/index` so sibling stacks cannot collide. Button clicks
@@ -379,7 +387,7 @@ fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
         }
         let key = node_key(node, walk_path);
         match node.kind.as_str() {
-            "dialog" | "popover" | "sheet" => {
+            "dialog" | "alert-dialog" | "popover" | "sheet" => {
                 if let Some(rel) = static_rel(path, &format!("{key}/content")) {
                     found = node_at_static_rel(&node.children, rel).cloned();
                 } else if node.kind == "sheet" {
@@ -442,7 +450,7 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
                 paint_static_node(child, &static_child_path(path, child_ix), emit.clone())
             }))
             .into_any_element(),
-        "divider" => gpui_component::divider::Divider::horizontal().into_any_element(),
+        "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
         _ => div()
             .id(SharedString::from(path.to_string()))
             .child(node.text.clone().unwrap_or_default())
@@ -491,18 +499,54 @@ pub fn configure_dialog(
         dialog = dialog.title(title);
     }
     match node.variant.as_deref().map(crate::catalog::normalize) {
-        Some(name) if name == "confirm" => dialog = dialog.confirm(),
-        Some(name) if name == "alert" => dialog = dialog.alert(),
-        _ => {}
+        Some(name) if name == "confirm" => {
+            dialog = dialog.button_props(DialogButtonProps::default().show_cancel(true));
+            if let Some(closable) = node.overlay_closable {
+                dialog = dialog.overlay_closable(closable);
+            }
+        }
+        _ => {
+            dialog = dialog.overlay_closable(overlay_closable(node));
+        }
     }
-    // confirm()/alert() set overlay_closable(false). Overlay dismiss is the
-    // default for Dialog::new and for this host unless Clojure opts out.
-    dialog = dialog.overlay_closable(overlay_closable(node));
     if let Some(width) = node.width {
         dialog = dialog.width(px(width));
     }
     dialog.extend(children);
     dialog
+}
+
+/// Apply an alert-dialog builder. Backdrop dismiss is never enabled.
+pub fn configure_alert_dialog(
+    mut alert: AlertDialog,
+    node: &Node,
+    children: Vec<gpui::AnyElement>,
+) -> AlertDialog {
+    if let Some(title) = node.title.clone() {
+        alert = alert.title(title);
+    }
+    if let Some(text) = node
+        .message
+        .clone()
+        .or_else(|| node.text.clone())
+        .filter(|s| !s.is_empty())
+    {
+        alert = alert.description(text);
+    }
+    if node
+        .variant
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+        == Some("confirm")
+    {
+        alert = alert.confirm();
+    }
+    if let Some(width) = node.width {
+        alert = alert.width(px(width));
+    }
+    alert.extend(children);
+    alert
 }
 
 /// Click-outside (and Escape) dismiss. Omitted means true.
@@ -529,7 +573,7 @@ pub fn acknowledge_dialog_tree(dialog_keys: &mut Vec<String>, tree: &Node) {
     dialog_keys.retain(|key| open.iter().any(|spec| &spec.key == key));
 }
 
-/// Bind 0.5.1 Dialog callbacks. The crate itself sequences them:
+/// Binding Kit 0.6 Dialog callbacks. The crate itself sequences them:
 ///
 /// * OK: `on_ok` (false keeps the dialog open), then `on_close`
 /// * Cancel, Escape, close button, overlay click: `on_cancel`, then `on_close`
@@ -543,6 +587,28 @@ pub fn bind_dialog_callbacks(
     close: Rc<RefCell<DialogClose>>,
 ) -> gpui_component::dialog::Dialog {
     dialog
+        .on_ok({
+            let close = close.clone();
+            move |_, _, _| close.borrow_mut().action(true)
+        })
+        .on_cancel({
+            let close = close.clone();
+            move |_, _, _| close.borrow_mut().action(false)
+        })
+        .on_close(move |_, _, cx| {
+            if let Some(action) = close.borrow_mut().take(&key) {
+                emit(action, cx);
+            }
+        })
+}
+
+pub fn bind_alert_dialog_callbacks(
+    alert: AlertDialog,
+    key: String,
+    emit: ActionEmitter,
+    close: Rc<RefCell<DialogClose>>,
+) -> AlertDialog {
+    alert
         .on_ok({
             let close = close.clone();
             move |_, _, _| close.borrow_mut().action(true)
@@ -857,6 +923,62 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].key, "ok");
         assert!(notification_autohide(&notes[0].node));
+    }
+
+    #[test]
+    fn collect_open_dialogs_includes_alert_dialog() {
+        let tree = node(json!({
+            "type": "window",
+            "children": [
+                {"type": "alert-dialog", "id": "ask", "open": true, "title": "Alert"}
+            ]
+        }));
+        assert_eq!(
+            dialog_keys(&collect_open_dialogs(&tree)),
+            vec!["ask".to_string()]
+        );
+    }
+
+    #[test]
+    fn alert_dialog_close_and_body_button_resolve() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "alert-dialog", "id": "ask", "open": true,
+            "on-ok": "cb-ok", "on-cancel": "cb-cancel",
+            "on-close": "cb-close", "on-open-change": "cb-open",
+            "children": [
+                {"type": "label", "text": "Undo?"},
+                {"type": "button", "text": "Retry", "on-click": "cb-retry"}
+            ]
+        }]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: Some(true),
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-ok", "cb-close", "cb-open"]
+        );
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: Some(false),
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-cancel", "cb-close", "cb-open"]
+        );
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: None,
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-close", "cb-open"]);
+        queue.push(QueuedAction::ButtonClick {
+            key: "ask/content/1".into(),
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-retry"]);
     }
 
     #[test]

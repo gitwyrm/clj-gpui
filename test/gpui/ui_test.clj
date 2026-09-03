@@ -6,6 +6,16 @@
             [gpui.runtime :as runtime]
             [gpui.ui :as ui]))
 
+(deftest kit-06-names-are-not-aliased
+  (is (nil? (ns-resolve 'gpui.ui 'text-field)))
+  (is (nil? (ns-resolve 'gpui.ui 'divider)))
+  (is (nil? (ns-resolve 'gpui.ui 'table)))
+  (is (some? (ns-resolve 'gpui.ui 'input)))
+  (is (some? (ns-resolve 'gpui.ui 'separator)))
+  (is (some? (ns-resolve 'gpui.ui 'data-table)))
+  (is (some? (ns-resolve 'gpui.ui 'textarea)))
+  (is (some? (ns-resolve 'gpui.ui 'alert-dialog))))
+
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
@@ -42,14 +52,17 @@
     (is (= :vstack (:type (ui/vstack {} (ui/label "a")))))
     (is (= :hstack (:type (ui/hstack {}))))
     (is (= :scroll (:type (ui/scroll {} (ui/label "x"))))))
-  (testing "text-field"
-    (is (= {:type :text-field :text "hi"}
-           (ui/text-field "hi")))
-    (let [n (ui/text-field "x" {:placeholder "Todo" :id "new-todo"})]
-      (is (= :text-field (:type n)))
+  (testing "input"
+    (is (= {:type :input :text "hi"}
+           (ui/input "hi")))
+    (let [n (ui/input "x" {:placeholder "Todo" :id "new-todo"})]
+      (is (= :input (:type n)))
       (is (= "Todo" (:placeholder n)))
       (is (= "new-todo" (:id n))))
-    (is (fn? (:on-change (ui/text-field "" (fn [s] s))))))
+    (is (fn? (:on-change (ui/input "" (fn [s] s)))))
+    (is (= {:type :textarea :text "notes"}
+           (ui/textarea "notes")))
+    (is (= 6 (:rows (ui/textarea "x" {:rows 6})))))
   (testing "style keys pass through"
     (is (true? (:strikethrough (ui/label "x" {:strikethrough true}))))
     (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))
@@ -57,7 +70,7 @@
     (is (fn? (:on-double-click (ui/label "x" {:on-double-click (fn [])}))))
     (is (fn? (:on-click (ui/label "row" {:on-click (fn [])}))))
     (is (fn? (:on-click (ui/hstack {:on-click (fn [])}))))
-    (is (true? (:focus (ui/text-field "" {:focus true}))))))
+    (is (true? (:focus (ui/input "" {:focus true}))))))
 
 (deftest named-control-size-does-not-use-pixel-size
   (let [n (ui/spinner {:size :small})]
@@ -134,10 +147,10 @@
   (testing "progress clamps in host; Clojure passes the number"
     (is (= 45 (:value (ui/progress 45))))
     (is (= 0 (:value (ui/progress nil)))))
-  (testing "divider"
-    (is (= :divider (:type (ui/divider))))
-    (is (= "or" (:text (ui/divider "or"))))
-    (is (true? (:dashed (ui/divider {:dashed true})))))
+  (testing "separator"
+    (is (= :separator (:type (ui/separator))))
+    (is (= "or" (:text (ui/separator "or"))))
+    (is (true? (:dashed (ui/separator {:dashed true})))))
   (testing "tag alert kbd link"
     (is (= :danger (:variant (ui/tag "Err" {:variant :danger}))))
     (is (= "Saved" (:text (ui/alert "Saved" {:variant :success}))))
@@ -292,7 +305,7 @@
                   (ui/vstack
                    (ui/button "Go" #(reset! got :zero))
                    (ui/switch false {:on-change #(reset! got %)})
-                   (ui/text-field "" {:on-change #(reset! got %)})))
+                   (ui/input "" {:on-change #(reset! got %)})))
         children (:children exported)
         zero-id (get-in children [0 :on-click])
         switch-id (get-in children [1 :on-change])
@@ -454,8 +467,8 @@
   (let [exported (runtime/export-tree
                   (ui/vstack
                    (ui/label "n" {:on-double-click (fn [])})
-                   (ui/text-field "hi" {:on-blur (fn [_])
-                                        :on-escape (fn [])})))]
+                   (ui/input "hi" {:on-blur (fn [_])
+                                   :on-escape (fn [])})))]
     (is (string? (get-in exported [:children 0 :on-double-click])))
     (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-double-click]))))
     (is (string? (get-in exported [:children 1 :on-blur])))
@@ -465,8 +478,8 @@
   (runtime/reset-callbacks!)
   (let [got (atom nil)
         exported (runtime/export-tree
-                  (ui/text-field "" {:on-change #(reset! got %)
-                                     :on-submit #(reset! got (str "go:" %))}))
+                  (ui/input "" {:on-change #(reset! got %)
+                                :on-submit #(reset! got (str "go:" %))}))
         change-id (:on-change exported)
         submit-id (:on-submit exported)]
     (is (string? change-id))
@@ -493,6 +506,13 @@
     (let [n (ui/dialog {:open? true :title "Hi"} (ui/label "x"))]
       (is (true? (:open n)))
       (is (= "Hi" (:title n)))))
+  (testing "alert-dialog uses :alert-dialog"
+    (let [n (ui/alert-dialog true
+                             {:title "Delete?" :variant :confirm :on-ok (fn [])}
+                             (ui/label "Undo?"))]
+      (is (= :alert-dialog (:type n)))
+      (is (true? (:open n)))
+      (is (= "Delete?" (:title n)))))
   (testing "popover trigger and open"
     (let [n (ui/popover false
                         {:trigger (ui/button "More") :on-open-change (fn [_])}
@@ -512,13 +532,13 @@
       (is (= :button (get-in drop [:trigger :type])))
       (is (= :context-menu (:type ctx)))
       (is (= :label (get-in ctx [:children 0 :type])))))
-  (testing "context-menu wraps a flex table"
-    (let [tbl (ui/table {:columns [{:id :n :label "N"}]
-                         :rows [{:id :a :cells ["A"]}]
-                         :flex 1})
+  (testing "context-menu wraps a flex data-table"
+    (let [tbl (ui/data-table {:columns [{:id :n :label "N"}]
+                              :rows [{:id :a :cells ["A"]}]
+                              :flex 1})
           ctx (ui/context-menu [{:id :copy :label "Copy"}] {:flex 1} tbl)]
       (is (= 1 (:flex ctx)))
-      (is (= :table (get-in ctx [:children 0 :type])))
+      (is (= :data-table (get-in ctx [:children 0 :type])))
       (is (= 1 (get-in ctx [:children 0 :flex])))))
   (testing "list selected alias and searchable"
     (let [n (ui/list [{:id :alpha :label "Alpha"} :beta]
@@ -529,12 +549,12 @@
       (is (= 180 (:height n)))
       (is (nil? (:selected n)))
       (is (= ["alpha" "beta"] (mapv :id (:items n))))))
-  (testing "table columns live in :options not :columns"
-    (let [n (ui/table {:columns [{:id :name :label "Name" :width 120}
-                                 {:id :lang :label "Lang"}]
-                       :rows [{:id :ada :cells ["Ada" "Clojure"]}]
-                       :selected :ada})]
-      (is (= :table (:type n)))
+  (testing "data-table columns live in :options not :columns"
+    (let [n (ui/data-table {:columns [{:id :name :label "Name" :width 120}
+                                      {:id :lang :label "Lang"}]
+                            :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                            :selected :ada})]
+      (is (= :data-table (:type n)))
       (is (= "ada" (:value n)))
       (is (nil? (:columns n)))
       (is (= "name" (get-in n [:options 0 :id])))
@@ -634,9 +654,9 @@
                    (ui/list [{:id :alpha :label "Alpha"} {:id :beta :label "Beta"}]
                             {:on-change #(reset! got %)
                              :on-confirm #(reset! got [:confirm %])})
-                   (ui/table {:columns [{:id :name :label "Name"}]
-                              :rows [{:id :ada :cells ["Ada"]}]
-                              :on-change #(reset! got %)})
+                   (ui/data-table {:columns [{:id :name :label "Name"}]
+                                   :rows [{:id :ada :cells ["Ada"]}]
+                                   :on-change #(reset! got %)})
                    (ui/tree [{:id :src :label "src"
                               :items [{:id :lib :label "lib.rs"}]}]
                             {:on-change #(reset! got %)})))

@@ -1,7 +1,8 @@
 use crate::catalog;
 use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION};
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, bail};
+use gpui_kit::component as gpui_component;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -122,7 +123,7 @@ fn apply_callback_batch(
             }
         }
     }
-    // Always fetch a tree here: text-field submit attaches `seq` to this
+    // Always fetch a tree here: input submit attaches `seq` to this
     // response, and handlers that do not touch an r/atom still need a paint.
     // Multi-callback RPCs used defer-render so this is the only export-tree
     // for the native action. Stop remaining callbacks on first failure;

@@ -1,14 +1,16 @@
-# gpui-component themes
+# GPUI Kit themes
 
-JSON palettes from [gpui-component 0.5.1](https://github.com/longbridge/gpui-component/tree/v0.5.1/themes),
+JSON palettes from [GPUI Kit 0.6](https://github.com/longbridge/gpui-kit/tree/v0.6.0/themes),
 embedded in the host and selected from Clojure with `:theme "Tokyo Night"` (or `:tokyo-night`).
 
-These files are part of gpui-component and are Apache-2.0. See
-https://longbridge.github.io/gpui-component/docs/theme
+These files are part of GPUI Kit and are Apache-2.0. See https://gpui-kit.com
+
+Matrix was dropped with Kit 0.6. Aurora and Asciinema were added. Adventure Time
+remains a variant inside `adventure.json`.
 
 Put your own `*.json` theme sets in a `themes/` directory next to the app,
 or in the directory named by `CLJ_GPUI_THEMES`. Those files are the full
-gpui-component ThemeSet schema (including `highlight`). JSON files are read
+Kit ThemeSet schema (including `highlight`). JSON files are read
 once per directory fingerprint (path + mtime); an edit on disk is picked up
 on the next lookup.
 

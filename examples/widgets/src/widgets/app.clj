@@ -1,5 +1,5 @@
 (ns widgets.app
-  "Gallery of gpui-component widgets newly exposed through gpui.ui.
+  "Gallery of GPUI Kit widgets exposed through gpui.ui.
 
   Real r/atom state so controls can be dogfooded as a smoke test.
   Option ids are keywords on purpose: callbacks must round-trip them."
@@ -40,6 +40,8 @@
            :color "#3366ff"
            :date "2026-09-02"
            :src "(defn hi [] \n  :ok)"
+           :notes "Multi-line notes."
+           :alert-dialog? false
            :field-kind :number
            :field-val 4
            :vlist-sel :r0
@@ -128,12 +130,12 @@
                          {:label "UI" :value "clj-gpui"}])
    (ui/hstack {:gap 12 :align :center :height 36}
               (ui/label "v")
-              (ui/divider {:orientation :vertical :height 28})
+              (ui/separator {:orientation :vertical :height 28})
               (ui/label "h"))
-   (ui/divider)
+   (ui/separator)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit]}]
+(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
@@ -148,6 +150,7 @@
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Open dialog" #(swap! !state assoc :dialog? true :close-hit false :dialog-open true) {:primary true})
+    (ui/button "Open alert" #(swap! !state assoc :alert-dialog? true))
     (ui/button "Rerender" #(swap! !state update :tick inc)
                {:tooltip "Unrelated atom update while a dialog stays open"})
     (ui/switch overlay-lock? (set-key :overlay-lock?) "Lock overlay")
@@ -180,6 +183,14 @@
                :on-open-change (set-key :dialog-open)}
               (ui/label (str "Close from OK, Cancel, Escape, or the overlay. Tick " tick "."))
               (ui/button "Disabled" {:disabled true}))
+   (ui/alert-dialog alert-dialog?
+                    {:title "Alert"
+                     :variant :confirm
+                     :on-ok #(swap! !state assoc :alert-dialog? false :menu :alert-ok)
+                     :on-cancel #(swap! !state assoc :alert-dialog? false :menu :alert-cancel)
+                     :on-close #(swap! !state assoc :alert-dialog? false)}
+                    (ui/label "Backdrop clicks do not dismiss this alert.")
+                    (ui/button "Retry" #(swap! !state assoc :menu :alert-retry)))
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Open sheet" #(swap! !state assoc :sheet? true))
@@ -281,16 +292,16 @@
       [{:id :inspect :label "Inspect"}
        {:id :delete :label "Delete"}]
       {:on-change (set-key :menu)}
-      (ui/table {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
-                           {:id :lang :label "Lang" :width 100}]
-                 :rows table-rows
-                 :selected (when (not= table-sel :gone) table-sel)
-                 :height 160
-                 :on-change (fn [id]
-                              (swap! !state #(-> %
-                                                 (assoc :table-sel id)
-                                                 (update :table-shift (fnil inc 0)))))
-                 :on-confirm (set-key :table-confirm)}))
+      (ui/data-table {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
+                                {:id :lang :label "Lang" :width 100}]
+                      :rows table-rows
+                      :selected (when (not= table-sel :gone) table-sel)
+                      :height 160
+                      :on-change (fn [id]
+                                   (swap! !state #(-> %
+                                                      (assoc :table-sel id)
+                                                      (update :table-shift (fnil inc 0)))))
+                      :on-confirm (set-key :table-confirm)}))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "Tree lib" #(swap! !state assoc :tree-sel :lib))
@@ -310,7 +321,7 @@
                        :height 160
                        :on-change (set-key :vlist-sel)}))))
 
-(defn- forms-panel [{:keys [qty otp color date src field-kind field-val]}]
+(defn- forms-panel [{:keys [qty otp color date src notes field-kind field-val]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "qty " qty " · otp " (pr-str otp) " · " (pr-str color) " · " date
@@ -330,7 +341,8 @@
                        :field-val (if (= field-kind :number) (str field-val) qty)))
     (if (= field-kind :number)
       (ui/number-input field-val {:id "field" :min 0 :max 20 :step 1 :on-change (set-key :field-val)})
-      (ui/text-field (str field-val) {:id "field" :on-change (set-key :field-val)})))
+      (ui/input (str field-val) {:id "field" :on-change (set-key :field-val)})))
+   (ui/textarea notes {:id "notes" :rows 4 :on-change (set-key :notes)})
    (ui/editor src {:id "src" :language "clojure" :height 160 :on-change (set-key :src)})))
 
 (defn- docs-panel [_]
@@ -347,7 +359,7 @@
    (ui/pie-chart [{:id :a :label "A" :value 2}
                   {:id :b :label "B" :value 5}]
                  {:width 180 :height 160})
-   (ui/markdown "# Markdown\n\nSelectable **gpui-component** `TextView`.\n\n- sheet\n- notification\n- charts"
+   (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"
                 {:height 140})))
 
 (defn- shell-panel [{:keys [nav sidebar-collapsed setting-notify setting-theme setting-accent split-id]}]
@@ -416,7 +428,7 @@
      (ui/vstack
       {:gap 14 :padding 16 :flex 1}
       (ui/label "gpui.ui widgets" {:font-size 22 :font-weight :semibold})
-      (ui/label "Controlled Clojure state. Native gpui-component widgets."
+      (ui/label "Controlled Clojure state. Native GPUI Kit widgets."
                 {:font-size 13})
       (ui/tabs tab
                {:items [{:id :general :label "General"}

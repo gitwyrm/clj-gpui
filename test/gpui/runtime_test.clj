@@ -301,7 +301,7 @@
 (defn- exported-table
   [tree]
   (->> (tree-seq :children :children tree)
-       (filter #(= "table" (:type %)))
+       (filter #(= "data-table" (:type %)))
        first))
 
 (deftest table-double-click-batch-keeps-generation-when-tree-would-shift
@@ -316,14 +316,14 @@
                 ;; assign confirm's old cb-N to X, not back to the table.
                 (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" #(swap! x-fired inc)))
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}]
-                           :on-change (fn [id]
-                                        (reset! !shift true)
-                                        (swap! seen conj [:change id]))
-                           :on-confirm (fn [id]
-                                         (swap! confirm-fired inc)
-                                         (swap! seen conj [:confirm id]))})))
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :on-change (fn [id]
+                                             (reset! !shift true)
+                                             (swap! seen conj [:change id]))
+                                :on-confirm (fn [id]
+                                              (swap! confirm-fired inc)
+                                              (swap! seen conj [:confirm id]))})))
         gen1 (runtime/export-tree tree)
         table (exported-table gen1)
         id-change (:on-change table)
@@ -358,11 +358,11 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}
-                                  {:id :grace :cells ["Grace"]}]
-                           :on-change #(swap! log conj [:change %])
-                           :on-confirm #(swap! log conj [:confirm %])})))]
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}
+                                       {:id :grace :cells ["Grace"]}]
+                                :on-change #(swap! log conj [:change %])
+                                :on-confirm #(swap! log conj [:confirm %])})))]
     (is (:ok (runtime/invoke-callback-batch!
               [{:id (:on-change table) :value "grace"}])))
     (is (= [[:change :grace]] @log))))
@@ -372,10 +372,10 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}]
-                           :on-change #(swap! log conj [:change %])
-                           :on-double-click #(swap! log conj [:dbl %])})))]
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :on-change #(swap! log conj [:change %])
+                                :on-double-click #(swap! log conj [:dbl %])})))]
     (is (nil? (:on-confirm table)))
     (is (:ok (runtime/invoke-callback-batch!
               [{:id (:on-change table) :value "ada"}
@@ -387,9 +387,9 @@
   (let [got (atom nil)
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}]
-                           :on-confirm #(reset! got %)})))]
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :on-confirm #(reset! got %)})))]
     (is (nil? (:on-change table)))
     (is (:ok (runtime/invoke-callback-batch!
               [{:id (:on-confirm table) :value "ada"}])))
@@ -400,9 +400,9 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}]
-                           :on-change #(swap! log conj %)})))]
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :on-change #(swap! log conj %)})))]
     (is (nil? (:on-confirm table)))
     (is (:ok (runtime/invoke-callback-batch!
               [{:id (:on-change table) :value "ada"}])))
@@ -418,13 +418,13 @@
                (ui/vstack
                 (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" (fn [] :x)))
-                (ui/table {:columns [{:id :n :label "N"}]
-                           :rows [{:id :ada :cells ["Ada"]}]
-                           :on-change (fn [id]
-                                        (reset! !shift true)
-                                        (swap! seen conj [:change id]))
-                           :on-confirm (fn [id]
-                                         (swap! seen conj [:confirm id]))})))]
+                (ui/data-table {:columns [{:id :n :label "N"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :on-change (fn [id]
+                                             (reset! !shift true)
+                                             (swap! seen conj [:change id]))
+                                :on-confirm (fn [id]
+                                              (swap! seen conj [:confirm id]))})))]
     (runtime/bind-connection! {:out buf})
     (try
       (runtime/reset-callbacks!)

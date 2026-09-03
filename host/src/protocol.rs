@@ -1,8 +1,9 @@
 use gpui_component::theme::ThemeSet;
+use gpui_kit::component as gpui_component;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-pub const PROTOCOL_VERSION: u64 = 7;
+pub const PROTOCOL_VERSION: u64 = 8;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -462,12 +463,15 @@ pub struct Node {
     pub window_width: Option<f32>,
     #[serde(default, rename = "window-height")]
     pub window_height: Option<f32>,
-    /// Text field: request keyboard focus when true.
+    /// Text input: request keyboard focus when true.
     #[serde(default)]
     pub focus: bool,
     /// Checkbox: `"circle"` for a round toggle. Omitted is the square widget.
     #[serde(default)]
     pub shape: Option<String>,
+    /// Textarea visible rows. Omitted is 3.
+    #[serde(default)]
+    pub rows: Option<u32>,
     #[serde(default)]
     pub height: Option<f32>,
     #[serde(default)]
@@ -531,7 +535,8 @@ pub struct Node {
     #[serde(default, rename = "on-open-change")]
     pub on_open_change: Option<String>,
     /// Dialog: click the dimmed overlay to dismiss. Default true.
-    /// Crate `confirm()` / `alert()` turn this off; the host restores the default.
+    /// `confirm` dialogs follow Kit (not overlay-closable unless set).
+    /// `alert-dialog` never dismisses on backdrop.
     #[serde(default, rename = "overlay-closable")]
     pub overlay_closable: Option<bool>,
     /// Popover / dropdown-menu trigger node (usually a `button`).
@@ -681,7 +686,7 @@ pub enum Cmd {
     Callback {
         id: String,
         value: Option<Value>,
-        /// Set on text-field submit so the following tree can force-sync that field.
+        /// Set on input submit so the following tree can force-sync that field.
         seq: Option<u64>,
     },
     /// Several callbacks from one native action. The worker invokes them
@@ -1072,7 +1077,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
     }
 
     #[test]
@@ -1194,7 +1199,7 @@ mod tests {
         assert_eq!(list.on_confirm.as_deref(), Some("cb-6"));
 
         let table: Node = serde_json::from_value(json!({
-            "type": "table",
+            "type": "data-table",
             "value": "ada",
             "options": [{"id": "name", "label": "Name", "width": 120}],
             "items": [{"id": "ada", "cells": ["Ada", "Clojure"]}]
@@ -1220,7 +1225,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
     }
 
     #[test]

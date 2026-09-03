@@ -42,10 +42,10 @@
        {:gap 10 :align :center}
        (ui/button "Primary" (fn []) {:primary true})
        (ui/checkbox done? #(swap! !state update :done? not) "Checkbox"))
-      (ui/text-field
+      (ui/input
        draft
        {:id "note"
-        :placeholder "Themed text field"
+        :placeholder "Themed input"
         :on-change #(swap! !state assoc :draft %)})
       (ui/label "Family name follows OS light/dark. Light and Dark pin one member."
                 {:font-size 12})))))

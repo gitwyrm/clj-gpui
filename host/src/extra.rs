@@ -8,21 +8,23 @@ use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use chrono::NaiveDate;
 use gpui::{
-    div, prelude::*, px, size, App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px, size,
 };
 use gpui_component::{
+    ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
     calendar::Date,
     chart::{AreaChart, BarChart, LineChart, PieChart},
-    dock::{Panel, PanelControl, PanelEvent},
+    dock::{Panel as StyledPanel, PanelControl, PanelEvent},
     h_virtual_list,
     input::InputState,
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     text::TextView,
-    v_flex, v_virtual_list, ActiveTheme as _, Colorize as _, Placement, Side,
-    VirtualListScrollHandle,
+    v_flex, v_virtual_list,
 };
-use serde_json::{json, Value};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -92,6 +94,13 @@ pub fn input_change_payload(as_number: bool, text: &str) -> Option<Value> {
     }
 }
 
+/// Kit `TextareaState` defaults `submit_on_enter` to false: Enter inserts a
+/// newline and still emits `PressEnter`. Enable it when Clojure provides
+/// `:on-submit` so Enter submits and Shift+Enter inserts a newline.
+pub fn textarea_submit_on_enter(on_submit: Option<&str>) -> bool {
+    on_submit.is_some()
+}
+
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
     match value {
         Some(Value::String(s)) => {
@@ -142,11 +151,7 @@ pub fn chart_points(node: &Node) -> Vec<(String, f64)> {
         .filter_map(|item| {
             let y = item.number_value()? as f64;
             let x = item.label_or_id();
-            if x.is_empty() {
-                None
-            } else {
-                Some((x, y))
-            }
+            if x.is_empty() { None } else { Some((x, y)) }
         })
         .collect()
 }
@@ -197,9 +202,9 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let fill = cx.theme().chart_2;
     let chart: gpui::AnyElement = match kind.as_str() {
         "bar" => BarChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
-            .fill(move |_| stroke)
+            .band(|p| p.0.clone())
+            .value(|p| p.1)
+            .fill(move |_, _, _, _| stroke)
             .into_any_element(),
         "area" => AreaChart::new(points)
             .x(|p| p.0.clone())
@@ -237,12 +242,7 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
         .into_any_element()
 }
 
-pub fn paint_markdown(
-    node: &Node,
-    key: &str,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui::AnyElement {
+pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     let body = node
         .text
         .clone()
@@ -256,9 +256,9 @@ pub fn paint_markdown(
         == Some("html")
         || node.kind == "html";
     let mut view = if html {
-        TextView::html(SharedString::from(key.to_string()), body, window, cx)
+        TextView::html(SharedString::from(key.to_string()), body)
     } else {
-        TextView::markdown(SharedString::from(key.to_string()), body, window, cx)
+        TextView::markdown(SharedString::from(key.to_string()), body)
     };
     view = view.selectable(true);
     if node.height.is_some() || node.flex.unwrap_or(0.0) >= 1.0 {
@@ -428,11 +428,11 @@ pub fn paint_panel_body(
     node: &Node,
     path: &str,
     emit: crate::overlay::ActionEmitter,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
     match node.kind.as_str() {
-        "markdown" | "html" => paint_markdown(node, path, window, cx),
+        "markdown" | "html" => paint_markdown(node, path),
         "chart" => {
             let (width, height) = chart_viewport(node);
             v_flex()
@@ -447,20 +447,26 @@ pub fn paint_panel_body(
     }
 }
 
-impl Panel for CljPanel {
+impl gpui::base::dock::Panel for CljPanel {
     fn panel_name(&self) -> &'static str {
         "clj-gpui-panel"
-    }
-
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.title.clone()
     }
 
     fn closable(&self, _: &App) -> bool {
         false
     }
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+}
+
+impl StyledPanel for CljPanel {
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.title.clone()
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         None
     }
 }
@@ -664,11 +670,7 @@ pub fn parse_sidebar_side(node: &Node) -> Side {
 
 pub fn otp_length(node: &Node) -> usize {
     let n = node.count.unwrap_or(0) as usize;
-    if n == 0 {
-        6
-    } else {
-        n.clamp(1, 12)
-    }
+    if n == 0 { 6 } else { n.clamp(1, 12) }
 }
 
 pub fn editor_language(node: &Node) -> String {
@@ -724,6 +726,12 @@ mod tests {
     }
 
     #[test]
+    fn textarea_submit_on_enter_follows_on_submit() {
+        assert!(!textarea_submit_on_enter(None));
+        assert!(textarea_submit_on_enter(Some("cb-submit")));
+    }
+
+    #[test]
     fn date_value_range_and_single() {
         let single = date_from_value(&Some(json!("2026-09-02")), false);
         assert!(matches!(single, Date::Single(Some(_))));
@@ -754,7 +762,9 @@ mod tests {
         let tokens: Vec<_> = (0..7).map(pie_slice_token).collect();
         assert_eq!(
             tokens,
-            vec!["chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"]
+            vec![
+                "chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"
+            ]
         );
         for i in 0..7 {
             for j in (i + 1)..7 {

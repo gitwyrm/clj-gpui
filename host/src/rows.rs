@@ -2,6 +2,8 @@
 //! Rust owns virtualization, search, and selection. Callbacks send wire ids.
 
 use crate::protocol::Item;
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use gpui::{div, px, App, Context, IntoElement, ParentElement, SharedString, Task, Window};
 use gpui_component::{
     list::{ListDelegate, ListItem, ListState},
@@ -298,8 +300,8 @@ impl TableDelegate for RowTableDelegate {
         self.rows.len()
     }
 
-    fn column(&self, col_ix: usize, _: &App) -> &Column {
-        &self.columns[col_ix]
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.columns[col_ix].clone()
     }
 
     fn render_td(

@@ -1,4 +1,4 @@
-//! gpui-component named themes for Clojure `:theme`.
+//! GPUI Kit named themes for Clojure `:theme`.
 //!
 //! Appearance values (`system`, `light`, `dark`) are not palettes. Everything
 //! else is looked up by ThemeConfig `name` or ThemeSet family `name`.
@@ -11,6 +11,8 @@
 
 use gpui::App;
 use gpui_component::theme::{Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +23,8 @@ use std::time::SystemTime;
 const BUNDLED_JSON: &[&str] = &[
     include_str!("../themes/adventure.json"),
     include_str!("../themes/alduin.json"),
+    include_str!("../themes/asciinema.json"),
+    include_str!("../themes/aurora.json"),
     include_str!("../themes/ayu.json"),
     include_str!("../themes/catppuccin.json"),
     include_str!("../themes/everforest.json"),
@@ -32,7 +36,6 @@ const BUNDLED_JSON: &[&str] = &[
     include_str!("../themes/jellybeans.json"),
     include_str!("../themes/kibble.json"),
     include_str!("../themes/macos-classic.json"),
-    include_str!("../themes/matrix.json"),
     include_str!("../themes/mellifluous.json"),
     include_str!("../themes/molokai.json"),
     include_str!("../themes/solarized.json"),
@@ -389,7 +392,7 @@ mod tests {
             "bundled themes: {names:?}"
         );
         assert!(names.iter().any(|name| name == "Ayu Light"));
-        assert_eq!(names.len(), 35);
+        assert_eq!(names.len(), 36);
     }
 
     #[test]
