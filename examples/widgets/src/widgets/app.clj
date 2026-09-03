@@ -427,7 +427,7 @@
      (ui/vstack
       {:gap 14 :padding 16 :flex 1}
       (ui/label "gpui.ui widgets" {:font-size 22 :font-weight :semibold})
-      (ui/label "Controlled Clojure state. Native gpui-component widgets."
+      (ui/label "Controlled Clojure state. Native GPUI Kit widgets."
                 {:font-size 13})
       (ui/tabs tab
                {:items [{:id :general :label "General"}
