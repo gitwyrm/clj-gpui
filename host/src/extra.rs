@@ -110,12 +110,20 @@ pub enum TableAlign {
 
 /// Declarative `ui/table` column/cell alignment. `end` / `right` are Kit
 /// `text_right`; omitted is start.
-pub fn table_align(item: &Item) -> TableAlign {
-    match item.align.as_deref().map(|s| s.to_ascii_lowercase()) {
+pub fn table_align_name(align: Option<&str>) -> TableAlign {
+    match align.map(|s| s.to_ascii_lowercase()) {
         Some(s) if s == "end" || s == "right" => TableAlign::End,
         Some(s) if s == "center" => TableAlign::Center,
         _ => TableAlign::Start,
     }
+}
+
+pub fn table_align(item: &Item) -> TableAlign {
+    table_align_name(item.align.as_deref())
+}
+
+pub fn table_align_node(node: &Node) -> TableAlign {
+    table_align_name(node.align.as_deref())
 }
 
 /// Last row with `variant: "footer"` is Kit `TableFooter`; the rest is body.
@@ -139,6 +147,15 @@ pub fn rating_value(node: &Node) -> usize {
         _ => 0,
     };
     raw.min(max)
+}
+
+/// Arguments for `Rating::new().max(max).value(value)`.
+///
+/// Kit `Rating::value` clamps to the *current* max (default 5). Applying
+/// `.value(8).max(10)` stores 5. Host must call `.max` first.
+pub fn rating_max_then_value(node: &Node) -> (usize, usize) {
+    let max = rating_max(node);
+    (max, rating_value(node))
 }
 
 /// Stepper selected index from a wire id, falling back to a numeric index.
@@ -166,6 +183,45 @@ pub fn combobox_payload(multiple: bool, values: &[SharedString]) -> Value {
             .first()
             .map(|v| json!(v.to_string()))
             .unwrap_or(Value::Null)
+    }
+}
+
+/// Identity of combobox options. Used to skip `set_items` when Clojure
+/// rerenders an unchanged collection.
+pub fn combobox_fingerprint(items: &[Item]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    items.len().hash(&mut hasher);
+    for item in items {
+        item.id.hash(&mut hasher);
+        item.label.hash(&mut hasher);
+        item.text.hash(&mut hasher);
+        item.disabled.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Whether a reused combobox slot should push items / selection into Kit.
+///
+/// `ComboboxState::set_selected_values` clears the search query. Skip that
+/// call unless the controlled selection actually changed. `set_items` does
+/// not clear the query; still skip it when the collection is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComboboxSlotSync {
+    pub set_items: bool,
+    pub set_selected: bool,
+}
+
+pub fn combobox_slot_sync(
+    prev_fingerprint: u64,
+    next_fingerprint: u64,
+    prev_selected: &[SharedString],
+    next_selected: &[SharedString],
+) -> ComboboxSlotSync {
+    ComboboxSlotSync {
+        set_items: prev_fingerprint != next_fingerprint,
+        set_selected: prev_selected != next_selected,
     }
 }
 
@@ -822,6 +878,13 @@ mod tests {
             }),
             TableAlign::Center
         );
+        assert_eq!(
+            table_align_node(&Node {
+                align: Some("end".into()),
+                ..Node::default()
+            }),
+            TableAlign::End
+        );
         let items = vec![
             Item {
                 id: Some("a".into()),
@@ -850,6 +913,14 @@ mod tests {
         .unwrap();
         assert_eq!(rating_max(&rating), 5);
         assert_eq!(rating_value(&rating), 5);
+        // Kit default max is 5; `.value(8)` before `.max(10)` would clamp to 5.
+        let high: Node = serde_json::from_value(json!({
+            "type": "rating",
+            "value": 8,
+            "max": 10
+        }))
+        .unwrap();
+        assert_eq!(rating_max_then_value(&high), (10, 8));
         let steps = vec![
             Item {
                 id: Some("cart".into()),
@@ -873,6 +944,35 @@ mod tests {
         assert_eq!(combobox_payload(false, &values), json!("clj"));
         assert_eq!(combobox_payload(false, &[]), Value::Null);
         assert_eq!(combobox_payload(true, &values), json!(["clj", "rs"]));
+    }
+
+    #[test]
+    fn combobox_unrelated_rerender_skips_set_selected_values() {
+        let sel = [SharedString::from("clj")];
+        let items = vec![Item {
+            id: Some("clj".into()),
+            label: Some("Clojure".into()),
+            ..Item::default()
+        }];
+        let fp = combobox_fingerprint(&items);
+        let sync = combobox_slot_sync(fp, fp, &sel, &sel);
+        assert!(!sync.set_items);
+        assert!(
+            !sync.set_selected,
+            "set_selected_values clears Kit's search query"
+        );
+        let renamed = vec![Item {
+            id: Some("clj".into()),
+            label: Some("Clojure lang".into()),
+            ..Item::default()
+        }];
+        let items_only = combobox_slot_sync(fp, combobox_fingerprint(&renamed), &sel, &sel);
+        assert!(items_only.set_items);
+        assert!(!items_only.set_selected);
+        let next = [SharedString::from("rs")];
+        let sel_only = combobox_slot_sync(fp, fp, &sel, &next);
+        assert!(!sel_only.set_items);
+        assert!(sel_only.set_selected);
     }
 
     #[test]

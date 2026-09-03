@@ -177,8 +177,11 @@ struct ComboboxSlot {
     state: Entity<ComboboxState<SearchableVec<ComboOpt>>>,
     searchable: bool,
     multiple: bool,
+    fingerprint: u64,
+    selected: Vec<SharedString>,
     on_change: Option<String>,
     on_confirm: Option<String>,
+    coalesce: protocol::ComboboxActivationCoalesce,
 }
 
 struct ListSlot {
@@ -1281,7 +1284,28 @@ impl RootView {
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
-            "table" => self.render_table(node, &key, cx),
+            "table" => self.render_table(node, path, window, cx),
+            "table-header" => self
+                .paint_table_header(node, path, window, cx)
+                .into_any_element(),
+            "table-body" => self
+                .paint_table_body(node, path, window, cx)
+                .into_any_element(),
+            "table-footer" => self
+                .paint_table_footer(node, path, window, cx)
+                .into_any_element(),
+            "table-row" => self
+                .paint_table_row_node(node, path, window, cx)
+                .into_any_element(),
+            "table-head" => self
+                .paint_table_head(node, path, window, cx)
+                .into_any_element(),
+            "table-cell" => self
+                .paint_table_cell(node, path, window, cx)
+                .into_any_element(),
+            "table-caption" => self
+                .paint_table_caption(node, path, window, cx)
+                .into_any_element(),
             "tree" => self.render_tree(node, &key, window, cx),
             "sheet" => div().into_any_element(),
             "notification" => div().into_any_element(),
@@ -1686,6 +1710,7 @@ impl RootView {
     ) -> Entity<ComboboxState<SearchableVec<ComboOpt>>> {
         self.used_comboboxes.insert(key.to_string());
         let items = combo_opts(node);
+        let fingerprint = extra::combobox_fingerprint(node.collection());
         let selected: Vec<SharedString> = node
             .string_values()
             .into_iter()
@@ -1695,11 +1720,31 @@ impl RootView {
             if slot.searchable == node.searchable && slot.multiple == node.multiple {
                 slot.on_change = node.on_change.clone();
                 slot.on_confirm = node.on_confirm.clone();
+                let sync = extra::combobox_slot_sync(
+                    slot.fingerprint,
+                    fingerprint,
+                    &slot.selected,
+                    &selected,
+                );
+                if sync.set_items {
+                    slot.fingerprint = fingerprint;
+                }
+                if sync.set_selected {
+                    slot.selected = selected.clone();
+                }
                 let state = slot.state.clone();
-                state.update(cx, |state, cx| {
-                    state.set_items(SearchableVec::new(items.clone()), window, cx);
-                    state.set_selected_values(&selected, window, cx);
-                });
+                if sync.set_items || sync.set_selected {
+                    state.update(cx, |state, cx| {
+                        if sync.set_items {
+                            state.set_items(SearchableVec::new(items.clone()), window, cx);
+                        }
+                        if sync.set_selected {
+                            // Kit clears the search query here. Only run when
+                            // the controlled selection actually changed.
+                            state.set_selected_values(&selected, window, cx);
+                        }
+                    });
+                }
                 return state;
             }
         }
@@ -1714,26 +1759,16 @@ impl RootView {
             state.set_selected_values(&selected, window, cx);
         });
         let key_owned = key.to_string();
-        cx.subscribe(
+        cx.subscribe_in(
             &state,
-            move |this, _, event: &ComboboxEvent<SearchableVec<ComboOpt>>, _cx| {
-                let (callback, values, multiple) = {
-                    let Some(slot) = this.comboboxes.get(&key_owned) else {
-                        return;
-                    };
-                    match event {
-                        ComboboxEvent::Change(values) => {
-                            (slot.on_change.clone(), values.clone(), slot.multiple)
-                        }
-                        ComboboxEvent::Confirm(values) => {
-                            (slot.on_confirm.clone(), values.clone(), slot.multiple)
-                        }
-                    }
-                };
-                let Some(id) = callback else {
-                    return;
-                };
-                this.emit_value(id, extra::combobox_payload(multiple, &values));
+            window,
+            move |this, _, event: &ComboboxEvent<SearchableVec<ComboOpt>>, window, cx| match event {
+                ComboboxEvent::Change(values) => {
+                    emit_combobox_change(this, &key_owned, values, window, cx);
+                }
+                ComboboxEvent::Confirm(values) => {
+                    emit_combobox_confirm(this, &key_owned, values);
+                }
             },
         )
         .detach();
@@ -1743,46 +1778,214 @@ impl RootView {
                 state: state.clone(),
                 searchable,
                 multiple,
+                fingerprint,
+                selected,
                 on_change: node.on_change.clone(),
                 on_confirm: node.on_confirm.clone(),
+                coalesce: protocol::ComboboxActivationCoalesce::default(),
             },
         );
         state
     }
 
-    fn render_table(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+    fn flush_pending_combobox_change(&mut self, key: &str) {
+        let Some(slot) = self.comboboxes.get_mut(key) else {
+            return;
+        };
+        let Some(payload) = slot.coalesce.take_pending_change() else {
+            return;
+        };
+        let Some(id) = slot.on_change.clone() else {
+            return;
+        };
+        protocol::send_callbacks(
+            &self.cmd_tx,
+            protocol::combobox_activation_calls(Some(id), None, payload),
+        );
+    }
+
+    fn render_table(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let size = mapping::parse_scale(node.control_size.as_deref());
-        let columns = node.options.as_slice();
-        let (body, footer) = extra::split_table_footer(&node.items);
         let mut table = Table::new().with_size(size);
-        if !columns.is_empty() {
-            let mut header_row = TableRow::new();
-            for col in columns {
-                header_row = header_row.child(style_table_head(
-                    TableHead::new().child(col.label_or_id()),
-                    col,
-                ));
-            }
-            table = table.child(TableHeader::new().child(header_row));
-        }
-        let mut body_el = TableBody::new();
-        for row in body {
-            body_el = body_el.child(paint_table_row(row, columns));
-        }
-        table = table.child(body_el);
-        if let Some(foot) = footer {
-            table = table.child(TableFooter::new().child(paint_table_row(foot, columns)));
-        }
-        if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
-            table = table.child(TableCaption::new().child(caption));
+        if table_has_primitive_children(node) {
+            table = self.paint_table_sections(table, node, path, window, cx);
+        } else {
+            table = paint_table_from_items(table, node);
         }
         apply_style(table, node, cx).into_any_element()
     }
 
+    fn paint_table_sections(
+        &mut self,
+        mut table: Table,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Table {
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            match child.kind.as_str() {
+                "table-header" => {
+                    table = table.child(self.paint_table_header(child, &child_path, window, cx));
+                }
+                "table-body" => {
+                    table = table.child(self.paint_table_body(child, &child_path, window, cx));
+                }
+                "table-footer" => {
+                    table = table.child(self.paint_table_footer(child, &child_path, window, cx));
+                }
+                "table-caption" => {
+                    table = table.child(self.paint_table_caption(child, &child_path, window, cx));
+                }
+                _ => {}
+            }
+        }
+        table
+    }
+
+    fn paint_table_header(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableHeader {
+        let mut header = apply_style(TableHeader::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            header = header.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        header
+    }
+
+    fn paint_table_body(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableBody {
+        let mut body = apply_style(TableBody::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            body = body.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        body
+    }
+
+    fn paint_table_footer(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableFooter {
+        let mut footer = apply_style(TableFooter::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            footer = footer.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        footer
+    }
+
+    fn paint_table_row_node(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableRow {
+        let mut row = apply_style(TableRow::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            match child.kind.as_str() {
+                "table-head" => {
+                    row = row.child(self.paint_table_head(child, &child_path, window, cx));
+                }
+                "table-cell" => {
+                    row = row.child(self.paint_table_cell(child, &child_path, window, cx));
+                }
+                _ => {
+                    let mut cell = TableCell::new();
+                    cell = cell.child(self.render_node(child, &child_path, window, cx));
+                    row = row.child(cell);
+                }
+            }
+        }
+        row
+    }
+
+    fn paint_table_head(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableHead {
+        let mut el = style_table_head_node(TableHead::new(), node);
+        el = apply_style(el, node, cx);
+        self.fill_table_cell_children(el, node, path, window, cx)
+    }
+
+    fn paint_table_cell(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableCell {
+        let mut el = style_table_cell_node(TableCell::new(), node);
+        el = apply_style(el, node, cx);
+        self.fill_table_cell_children(el, node, path, window, cx)
+    }
+
+    fn paint_table_caption(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableCaption {
+        let mut caption = apply_style(TableCaption::new(), node, cx);
+        caption = self.fill_table_cell_children(caption, node, path, window, cx);
+        caption
+    }
+
+    fn fill_table_cell_children<E>(
+        &mut self,
+        mut el: E,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> E
+    where
+        E: ParentElement,
+    {
+        if node.children.is_empty() {
+            if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+                el = el.child(text);
+            }
+        } else {
+            for child in self.render_children(node, path, window, cx) {
+                el = el.child(child);
+            }
+        }
+        el
+    }
+
     fn render_rating(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let (max, value) = extra::rating_max_then_value(node);
         let mut rating = Rating::new(eid(key))
-            .value(extra::rating_value(node))
-            .max(extra::rating_max(node))
+            .max(max)
+            .value(value)
             .with_size(mapping::parse_scale(node.control_size.as_deref()))
             .disabled(node.disabled);
         if let Some(color) = node.color.as_deref().and_then(extra::parse_hex_color) {
@@ -3771,6 +3974,49 @@ fn combo_opts(node: &Node) -> Vec<ComboOpt> {
         .collect()
 }
 
+fn table_has_primitive_children(node: &Node) -> bool {
+    node.children.iter().any(|child| {
+        matches!(
+            child.kind.as_str(),
+            "table-header" | "table-body" | "table-footer" | "table-caption"
+        )
+    })
+}
+
+fn style_table_head_node(el: TableHead, node: &Node) -> TableHead {
+    let el = match extra::table_align_node(node) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if node.span > 1 {
+        el.col_span(node.span as usize)
+    } else {
+        el
+    };
+    match node.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn style_table_cell_node(el: TableCell, node: &Node) -> TableCell {
+    let el = match extra::table_align_node(node) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if node.span > 1 {
+        el.col_span(node.span as usize)
+    } else {
+        el
+    };
+    match node.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
 fn style_table_head(el: TableHead, col: &Item) -> TableHead {
     let el = match extra::table_align(col) {
         extra::TableAlign::End => el.text_right(),
@@ -3826,6 +4072,33 @@ fn paint_table_row(row: &Item, columns: &[Item]) -> TableRow {
         table_row = table_row.child(TableCell::new().child(text.clone()));
     }
     table_row
+}
+
+fn paint_table_from_items(mut table: Table, node: &Node) -> Table {
+    let columns = node.options.as_slice();
+    let (body, footer) = extra::split_table_footer(&node.items);
+    if !columns.is_empty() {
+        let mut header_row = TableRow::new();
+        for col in columns {
+            header_row = header_row.child(style_table_head(
+                TableHead::new().child(col.label_or_id()),
+                col,
+            ));
+        }
+        table = table.child(TableHeader::new().child(header_row));
+    }
+    let mut body_el = TableBody::new();
+    for row in body {
+        body_el = body_el.child(paint_table_row(row, columns));
+    }
+    table = table.child(body_el);
+    if let Some(foot) = footer {
+        table = table.child(TableFooter::new().child(paint_table_row(foot, columns)));
+    }
+    if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
+        table = table.child(TableCaption::new().child(caption));
+    }
+    table
 }
 
 fn select_selected_index(
@@ -4016,6 +4289,42 @@ fn emit_list_activation(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
         &this.cmd_tx,
         protocol::list_activation_calls(slot.on_change.clone(), slot.on_confirm.clone(), row_id),
     );
+}
+
+fn emit_combobox_change(
+    this: &mut RootView,
+    key: &str,
+    values: &[SharedString],
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    let Some(slot) = this.comboboxes.get_mut(key) else {
+        return;
+    };
+    let payload = extra::combobox_payload(slot.multiple, values);
+    if !slot.coalesce.on_change(payload) {
+        return;
+    }
+    let key = key.to_string();
+    cx.defer_in(window, move |this, _, _cx| {
+        this.flush_pending_combobox_change(&key);
+    });
+}
+
+fn emit_combobox_confirm(this: &mut RootView, key: &str, values: &[SharedString]) {
+    let Some(slot) = this.comboboxes.get_mut(key) else {
+        return;
+    };
+    let pending = slot.coalesce.on_confirm();
+    let on_change = slot.on_change.clone();
+    let on_confirm = slot.on_confirm.clone();
+    let confirm_payload = extra::combobox_payload(slot.multiple, values);
+    let calls = if let Some(payload) = pending {
+        protocol::combobox_activation_calls(on_change, on_confirm, payload)
+    } else {
+        protocol::combobox_activation_calls(None, on_confirm, confirm_payload)
+    };
+    protocol::send_callbacks(&this.cmd_tx, calls);
 }
 
 fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: bool, cx: &App) {

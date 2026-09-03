@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, and `ui/stepper` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, and `ui/stepper` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -291,6 +291,11 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
            :rows [["Ada" "$250"] ["Rich" "$150"]]
            :footer ["Total" "$400"]
            :caption "Recent invoices"})
+(ui/table
+  (ui/table-header (ui/table-row (ui/table-head "Name") (ui/table-head {:align :end} "Amt")))
+  (ui/table-body (ui/table-row (ui/table-cell (ui/avatar "Ada")) (ui/table-cell {:align :end} "$250")))
+  (ui/table-footer (ui/table-row (ui/table-cell {:span 2 :align :end} "Total")))
+  (ui/table-caption "Kit primitives"))
 (ui/combobox selected {:options [{:id :clj :label "Clojure"} :rs]
                        :placeholder "Language"
                        :on-change set-lang!})

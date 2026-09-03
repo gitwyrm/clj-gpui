@@ -322,7 +322,23 @@
                        ["INV002" "Pending" "$150.00"]
                        ["INV003" "Unpaid" "$350.00"]]
                 :footer ["Total" "" "$750.00"]
-                :caption "Declarative Kit Table (not virtualized)."})
+                :caption "Declarative Kit Table shorthand (not virtualized)."})
+     (ui/table
+      (ui/table-header
+       (ui/table-row
+        (ui/table-head "Person")
+        (ui/table-head {:align :end} "Role")))
+      (ui/table-body
+       (ui/table-row
+        (ui/table-cell
+         (ui/hstack {:gap 8 :align :center}
+                    (ui/avatar "Ada Lovelace")
+                    (ui/label "Ada")))
+        (ui/table-cell {:align :end} (ui/tag "Math"))))
+      (ui/table-footer
+       (ui/table-row
+        (ui/table-cell {:span 2 :align :end} "Footer cell spanning both columns")))
+      (ui/table-caption "Kit Table primitives (per-cell span, widget children)."))
      (ui/label (str "Virtual " (pr-str vlist-sel)))
      (ui/virtual-list (mapv (fn [i]
                               {:id (keyword (str "r" i))

@@ -125,6 +125,23 @@ pub fn table_activation_calls(
     list_activation_calls(on_change, on_confirm, row_id)
 }
 
+/// Combobox pick / popover close: `:on-change` then `:on-confirm`, same
+/// payload (one id, a JSON array when `:multiple`, or `null`).
+pub fn combobox_activation_calls(
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+    payload: Value,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let Some(id) = on_change {
+        calls.push(CallbackCall::with_value(id, payload.clone()));
+    }
+    if let Some(id) = on_confirm {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    calls
+}
+
 /// Coalesce gpui-component 0.5.1 table `SelectRow` + optional
 /// `DoubleClickedRow` from one `on_row_left_click`.
 ///
@@ -179,6 +196,49 @@ impl TableClickCoalesce {
     pub fn take_pending_select(&mut self) -> Option<usize> {
         self.flush_scheduled = false;
         self.pending_row.take()
+    }
+}
+
+/// Coalesce Kit `ComboboxEvent::Change` + optional `ComboboxEvent::Confirm`
+/// from one user action.
+///
+/// Single-select pick: Kit emits Change then Confirm from the same
+/// `toggle` (`should_close = changed && !multiple`). `Context::emit`
+/// only queues `Effect::Emit`; subscribers run later in `flush_effects`
+/// FIFO. Record Change and schedule `Effect::Defer` (`cx.defer_in`) to
+/// flush a lone `:on-change`. Defer is pushed behind those already-queued
+/// emits, so a same-action Confirm runs first, consumes the pending
+/// payload, and sends one `:on-change` + `:on-confirm` batch. Confirm
+/// without Change (dismiss / close) has no pending payload. Multiple
+/// mode Change (popover stays open) has no same-tick Confirm; the
+/// deferred flush sends `:on-change` alone.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ComboboxActivationCoalesce {
+    pending: Option<Value>,
+    flush_scheduled: bool,
+}
+
+impl ComboboxActivationCoalesce {
+    /// Returns whether the caller should schedule a deferred change-only
+    /// flush. `false` when a flush is already pending.
+    pub fn on_change(&mut self, payload: Value) -> bool {
+        self.pending = Some(payload);
+        if self.flush_scheduled {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    /// Consumes a pending Change so the deferred flush is a no-op. The
+    /// returned payload (when present) is `:on-change` in the Confirm batch.
+    pub fn on_confirm(&mut self) -> Option<Value> {
+        self.pending.take()
+    }
+
+    pub fn take_pending_change(&mut self) -> Option<Value> {
+        self.flush_scheduled = false;
+        self.pending.take()
     }
 }
 
@@ -300,6 +360,8 @@ pub struct Item {
     #[serde(default, rename = "on-click")]
     pub on_click: Option<String>,
     /// `description-list` item column span. `0` / omitted is 1.
+    /// Declarative `table` shorthand columns may still send this; the
+    /// Clojure expander copies it onto the header cell only.
     #[serde(default)]
     pub span: u32,
     /// Nested items for menus and trees.
@@ -573,6 +635,9 @@ pub struct Node {
     /// Sheet footer node.
     #[serde(default)]
     pub footer: Option<Box<Node>>,
+    /// `table-head` / `table-cell` Kit `col_span`. `0` / omitted is 1.
+    #[serde(default)]
+    pub span: u32,
 }
 
 impl Node {
@@ -942,6 +1007,41 @@ mod tests {
             table_activation_calls(None, Some("cb-13".into()), "ada").len(),
             1
         );
+
+        let combo =
+            combobox_activation_calls(Some("cb-12".into()), Some("cb-13".into()), json!("clj"));
+        assert_eq!(combo[0].id, "cb-12");
+        assert_eq!(combo[1].id, "cb-13");
+        assert_eq!(combo[0].value, Some(json!("clj")));
+        assert_eq!(combo[1].value, Some(json!("clj")));
+        assert!(combobox_activation_calls(None, None, json!("clj")).is_empty());
+        assert_eq!(
+            combobox_activation_calls(Some("cb-12".into()), None, json!(["clj", "rs"])).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn combobox_activation_coalesce_batches_confirm_after_change() {
+        let mut c = ComboboxActivationCoalesce::default();
+        assert!(c.on_change(json!("clj")));
+        assert!(
+            !c.on_change(json!("clj")),
+            "second Change must not stack another defer"
+        );
+        let pending = c.on_confirm();
+        assert_eq!(pending, Some(json!("clj")));
+        assert!(
+            c.take_pending_change().is_none(),
+            "Confirm consumes Change so the deferred flush is a no-op"
+        );
+
+        let mut change_only = ComboboxActivationCoalesce::default();
+        assert!(change_only.on_change(json!("rs")));
+        assert_eq!(change_only.take_pending_change(), Some(json!("rs")));
+
+        let mut confirm_only = ComboboxActivationCoalesce::default();
+        assert!(confirm_only.on_confirm().is_none());
     }
 
     #[test]
@@ -1139,6 +1239,26 @@ mod tests {
         assert_eq!(omitted.columns, None);
         assert_eq!(omitted.orientation, None);
         assert_eq!(omitted.collection()[0].span, 0);
+    }
+
+    #[test]
+    fn decodes_table_cell_span_on_the_node() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "table-cell",
+            "span": 2,
+            "align": "end",
+            "children": [{"type": "label", "text": "Total"}]
+        }))
+        .unwrap();
+        assert_eq!(node.span, 2);
+        assert_eq!(node.align.as_deref(), Some("end"));
+        assert_eq!(node.children[0].text.as_deref(), Some("Total"));
+        let omitted: Node = serde_json::from_value(json!({
+            "type": "table-head",
+            "children": [{"type": "label", "text": "Name"}]
+        }))
+        .unwrap();
+        assert_eq!(omitted.span, 0);
     }
 
     #[test]

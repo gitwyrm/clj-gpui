@@ -17,7 +17,14 @@
   (is (some? (ns-resolve 'gpui.ui 'alert-dialog)))
   (is (some? (ns-resolve 'gpui.ui 'combobox)))
   (is (some? (ns-resolve 'gpui.ui 'rating)))
-  (is (some? (ns-resolve 'gpui.ui 'stepper))))
+  (is (some? (ns-resolve 'gpui.ui 'stepper)))
+  (is (some? (ns-resolve 'gpui.ui 'table-header)))
+  (is (some? (ns-resolve 'gpui.ui 'table-body)))
+  (is (some? (ns-resolve 'gpui.ui 'table-footer)))
+  (is (some? (ns-resolve 'gpui.ui 'table-row)))
+  (is (some? (ns-resolve 'gpui.ui 'table-head)))
+  (is (some? (ns-resolve 'gpui.ui 'table-cell)))
+  (is (some? (ns-resolve 'gpui.ui 'table-caption))))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
@@ -563,22 +570,59 @@
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
       (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
-  (testing "declarative table columns, vector rows, footer, caption"
-    (let [n (ui/table {:columns [{:label "Name"} {:label "Amount" :align :end :width 80}]
+  (testing "declarative table shorthand expands to Kit primitives"
+    (let [n (ui/table {:columns [{:label "Name" :span 2}
+                                 {:label "Amount" :align :end :width 80}]
                        :rows [["Ada" "$250"] {:id :rich :cells ["Rich" "$150"]}]
-                       :footer ["Total" "$400"]
-                       :caption "Invoices"})]
+                       :footer [{:span 2 :align :end :text "Total $400"}]
+                       :caption "Invoices"})
+          header-row (get-in n [:children 0 :children 0])
+          body-row (get-in n [:children 1 :children 0])
+          foot-row (get-in n [:children 2 :children 0])]
       (is (= :table (:type n)))
-      (is (= "Name" (get-in n [:options 0 :label])))
-      (is (= "end" (get-in n [:options 1 :align])))
-      (is (= 80 (get-in n [:options 1 :width])))
-      (is (= ["Ada" "$250"] (get-in n [:items 0 :cells])))
-      (is (= "rich" (get-in n [:items 1 :id])))
-      (is (= "footer" (get-in n [:items 2 :variant])))
-      (is (= ["Total" "$400"] (get-in n [:items 2 :cells])))
-      (is (= "Invoices" (:text n)))
+      (is (nil? (:options n)))
+      (is (nil? (:items n)))
+      (is (nil? (:text n)))
       (is (nil? (:caption n)))
-      (is (nil? (:columns n)))))
+      (is (nil? (:columns n)))
+      (is (= :table-header (get-in n [:children 0 :type])))
+      (is (= :table-body (get-in n [:children 1 :type])))
+      (is (= :table-footer (get-in n [:children 2 :type])))
+      (is (= :table-caption (get-in n [:children 3 :type])))
+      (is (= :table-head (get-in header-row [:children 0 :type])))
+      (is (= 2 (get-in header-row [:children 0 :span])))
+      (is (= "end" (get-in header-row [:children 1 :align])))
+      (is (= 80 (get-in header-row [:children 1 :width])))
+      (is (= :table-cell (get-in body-row [:children 0 :type])))
+      (is (nil? (get-in body-row [:children 0 :span]))
+          "column :span must not copy onto every body cell")
+      (is (= "end" (get-in body-row [:children 1 :align])))
+      (is (= 80 (get-in body-row [:children 1 :width])))
+      (is (= "Ada" (get-in body-row [:children 0 :children 0 :text])))
+      (is (= "Invoices" (get-in n [:children 3 :children 0 :text])))
+      (is (= 2 (get-in foot-row [:children 0 :span]))
+          "footer cell span is independent of the body")
+      (is (= "end" (get-in foot-row [:children 0 :align])))))
+  (testing "declarative table primitives accept widget children"
+    (let [n (ui/table
+             (ui/table-header
+              (ui/table-row
+               (ui/table-head "Person")
+               (ui/table-head {:align :end} "Role")))
+             (ui/table-body
+              (ui/table-row
+               (ui/table-cell (ui/avatar "Ada") (ui/label "Lovelace"))
+               (ui/table-cell {:align :end} (ui/badge 1 (ui/label "Math")))))
+             (ui/table-footer
+              (ui/table-row
+               (ui/table-cell {:span 2 :align :end} "One pioneer")))
+             (ui/table-caption "Staff"))]
+      (is (= :table (:type n)))
+      (is (= :avatar (get-in n [:children 1 :children 0 :children 0 :children 0 :type])))
+      (is (= :badge (get-in n [:children 1 :children 0 :children 1 :children 0 :type])))
+      (is (= 2 (get-in n [:children 2 :children 0 :children 0 :span])))
+      (is (= "end" (get-in n [:children 2 :children 0 :children 0 :align])))
+      (is (= "Staff" (get-in n [:children 3 :children 0 :text])))))
   (testing "combobox defaults searchable and restores ids"
     (let [n (ui/combobox :clj {:options [{:id :clj :label "Clojure"} :rs]})]
       (is (= :combobox (:type n)))
