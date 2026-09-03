@@ -406,6 +406,13 @@
 (defn- docs-panel [_]
   (ui/vstack
    {:gap 12}
+   (ui/label "Disk-style horizontal bars (cljdu)" {:font-size 13})
+   (ui/horizontal-bar-chart
+    [{:id :src :label "src" :value 412}
+     {:id :target :label "target" :value 128}
+     {:id :docs :label "docs" :value 48}
+     {:id :other :label "Other" :value 19}]
+    {:labels true :value-axis true :height 180 :flex 1})
    (ui/chart :line [{:id :a :label "Mon" :value 4}
                     {:id :b :label "Tue" :value 8}
                     {:id :c :label "Wed" :value 6}
@@ -414,6 +421,22 @@
    (ui/bar-chart [{:id :a :label "A" :value 3}
                   {:id :b :label "B" :value 7}]
                  {:width 220 :height 140})
+   (ui/radar-chart [{:id :speed :label "Speed" :values [80 55]}
+                    {:id :range :label "Range" :values [40 90]}
+                    {:id :rel :label "Reliability" :values [70 60]}]
+                   {:series [{:id :a :label "A"} {:id :b :label "B"}]
+                    :height 200
+                    :dot true})
+   (ui/candlestick-chart [{:id :mon :label "Mon" :open 100 :high 110 :low 95 :close 105}
+                          {:id :tue :label "Tue" :open 105 :high 118 :low 101 :close 112}
+                          {:id :wed :label "Wed" :open 112 :high 115 :low 98 :close 101}]
+                         {:height 160})
+   (ui/sankey-chart [{:id :rev :label "Revenue"}
+                     {:id :profit :label "Profit"}
+                     {:id :cost :label "Cost"}]
+                    {:links [{:source :rev :target :profit :value 45}
+                             {:source :rev :target :cost :value 55}]
+                     :height 180})
    (ui/pie-chart [{:id :a :label "A" :value 2}
                   {:id :b :label "B" :value 5}]
                  {:width 180 :height 160})

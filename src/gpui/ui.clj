@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  9)
+  10)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -281,13 +281,16 @@
   (cond
     (nil? x) nil
     (map? x)
-    (let [id (or (:id x) (:value x) (:label x) (:text x))
-          label (or (:label x) (:text x) (:id x) (:value x))
-          value (:value x)
+    (let [value (:value x)
+          scalar-value? (or (nil? value)
+                            (string? value)
+                            (not (sequential? value)))
+          id (or (:id x) (when scalar-value? value) (:label x) (:text x))
+          label (or (:label x) (:text x) (:id x) (when scalar-value? value))
           content (:content x)]
       (cond-> {:id (wire-id id)
                :label (when (some? label) (str label))}
-        (some? value) (assoc :text (str value))
+        (and (some? value) scalar-value?) (assoc :text (str value))
         (contains? x :text) (assoc :text (str (:text x)))
         (true? (:disabled x)) (assoc :disabled true)
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
@@ -303,9 +306,22 @@
         (some? (:min x)) (assoc :min (:min x))
         (some? (:max x)) (assoc :max (:max x))
         (some? (:step x)) (assoc :step (:step x))
+        (some? (:color x)) (assoc :color (str (:color x)))
+        (sequential? (:values x)) (assoc :values (vec (:values x)))
+        (some? (:open x)) (assoc :open (:open x))
+        (some? (:high x)) (assoc :high (:high x))
+        (some? (:low x)) (assoc :low (:low x))
+        (some? (:close x)) (assoc :close (:close x))
+        (some? (:source x)) (assoc :source (wire-id (:source x)))
+        (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
         (seq (:items x)) (assoc :items (option-items (:items x)))
-        (and (contains? x :id) (contains? x :value)) (assoc :value value)))
+        (number? value) (assoc :value value)
+        (and (sequential? value) (not (string? value))) (assoc :value (vec value))
+        (and (contains? x :id) (contains? x :value)
+             (not (number? value))
+             (not (and (sequential? value) (not (string? value)))))
+        (assoc :value value)))
     (keyword? x) {:id (wire-id x) :label (name x)}
     :else {:id (str x) :label (str x)}))
 
@@ -1668,18 +1684,37 @@
                     :items (option-items raw)}
                    opts))))
 
-(defn chart
-  "Series chart. `kind` is `:line` (default), `:bar`, `:area`, or `:pie`.
-  Points are `{id, label, value}` maps (`value` is the y / slice).
+(defn- chart-opts
+  "Stringify Kit alignment keys and normalize `:links` / `:series` items."
+  [opts]
+  (let [opts (or opts {})]
+    (cond-> opts
+      (keyword? (:alignment opts)) (update :alignment name)
+      (keyword? (:node-align opts)) (update :node-align name)
+      (keyword? (:value-scale opts)) (update :value-scale name)
+      (seq (:links opts)) (update :links option-items)
+      (seq (:series opts)) (update :series option-items))))
 
-  (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})"
+(defn chart
+  "Series chart. `kind` is `:line` (default), `:bar`, `:area`, `:pie`,
+  `:radar`, `:candlestick`, or `:sankey`.
+
+  Points are `{id, label, value}` maps (`value` is the y / slice).
+  Bar charts take Kit `:alignment` (`:bottom` default, `:left` for
+  horizontal bars growing right). `:labels true` paints values on bars.
+  Radar dimensions may use `:values [a b]` (or `:value [a b]`) with
+  `:series` names. Candlesticks use `:open` / `:high` / `:low` / `:close`.
+  Sankey nodes are `points`; flows are `:links [{:source :target :value}]`.
+
+  (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})
+  (ui/chart :bar dirs {:alignment :left :labels true :value-axis true})"
   ([kind points]
    (chart kind points nil))
   ([kind points opts]
    (merge-widget {:type :chart
                   :variant (if (keyword? kind) (name kind) (str (or kind "line")))
                   :items (option-items (or points []))}
-                 (or opts {}))))
+                 (chart-opts opts))))
 
 (defn line-chart
   "See `chart` with `:line`."
@@ -1691,6 +1726,17 @@
   ([points] (chart :bar points nil))
   ([points opts] (chart :bar points opts)))
 
+(defn horizontal-bar-chart
+  "Bar chart with Kit `:alignment :left` (bars grow right).
+
+  Same points as `bar-chart`. Intended for category lists such as
+  directory sizes in cljdu.
+
+  (ui/horizontal-bar-chart [{:id :src :label \"src\" :value 412}]
+                           {:labels true :value-axis true :height 220})"
+  ([points] (chart :bar points {:alignment :left}))
+  ([points opts] (chart :bar points (merge {:alignment :left} opts))))
+
 (defn area-chart
   "See `chart` with `:area`."
   ([points] (chart :area points nil))
@@ -1700,6 +1746,21 @@
   "See `chart` with `:pie`."
   ([points] (chart :pie points nil))
   ([points opts] (chart :pie points opts)))
+
+(defn radar-chart
+  "See `chart` with `:radar`."
+  ([points] (chart :radar points nil))
+  ([points opts] (chart :radar points opts)))
+
+(defn candlestick-chart
+  "See `chart` with `:candlestick`. Points need `:open` `:high` `:low` `:close`."
+  ([points] (chart :candlestick points nil))
+  ([points opts] (chart :candlestick points opts)))
+
+(defn sankey-chart
+  "See `chart` with `:sankey`. `points` are nodes; pass `:links` in `opts`."
+  ([points] (chart :sankey points nil))
+  ([points opts] (chart :sankey points opts)))
 
 (defn markdown
   "Selectable markdown `TextView`. `:height` or `:flex 1` makes it scroll.

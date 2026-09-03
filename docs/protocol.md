@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **9**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **10**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **9**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":9,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":10,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -75,6 +75,8 @@ v7 added this capture pair. A v6 host ignores `capture-preview`, so the version 
 v8 is the GPUI Kit 0.6 rename: `text-field` → `input`, `divider` → `separator`, `table` → `data-table`, plus `textarea` and `alert-dialog`. Editor is Kit `EditorState`, not `InputState::code_editor`.
 
 v9 adds Kit's remaining first-pass widgets: declarative `table`, `combobox`, `rating`, `stepper`, and the `gpui-fps` HUD on `:chrome :dev`.
+
+v10 adds the rest of Kit's chart kinds (`radar`, `candlestick`, `sankey`) and Kit `BarChart` alignment (`left` / `right` for horizontal bars, plus `:labels` / `:value-axis`). A v9 host would paint those variants as a line chart.
 
 ## Host → Clojure ops
 
@@ -163,7 +165,7 @@ From a running `clj -M:dev` nREPL:
 (gpui.runtime/preview-png)
 ```
 
-## Node schema (version 9)
+## Node schema (version 10)
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
@@ -174,7 +176,9 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input`, `table-head` / `table-cell` / `table-caption` (when they have no children) |
 | `placeholder` | string | `input`, `textarea`, `select`, `combobox`, `date-picker`, `number-input` |
 | `children` | array of nodes | layouts, `scroll`, `group-box`, `badge`, `dialog`, `popover`, `context-menu`, `sheet`, `resizable`, declarative `table` and its Kit primitives (`table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`) |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,height,side,variant,min,max,step}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
+| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,values,height,side,variant,min,max,step,color,open,high,low,close,source,target}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value` (or `values` for radar series). Candlestick points use `open`/`high`/`low`/`close`. Sankey links use `source`/`target`/`value`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
+| `links` | array of items | `chart` `:sankey` flows (`source`, `target`, `value`) |
+| `series` | array of items | `chart` `:radar` series names/colors, in value-index order |
 | `trigger` | node | `popover`, `dropdown-menu` (usually a `button`) |
 | `footer` | node | `sheet` footer |
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link`, `notification` |
@@ -220,7 +224,16 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
-| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`), `notification` (`info`/`success`/`warning`/`error`), `chart` (`line`/`bar`/`area`/`pie`), settings field kind |
+| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`), `notification` (`info`/`success`/`warning`/`error`), `chart` (`line`/`bar`/`area`/`pie`/`radar`/`candlestick`/`sankey`), settings field kind |
+| `alignment` | string | `chart` `:bar`: Kit `BarAlignment` (`bottom` default, `top`, `left`, `right`). `left` is horizontal bars growing right |
+| `label-axis` | bool | `chart`: band-axis labels (default true) |
+| `value-axis` | bool | `chart`: value-axis tick labels (default false) |
+| `tick-margin` | number | `chart`: stride over band-axis category labels (default 1) |
+| `value-tick-count` | number | `chart`: value-axis intervals (default 4) |
+| `grid` | bool | `chart`: grid lines (default true) |
+| `labels` | bool | `chart` `:bar`: paint numeric labels on bars (default false) |
+| `node-align` | string | `chart` `:sankey`: `justify` (default), `left`, `right`, `center` |
+| `value-scale` | string | `chart` `:sankey`: `linear` (default) or `sqrt` |
 | `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` / `dialog` / `alert-dialog` / `sheet` / `notification` / `sidebar` titles |
 | `compact` | bool | `button` |
 | `strikethrough` | bool | text |
@@ -238,7 +251,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer + `gpui-fps` HUD) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
-Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:content` / `:trigger` / `:footer` are walked too. The registry is rebuilt on every export.
+Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` are walked too. The registry is rebuilt on every export.
 
 The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets (`icon`, `spinner`, `alert`, `select` chevron, `clipboard`) load SVGs from `gpui-kit-assets`. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
@@ -252,7 +265,7 @@ GPUI Kit 0.6 `Root::render` does not paint dialog / sheet / notification layers;
 
 Declarative `table` is Kit `Table` (not `DataTable`): content-sized, not virtualized, no selection callbacks. The wire is Kit primitives — `table-header` / `table-body` / `table-footer` / `table-row` / `table-head` / `table-cell` / `table-caption` — so `col_span`, alignment, and children belong on individual cells. `table-head` and `table-cell` children are ordinary clj-gpui nodes. Clojure `{:columns :rows :footer :caption}` shorthand expands into those primitives; column `:span` applies to the header cell only. `accessibility-label` is Kit `Table::accessibility_label` (a visible caption is not the accessible name). A host fallback still paints the older `options`/`items`/`variant: footer` shape. `combobox` keeps host `ComboboxState` (recreated if `searchable` / `multiple` change). Same-action Kit `Change` then `Confirm` is one `:on-change` + `:on-confirm` batch. Native `Change` updates the slot's cached selection so a Clojure echo of those ids does not call `set_selected_values` (which clears the search query). An item-collection change still rebuilds selection so renamed/removed options do not stick. A different Clojure value still overrides native state. `rating` is 0..=`max` (default 5); the host calls `.max` then `.value` because Kit clamps `.value` to the current max. `stepper` `value` is the selected item id.
 
-`otp-input` `:on-change` fires only when every cell is filled. `editor` is Kit `Editor` / `EditorState` (highlighter language, no LSP). Dock panel bodies are the static overlay subset plus `markdown`/`chart`, not list/data-table/editor.
+`otp-input` `:on-change` fires only when every cell is filled. `editor` is Kit `Editor` / `EditorState` (highlighter language, no LSP). Dock panel bodies are the static overlay subset plus `markdown`/`chart`, not list/data-table/editor. `chart` kinds are Kit's: `line`, `bar` (including `:alignment left` horizontal bars), `area`, `pie`, `radar`, `candlestick`, `sankey`. Stacked bars are a story-only `Plot`, not a Kit widget; they are not wrapped.
 
 `spinner`, `badge`, and `clipboard` are not GPUI Kit `Styled` types. The host wraps them in a `div` that receives the usual layout and visual keys (`width`, `height`, `size`, `flex`, `padding`, `bg`, …). `accordion` and `description-list` use the same outer-owns-layout pattern, but the wrapper defaults to `flex-none` and full width so crate `size_full()` cannot steal leftover column height. Inner chrome is not styled twice.
 

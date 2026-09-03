@@ -1,6 +1,6 @@
 # GPUI Kit 0.6 migration plan
 
-Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps` on `:chrome :dev`, protocol 9) is the follow-up PR.
+Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps`, protocol 9) landed in [PR #14](https://github.com/gitwyrm/clj-gpui/pull/14). Extra Kit chart kinds (horizontal `BarChart` alignment, radar, candlestick, sankey) are protocol 10.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
@@ -16,7 +16,7 @@ That is the right course of action because:
 2. **There is no compatibility audience.** clj-gpui is two days old, unpublished, and has no users. Keeping `ui/divider` / `ui/table` / `ui/text-field` would only freeze a 0.5.1 vocabulary we invented before Kit renamed the types. Matching Kit now means `gpui.ui` stays a thin naming layer over gpui-kit.com instead of a translation table we have to document forever.
 3. **The three text controls should exist together.** 0.6 split `Input` / `Textarea` / `Editor`. Shipping `ui/input` and `ui/editor` while omitting `ui/textarea` would recreate the old "multiline lives on the wrong type" trap.
 
-Do **not** adopt `gpui-shell` (JavaScript host). Clojure is already our scriptable layer. Do **not** adopt `gpui-wry` (WebView); that remains out of scope. **`gpui-fps` is wanted** for `:chrome :dev`, but it is postponed past this migration.
+Do **not** adopt `gpui-shell` (JavaScript host). Clojure is already our scriptable layer. **`gpui-wry` (WebView) is deferred** until a product needs it; it is not part of the widget coverage pass. **`gpui-fps` is wanted** for `:chrome :dev`, but it is postponed past this migration.
 
 ```text
 today                              after
@@ -48,7 +48,8 @@ The Longbridge project is no longer "a component crate on top of Zed's `gpui` cr
 | Unstyled | `gpui-base` 0.6.0 | Behavior, state, overlays, dock layout algebra, input engine, motion, virtual lists. Independent of the styled theme. |
 | Styled | `gpui-component` 0.6.0 | The widget library we wrap today. Still the right painting layer for clj-gpui. Builds on `gpui-base`. |
 | Assets | `gpui-kit-assets` 0.6.0 | Replaces `gpui-component-assets`. Rust path `gpui_kit_assets`. Lucide SVGs; `IconName` is generated from this pack. |
-| Out of scope for this migration | `gpui-shell`, `gpui-wry` | JS runtime, Wry WebView. |
+| Out of scope for this migration | `gpui-shell` | JS runtime. Clojure replaces that use case; do not wrap. |
+| Deferred | `gpui-wry` | Wry WebView. Later, when a product needs it. |
 | Postponed | `gpui-fps` | FPS / resource HUD. Wanted on `:chrome :dev`; add after the host is on 0.6. |
 
 Documentation moved from `longbridge.github.io/gpui-component` to [gpui-kit.com](https://gpui-kit.com). The GitHub repo is `longbridge/gpui-kit` (the old `gpui-component` repo is the 0.5 line).
@@ -343,7 +344,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | later | Chat/assistant layout. Large API. |
 | `NavStack` | `ui/nav-stack` | Push/back/forward + motion. Needs host history state. |
 | `DataTable` extras | flags on `ui/data-table` | Multi-row headers, cell selection, custom row heights, export. |
-| `RadarChart`, `SankeyChart`, candlestick | `:kind` on `ui/chart` | Additive chart kinds; band scale `Eq + Hash`. |
+| `RadarChart`, `SankeyChart`, candlestick, bar `:alignment` | `:kind` on `ui/chart` | Protocol 10. `:alignment :left` is horizontal bars for cljdu. Stacked bars stay a story-only `Plot`. |
 | `SelectableText`, window `TextSelection` | maybe | Cross-element copy. Preview/Evalight might care. |
 | Motion / spring | no widget | Only if we expose animation as a node. |
 | Accessibility IDs / labels | optional attrs | Good later; not a blocker. |
@@ -412,7 +413,7 @@ If a Kit default changes visible behavior (alert dialogs ignoring backdrop click
 
 ### Phase 5 — remaining Kit widgets (separate PR, after the migration)
 
-Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module. This is the follow-up PR (protocol 9); extra chart kinds stay deferred.
+Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module. This is the follow-up PR (protocol 9). Extra chart kinds shipped as protocol 10 (`ui/horizontal-bar-chart`, radar, candlestick, sankey). `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ## 9. Testing plan (when we implement)
 
@@ -459,6 +460,8 @@ Locked before implementation:
 | 6 | First widgets after the migration | **Declarative `ui/table`, then Combobox / Rating / Stepper.** |
 | 7 | `gpui-fps` | **Yes, later.** Wanted on `:chrome :dev`. Not in the migration PR. |
 | 8 | How many PRs | **One migration PR** for crate bump + names + edition + languages + parity. Not a spike PR plus a second PR. Remaining widgets / fps are after that. |
+| 9 | `gpui-shell` | **Never.** Clojure replaces that use case. |
+| 10 | `gpui-wry` | **Later**, when a product needs a WebView. Not the widget coverage pass. |
 
 ## 12. What this plan PR will not do
 

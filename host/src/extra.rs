@@ -14,10 +14,11 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
     calendar::Date,
-    chart::{AreaChart, BarChart, LineChart, PieChart},
+    chart::{AreaChart, BarChart, CandlestickChart, LineChart, PieChart, RadarChart, SankeyChart},
     dock::{Panel as StyledPanel, PanelControl, PanelEvent},
     h_virtual_list,
     input::InputState,
+    plot::shape::{BarAlignment, SankeyAlign, SankeyLink, SankeyValueScale},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     text::TextView,
     v_flex, v_virtual_list,
@@ -283,24 +284,182 @@ pub fn date_to_value(date: Date) -> Value {
     }
 }
 
-pub fn chart_points(node: &Node) -> Vec<(String, f64)> {
+/// One chart datum. Series charts use `value` / `values`; candlesticks use
+/// OHLC; sankey nodes use `id`/`label`/`color` and links live on the node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartPoint {
+    pub id: String,
+    pub label: String,
+    pub value: Option<f64>,
+    pub values: Vec<f64>,
+    pub color: Option<String>,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub close: Option<f64>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+impl ChartPoint {
+    pub fn from_item(item: &Item) -> Self {
+        let values = item_number_list(item);
+        let value = item
+            .number_value()
+            .map(|n| n as f64)
+            .or_else(|| values.first().copied());
+        Self {
+            id: item.id_or_label(),
+            label: item.label_or_id(),
+            value,
+            values,
+            color: item.color.clone(),
+            open: item.open.map(|n| n as f64),
+            high: item.high.map(|n| n as f64),
+            low: item.low.map(|n| n as f64),
+            close: item.close.map(|n| n as f64),
+            source: item.source.clone(),
+            target: item.target.clone(),
+        }
+    }
+
+    pub fn series_y(&self) -> Option<f64> {
+        self.value.or_else(|| self.values.first().copied())
+    }
+
+    pub fn has_ohlc(&self) -> bool {
+        self.open.is_some() && self.high.is_some() && self.low.is_some() && self.close.is_some()
+    }
+}
+
+fn json_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn item_number_list(item: &Item) -> Vec<f64> {
+    match &item.values {
+        Some(Value::Array(xs)) => xs.iter().filter_map(json_f64).collect(),
+        _ => match &item.value {
+            Some(Value::Array(xs)) => xs.iter().filter_map(json_f64).collect(),
+            _ => Vec::new(),
+        },
+    }
+}
+
+pub fn chart_points(node: &Node) -> Vec<ChartPoint> {
     node.collection()
         .iter()
-        .filter_map(|item| {
-            let y = item.number_value()? as f64;
-            let x = item.label_or_id();
-            if x.is_empty() { None } else { Some((x, y)) }
+        .map(ChartPoint::from_item)
+        .filter(|p| !p.label.is_empty() && p.series_y().is_some())
+        .collect()
+}
+
+pub fn chart_kind(node: &Node) -> String {
+    node.variant
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .unwrap_or_else(|| "line".into())
+}
+
+pub fn bar_alignment(node: &Node) -> BarAlignment {
+    match node
+        .alignment
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("top") => BarAlignment::Top,
+        Some("left") => BarAlignment::Left,
+        Some("right") => BarAlignment::Right,
+        _ => BarAlignment::Bottom,
+    }
+}
+
+pub fn sankey_align(node: &Node) -> Option<SankeyAlign> {
+    match node
+        .node_align
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("left") => Some(SankeyAlign::Left),
+        Some("right") => Some(SankeyAlign::Right),
+        Some("center") => Some(SankeyAlign::Center),
+        Some("justify") => Some(SankeyAlign::Justify),
+        _ => None,
+    }
+}
+
+pub fn sankey_value_scale(node: &Node) -> Option<SankeyValueScale> {
+    match node
+        .value_scale
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("sqrt") => Some(SankeyValueScale::Sqrt),
+        Some("linear") => Some(SankeyValueScale::Linear),
+        _ => None,
+    }
+}
+
+pub fn sankey_nodes(node: &Node) -> Vec<ChartPoint> {
+    node.collection()
+        .iter()
+        .map(ChartPoint::from_item)
+        .filter(|p| !p.id.is_empty() || !p.label.is_empty())
+        .collect()
+}
+
+pub fn sankey_links(nodes: &[ChartPoint], links: &[Item]) -> Vec<SankeyLink> {
+    let index_of =
+        |key: &str| -> Option<usize> { nodes.iter().position(|n| n.id == key || n.label == key) };
+    links
+        .iter()
+        .filter_map(|link| {
+            let src = link.source.as_deref().or(link.id.as_deref())?;
+            let tgt = link.target.as_deref()?;
+            let value = link.number_value()? as f64;
+            Some(SankeyLink::new(index_of(src)?, index_of(tgt)?, value))
         })
         .collect()
 }
 
+fn format_chart_number(value: f64) -> String {
+    if (value - value.round()).abs() < 0.001 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+fn point_fill(point: &ChartPoint, fallback: Hsla) -> Hsla {
+    point
+        .color
+        .as_deref()
+        .and_then(parse_hex_color)
+        .unwrap_or(fallback)
+}
+
 /// Default chart viewport when Clojure omits `:width` / `:height` / `:size`
 /// / `:flex 1`. Outer layout is applied by the caller (`viewport_sized`).
+/// Horizontal bar charts grow with category count so cljdu-style
+/// directory rows are not clipped at 180px.
 pub fn chart_viewport(node: &Node) -> (f32, f32) {
-    (
-        node.width.or(node.size).unwrap_or(320.0),
-        node.height.or(node.size).unwrap_or(180.0),
-    )
+    let width = node.width.or(node.size).unwrap_or(320.0);
+    let height = node.height.or(node.size).unwrap_or_else(|| {
+        if chart_kind(node) == "bar" && bar_alignment(node).is_horizontal() {
+            let n = node.collection().len().max(1) as f32;
+            (n * 28.0 + 40.0).max(180.0)
+        } else {
+            180.0
+        }
+    });
+    (width, height)
 }
 
 /// Theme tokens for pie slices, in paint order. Slice `i` uses
@@ -331,42 +490,144 @@ fn pie_palette(cx: &App) -> [Hsla; 7] {
 pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let points = chart_points(node);
     let (width, height) = chart_viewport(node);
-    let kind = node
-        .variant
-        .as_deref()
-        .map(crate::catalog::normalize)
-        .unwrap_or_else(|| "line".into());
+    let kind = chart_kind(node);
     let stroke = cx.theme().chart_1;
     let fill = cx.theme().chart_2;
+    let plot_id = SharedString::from(format!("{key}/plot"));
     let chart: gpui::AnyElement = match kind.as_str() {
-        "bar" => BarChart::new(points)
-            .band(|p| p.0.clone())
-            .value(|p| p.1)
-            .fill(move |_, _, _, _| stroke)
-            .into_any_element(),
+        "bar" => {
+            let mut bar = BarChart::new(points)
+                .id(plot_id)
+                .band(|p| p.label.clone())
+                .value(|p| p.series_y().unwrap_or(0.0))
+                .alignment(bar_alignment(node))
+                .fill(move |p, _, _, _| point_fill(p, stroke));
+            bar = bar
+                .label_axis(node.label_axis.unwrap_or(true))
+                .value_axis(node.value_axis.unwrap_or(false))
+                .grid(node.grid.unwrap_or(true));
+            if let Some(margin) = node.tick_margin {
+                bar = bar.tick_margin(margin as usize);
+            }
+            if let Some(ticks) = node.value_tick_count {
+                bar = bar.value_tick_count(ticks as usize);
+            }
+            if node.labels.unwrap_or(false) {
+                bar = bar.label(|p| format_chart_number(p.series_y().unwrap_or(0.0)));
+            }
+            bar.into_any_element()
+        }
         "area" => AreaChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
+            .x(|p| p.label.clone())
+            .y(|p| p.series_y().unwrap_or(0.0))
             .stroke(stroke)
             .fill(fill)
             .into_any_element(),
         "pie" => {
             let palette = pie_palette(cx);
             let radius = width.min(height) * 0.42;
-            let pie_data: Vec<(usize, f64)> = points
+            let pie_data: Vec<(usize, f64, Option<String>)> = points
                 .iter()
                 .enumerate()
-                .map(|(ix, (_, value))| (ix, *value))
+                .filter_map(|(ix, p)| Some((ix, p.series_y()?, p.color.clone())))
                 .collect();
             PieChart::new(pie_data)
                 .value(|p| p.1 as f32)
                 .outer_radius(radius)
-                .color(move |p| palette[p.0 % PIE_SLICE_TOKENS.len()])
+                .color(move |p| {
+                    p.2.as_deref()
+                        .and_then(parse_hex_color)
+                        .unwrap_or(palette[p.0 % PIE_SLICE_TOKENS.len()])
+                })
                 .into_any_element()
         }
+        "radar" => {
+            let mut points = points;
+            for point in &mut points {
+                if point.values.is_empty() {
+                    if let Some(v) = point.value {
+                        point.values = vec![v];
+                    }
+                }
+            }
+            let n = points.iter().map(|p| p.values.len()).max().unwrap_or(0);
+            let series_meta: Vec<(String, Option<Hsla>)> = node
+                .series
+                .iter()
+                .map(|s| {
+                    (
+                        s.label_or_id(),
+                        s.color.as_deref().and_then(parse_hex_color),
+                    )
+                })
+                .collect();
+            let palette = pie_palette(cx);
+            let mut radar = RadarChart::new(points)
+                .id(plot_id)
+                .label(|p| p.label.clone());
+            if let Some(max) = node.max {
+                radar = radar.max_value(max as f64);
+            }
+            if node.dot {
+                radar = radar.dot();
+            }
+            radar = radar.grid(node.grid.unwrap_or(true));
+            for i in 0..n {
+                radar = radar.value(move |p| p.values.get(i).copied().unwrap_or(0.0));
+                let series_stroke = series_meta
+                    .get(i)
+                    .and_then(|(_, color)| *color)
+                    .unwrap_or(palette[i % palette.len()]);
+                radar = radar.stroke(series_stroke).name(
+                    series_meta
+                        .get(i)
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_default(),
+                );
+            }
+            radar.into_any_element()
+        }
+        "candlestick" => {
+            let candles: Vec<ChartPoint> = node
+                .collection()
+                .iter()
+                .map(ChartPoint::from_item)
+                .filter(|p| !p.label.is_empty() && p.has_ohlc())
+                .collect();
+            let mut chart = CandlestickChart::new(candles)
+                .x(|p| p.label.clone())
+                .open(|p| p.open.unwrap_or(0.0))
+                .high(|p| p.high.unwrap_or(0.0))
+                .low(|p| p.low.unwrap_or(0.0))
+                .close(|p| p.close.unwrap_or(0.0));
+            if let Some(margin) = node.tick_margin {
+                chart = chart.tick_margin(margin as usize);
+            }
+            chart = chart.grid(node.grid.unwrap_or(true));
+            chart.into_any_element()
+        }
+        "sankey" => {
+            let nodes = sankey_nodes(node);
+            let links = sankey_links(&nodes, &node.links);
+            let fallback = cx.theme().chart_1;
+            let colored = nodes.iter().any(|n| n.color.is_some());
+            let mut chart = SankeyChart::new(nodes, links)
+                .node_label(|n| n.label.clone().into())
+                .value_label(|_, v| format_chart_number(v).into());
+            if let Some(align) = sankey_align(node) {
+                chart = chart.node_align(align);
+            }
+            if let Some(scale) = sankey_value_scale(node) {
+                chart = chart.value_scale(scale);
+            }
+            if colored {
+                chart = chart.node_color(move |n| point_fill(n, fallback));
+            }
+            chart.into_any_element()
+        }
         _ => LineChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
+            .x(|p| p.label.clone())
+            .y(|p| p.series_y().unwrap_or(0.0))
             .stroke(stroke)
             .dot()
             .into_any_element(),
@@ -853,6 +1114,7 @@ pub fn sync_input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_component::plot::shape::{BarAlignment, SankeyAlign, SankeyValueScale};
     use serde_json::json;
 
     #[test]
@@ -1041,9 +1303,114 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            chart_points(&node),
-            vec![("A".into(), 1.0), ("B".into(), 2.5)]
+            chart_points(&node)
+                .iter()
+                .map(|p| (p.label.clone(), p.series_y()))
+                .collect::<Vec<_>>(),
+            vec![("A".into(), Some(1.0)), ("B".into(), Some(2.5))]
         );
+    }
+
+    #[test]
+    fn bar_alignment_left_is_horizontal() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "alignment": "left"
+        }))
+        .unwrap();
+        assert_eq!(bar_alignment(&node), BarAlignment::Left);
+        assert!(bar_alignment(&node).is_horizontal());
+        let omitted: Node =
+            serde_json::from_value(json!({"type": "chart", "variant": "bar"})).unwrap();
+        assert_eq!(bar_alignment(&omitted), BarAlignment::Bottom);
+        assert!(!bar_alignment(&omitted).is_horizontal());
+        let top: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "alignment": "top"
+        }))
+        .unwrap();
+        assert_eq!(bar_alignment(&top), BarAlignment::Top);
+    }
+
+    #[test]
+    fn chart_kind_covers_kit_names() {
+        let kind = |variant: &str| {
+            let node: Node =
+                serde_json::from_value(json!({"type": "chart", "variant": variant})).unwrap();
+            chart_kind(&node)
+        };
+        assert_eq!(kind("bar"), "bar");
+        assert_eq!(kind("radar"), "radar");
+        assert_eq!(kind("candlestick"), "candlestick");
+        assert_eq!(kind("sankey"), "sankey");
+        assert_eq!(kind("line"), "line");
+        let omitted: Node = serde_json::from_value(json!({"type": "chart"})).unwrap();
+        assert_eq!(chart_kind(&omitted), "line");
+    }
+
+    #[test]
+    fn radar_values_from_array_or_value() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "radar",
+            "items": [
+                {"label": "Speed", "values": [80, 60]},
+                {"label": "Range", "value": [10, 20]},
+                {"label": "Solo", "value": 5}
+            ]
+        }))
+        .unwrap();
+        let points = chart_points(&node);
+        assert_eq!(points[0].values, vec![80.0, 60.0]);
+        assert_eq!(points[1].values, vec![10.0, 20.0]);
+        assert_eq!(points[2].series_y(), Some(5.0));
+        assert!(points[2].values.is_empty());
+    }
+
+    #[test]
+    fn candlestick_point_needs_ohlc() {
+        let item: Item = serde_json::from_value(json!({
+            "label": "Mon", "open": 100, "high": 110, "low": 95, "close": 105
+        }))
+        .unwrap();
+        let p = ChartPoint::from_item(&item);
+        assert!(p.has_ohlc());
+        assert_eq!(p.open, Some(100.0));
+        let skip: Item = serde_json::from_value(json!({"label": "Mon", "value": 10})).unwrap();
+        assert!(!ChartPoint::from_item(&skip).has_ohlc());
+    }
+
+    #[test]
+    fn sankey_links_resolve_ids() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "sankey",
+            "items": [
+                {"id": "rev", "label": "Revenue"},
+                {"id": "cost", "label": "Cost"}
+            ],
+            "links": [
+                {"source": "rev", "target": "cost", "value": 55},
+                {"source": "missing", "target": "cost", "value": 1}
+            ]
+        }))
+        .unwrap();
+        let nodes = sankey_nodes(&node);
+        let links = sankey_links(&nodes, &node.links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].source, 0);
+        assert_eq!(links[0].target, 1);
+        assert_eq!(links[0].value, 55.0);
+        assert_eq!(sankey_align(&node), None);
+        let aligned: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "node-align": "left",
+            "value-scale": "sqrt"
+        }))
+        .unwrap();
+        assert_eq!(sankey_align(&aligned), Some(SankeyAlign::Left));
+        assert_eq!(sankey_value_scale(&aligned), Some(SankeyValueScale::Sqrt));
     }
 
     #[test]
@@ -1236,6 +1603,23 @@ mod tests {
             (320.0, 180.0),
             "flex is owned by the outer wrapper; inner pie radius still needs a fallback span"
         );
+        let hbar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "alignment": "left",
+            "items": [
+                {"label": "a", "value": 1},
+                {"label": "b", "value": 2},
+                {"label": "c", "value": 3},
+                {"label": "d", "value": 4},
+                {"label": "e", "value": 5},
+                {"label": "f", "value": 6},
+                {"label": "g", "value": 7},
+                {"label": "h", "value": 8}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(chart_viewport(&hbar), (320.0, 8.0 * 28.0 + 40.0));
     }
 
     fn settings_page(value: serde_json::Value) -> Item {

@@ -24,7 +24,10 @@
   (is (some? (ns-resolve 'gpui.ui 'table-row)))
   (is (some? (ns-resolve 'gpui.ui 'table-head)))
   (is (some? (ns-resolve 'gpui.ui 'table-cell)))
-  (is (some? (ns-resolve 'gpui.ui 'table-caption))))
+  (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'sankey-chart))))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
@@ -96,6 +99,10 @@
   (is (= {:id "clj" :label "Clojure"}
          (ui/option-item {:id :clj :label "Clojure"})))
   (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
+  (is (= [80 60] (:values (ui/option-item {:id :s :label "Speed" :values [80 60]}))))
+  (is (= [80 60] (:value (ui/option-item {:id :s :label "Speed" :value [80 60]}))))
+  (is (= "rev" (:source (ui/option-item {:source :rev :target :cost :value 55}))))
+  (is (= 100 (:open (ui/option-item {:id :mon :label "Mon" :open 100 :close 105}))))
   (is (true? (:checked (ui/option-item {:id :notify :label "N" :checked true}))))
   (is (= "left" (:side (ui/option-item {:id :files :side :left :label "Files"}))))
   (is (= ["a" "b"] (mapv :id (ui/option-items [:a nil :b]))))
@@ -700,6 +707,35 @@
       (is (= :chart (:type n)))
       (is (= "bar" (:variant n)))
       (is (= 3.5 (get-in n [:items 0 :value]))))
+    (let [n (ui/horizontal-bar-chart
+             [{:id :src :label "src" :value 412 :color "#3366ff"}]
+             {:labels true :value-axis true :height 220})]
+      (is (= "bar" (:variant n)))
+      (is (= "left" (:alignment n)))
+      (is (true? (:labels n)))
+      (is (true? (:value-axis n)))
+      (is (= "#3366ff" (get-in n [:items 0 :color]))))
+    (let [n (ui/radar-chart [{:id :speed :label "Speed" :values [80 60]}]
+                            {:series [{:id :desktop :label "Desktop"}
+                                      {:id :mobile :label "Mobile"}]})]
+      (is (= "radar" (:variant n)))
+      (is (= [80 60] (get-in n [:items 0 :values])))
+      (is (= "desktop" (get-in n [:series 0 :id]))))
+    (let [n (ui/candlestick-chart [{:id :mon :label "Mon"
+                                    :open 100 :high 110 :low 95 :close 105}])]
+      (is (= "candlestick" (:variant n)))
+      (is (= 100 (get-in n [:items 0 :open])))
+      (is (= 105 (get-in n [:items 0 :close]))))
+    (let [n (ui/sankey-chart [{:id :rev :label "Revenue"} {:id :cost :label "Cost"}]
+                             {:links [{:source :rev :target :cost :value 55}]
+                              :node-align :left
+                              :value-scale :sqrt})]
+      (is (= "sankey" (:variant n)))
+      (is (= "rev" (get-in n [:links 0 :source])))
+      (is (= "cost" (get-in n [:links 0 :target])))
+      (is (= 55 (get-in n [:links 0 :value])))
+      (is (= "left" (:node-align n)))
+      (is (= "sqrt" (:value-scale n))))
     (is (= :markdown (:type (ui/markdown "# Hi"))))
     (is (= :html (:type (ui/html "<p>x</p>"))))
     (let [n (ui/sidebar [{:id :home :label "Home" :icon :check}]

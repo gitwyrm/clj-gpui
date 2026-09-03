@@ -79,7 +79,7 @@ Classification:
 | `resizable::*` | `ui/resizable` | ✅ | C | Host `ResizableState`. `:on-change` is px size array |
 | `sidebar::*` | `ui/sidebar` | ✅ | C | `{id, label, icon}` menu. `:collapsed`, `:side` |
 | `setting::*` | `ui/settings` | ✅ | C | Pages / groups / fields. `:on-change` is `{:id :value}` with original field id |
-| `chart::*` / `plot::*` | `ui/chart` | ✅ | C | `:line` / `:bar` / `:area` / `:pie`. Items `{label, value}` |
+| `chart::*` / `plot::*` | `ui/chart` | ✅ | C | `:line` / `:bar` / `:area` / `:pie` / `:radar` / `:candlestick` / `:sankey`. Bar `:alignment :left` is horizontal (cljdu). Items `{label, value}`; candlestick OHLC; sankey `:links`. Stacked bars are a Kit story `Plot`, not wrapped |
 | `text::TextView` (markdown/HTML) | `ui/markdown`, `ui/html` | ✅ | C | Selectable; scrollable when `:height` or `:flex 1` |
 | `highlighter::*` | — | ❌ | E | Tree-sitter internals for the editor |
 | `form::{v,h}_form` / `field` | — | ❌ | E | Layout sugar; `vstack` is enough |
@@ -90,15 +90,15 @@ Classification:
 | `Inspector` | — | ❌ | D | Debug-only |
 | `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |
 | `History` | — | ❌ | E | Undo stack, not UI |
-| `webview` | — | ❌ | D | Explicitly out of scope |
+| `webview` | — | ❌ | D | `gpui-wry`: later, when an app needs a WebView. Not this pass |
 | `animation` helpers | — | ❌ | E | Not a control |
 | `IndexPath` / `Rope` / geometry | — | ❌ | E | Host types |
 
-Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints on `:chrome :dev`. `gpui-shell` / `gpui-wry` are out of scope.
+Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints on `:chrome :dev`. `gpui-shell` is not wrapped: Clojure already is the scriptable layer. `gpui-wry` is deferred until an app needs a WebView.
 
 ## Category C — remaining
 
-Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, Pagination / ProgressCircle / Shimmer / HoverCard, extra chart kinds, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget.
+Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, Pagination / ProgressCircle / Shimmer / HoverCard, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Extra Kit chart kinds are wrapped (`ui/chart` plus `ui/horizontal-bar-chart`). `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 
@@ -114,13 +114,13 @@ Declarative `ui/table` is not this family: Kit `Table` / `TableHeader` / `TableB
 
 ### Product widgets (number, OTP, color, date, editor, dock, sidebar, settings, charts, markdown)
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. Number-input reuses the input `InputState` slot with a `NumberInput` wrapper; step events parse the current text, apply `:step` / `:min` / `:max`, and `set_value` (which emits `:on-change` as a JSON number). A later input with the same element key clears `as_number` so non-numeric text still emits a string; the step subscription stays on the entity but no-ops while `as_number` is false. OTP `:on-change` is crate-complete-only; incomplete typing is not overwritten while focused. Color is hex or JSON `null`. Kit `ColorPickerState::set_value` takes only `Hsla`; a controlled `Some` → `nil` recreates the state entity (starts empty, no `:on-change`). Date is ISO; `set_date` is skipped when the value is unchanged so an open picker is not closed every frame. Editor is highlighter-only (`EditorState` + `set_highlighter` on language change). Undo/redo groups and fast typing emit several crate `Change` events; the host defers one `:on-change` with the latest string and will not send another until the next tree assigns a fresh `cb-N` (export-tree is monotonic, so a second send of the same id is `unknown callback`). Charts fill an outer `viewport_sized` wrapper (same layout/style keys as list/table). Resizable slots use `used_resizables` + `retain` like other dynamic entities. Notification fingerprint ignores callback ids so an unchanged toast is not re-pushed; click reads the current `cb-N` from the slot at click time. Dock `CljPanel::panel_name` is always `"clj-gpui-panel"`; panel paint does not re-enter `RootView` (static overlay painter + markdown/chart). Settings fields are rebuilt each `RootView` frame (`Settings` is `RenderOnce`). A `:variant :dropdown` / `:select` field with option `:items` is a field, not a group.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. Number-input reuses the input `InputState` slot with a `NumberInput` wrapper; step events parse the current text, apply `:step` / `:min` / `:max`, and `set_value` (which emits `:on-change` as a JSON number). A later input with the same element key clears `as_number` so non-numeric text still emits a string; the step subscription stays on the entity but no-ops while `as_number` is false. OTP `:on-change` is crate-complete-only; incomplete typing is not overwritten while focused. Color is hex or JSON `null`. Kit `ColorPickerState::set_value` takes only `Hsla`; a controlled `Some` → `nil` recreates the state entity (starts empty, no `:on-change`). Date is ISO; `set_date` is skipped when the value is unchanged so an open picker is not closed every frame. Editor is highlighter-only (`EditorState` + `set_highlighter` on language change). Undo/redo groups and fast typing emit several crate `Change` events; the host defers one `:on-change` with the latest string and will not send another until the next tree assigns a fresh `cb-N` (export-tree is monotonic, so a second send of the same id is `unknown callback`). Charts fill an outer `viewport_sized` wrapper (same layout/style keys as list/table). `ui/chart` kinds are Kit `LineChart` / `BarChart` / `AreaChart` / `PieChart` / `RadarChart` / `CandlestickChart` / `SankeyChart`. Bar `:alignment` is Kit `BarAlignment` (`:left` / `:right` horizontal). Horizontal bar default height grows with category count so directory-style lists are not clipped at 180px. Resizable slots use `used_resizables` + `retain` like other dynamic entities. Notification fingerprint ignores callback ids so an unchanged toast is not re-pushed; click reads the current `cb-N` from the slot at click time. Dock `CljPanel::panel_name` is always `"clj-gpui-panel"`; panel paint does not re-enter `RootView` (static overlay painter + markdown/chart). Settings fields are rebuilt each `RootView` frame (`Settings` is `RenderOnce`). A `:variant :dropdown` / `:select` field with option `:items` is a field, not a group.
 
 ## Path to near-complete coverage
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, AvatarGroup, Pagination / ProgressCircle / Shimmer / HoverCard, extra chart kinds, and chat / NavStack — not a new architecture.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, AvatarGroup, Pagination / ProgressCircle / Shimmer / HoverCard, and chat / NavStack — not a new architecture. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
-## Callback payloads (protocol v9)
+## Callback payloads (protocol v10)
 
 | Widget | callback | payload |
 |---|---|---|
