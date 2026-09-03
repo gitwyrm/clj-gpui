@@ -310,7 +310,7 @@ pub struct RootView {
     tree_seq: Option<u64>,
     applied_title: String,
     applied_window_size: Option<(i32, i32)>,
-    pending_captures: Vec<String>,
+    native_window_id: Option<u32>,
 }
 
 impl RootView {
@@ -384,14 +384,7 @@ impl RootView {
                             cx.open_with_system(Path::new(&path));
                         }
                         HostEvent::CapturePreview { request_id } => {
-                            if view.tree.is_none() {
-                                let _ = view.cmd_tx.send(Cmd::PreviewCaptured {
-                                    request_id,
-                                    png: None,
-                                });
-                            } else {
-                                view.pending_captures.push(request_id);
-                            }
+                            view.capture_preview(request_id, cx);
                         }
                     }
                     cx.notify();
@@ -449,7 +442,7 @@ impl RootView {
             tree_seq: None,
             applied_title: String::new(),
             applied_window_size: None,
-            pending_captures: Vec::new(),
+            native_window_id: preview::native_window_id(window),
         }
     }
 
@@ -578,30 +571,36 @@ impl RootView {
         .detach();
     }
 
-    fn flush_preview_captures(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        if self.pending_captures.is_empty() {
+    fn preview_title(&self) -> String {
+        self.tree
+            .as_ref()
+            .and_then(|node| node.title.clone())
+            .filter(|title| !title.is_empty())
+            .or_else(|| (!self.applied_title.is_empty()).then(|| self.applied_title.clone()))
+            .unwrap_or_else(|| "clj-gpui".into())
+    }
+
+    fn capture_preview(&self, request_id: String, cx: &mut Context<Self>) {
+        if self.tree.is_none() {
+            let _ = self.cmd_tx.send(Cmd::PreviewCaptured {
+                request_id,
+                png: None,
+            });
             return;
         }
-        let ids = std::mem::take(&mut self.pending_captures);
-        let title = if self.applied_title.is_empty() {
-            "clj-gpui".to_string()
-        } else {
-            self.applied_title.clone()
-        };
+        // Do not wait for the next presented frame. GPUI stops its macOS
+        // display link while the window is occluded (Evalight in front),
+        // so on_next_frame would never run until the native window is
+        // visible again.
+        let title = self.preview_title();
+        let window_id = self.native_window_id;
         let cmd_tx = self.cmd_tx.clone();
-        window.on_next_frame(move |_window, cx| {
-            cx.background_executor()
-                .spawn(async move {
-                    let png = preview::capture_host_window(&title);
-                    for request_id in ids {
-                        let _ = cmd_tx.send(Cmd::PreviewCaptured {
-                            request_id,
-                            png: png.clone(),
-                        });
-                    }
-                })
-                .detach();
-        });
+        cx.background_executor()
+            .spawn(async move {
+                let png = preview::capture_host_window(&title, window_id);
+                let _ = cmd_tx.send(Cmd::PreviewCaptured { request_id, png });
+            })
+            .detach();
     }
 
     fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -3082,7 +3081,7 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
-        self.flush_preview_captures(window, cx);
+        self.native_window_id = preview::native_window_id(window);
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_lists.clear();

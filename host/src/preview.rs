@@ -4,7 +4,7 @@
 //! this same binary as a helper (PID B):
 //!
 //! ```text
-//! clj-gpui --capture-preview --pid <host-pid> [--title <window-title>]
+//! clj-gpui --capture-preview --pid <host-pid> [--title <window-title>] [--wid <id>]
 //! ```
 //!
 //! The helper uses [xcap] to find that PID's window and write a PNG to stdout.
@@ -13,6 +13,11 @@
 //! the GPUI message loop. The parent waits on a background thread, never the
 //! UI thread, because Windows capture may `PrintWindow` the host.
 //!
+//! On macOS the helper prefers `--wid` (NSWindow `windowNumber`) and
+//! `CGWindowListCreateImage(CGRectNull, IncludingWindow, …)` so an occluded
+//! window (Evalight in front) still snapshots. Do not wait for GPUI's next
+//! presented frame: the display link stops while the window is occluded.
+//!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -20,11 +25,22 @@ use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+#[path = "preview_macos.rs"]
+mod preview_macos;
+
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Parse `--capture-preview --pid N [--title T]` from argv (including argv0).
-pub fn parse_capture_args<I, S>(args: I) -> Option<(u32, Option<String>)>
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureRequest {
+    pub pid: u32,
+    pub title: Option<String>,
+    pub window_id: Option<u32>,
+}
+
+/// Parse `--capture-preview --pid N [--title T] [--wid W]` from argv (including argv0).
+pub fn parse_capture_args<I, S>(args: I) -> Option<CaptureRequest>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -32,6 +48,7 @@ where
     let mut capture = false;
     let mut pid = None;
     let mut title = None;
+    let mut window_id = None;
     let mut iter = args.into_iter();
     let _argv0 = iter.next();
     while let Some(arg) = iter.next() {
@@ -43,32 +60,52 @@ where
             "--title" => {
                 title = iter.next().map(|s| s.as_ref().to_string());
             }
+            "--wid" => {
+                window_id = iter.next().and_then(|s| s.as_ref().parse().ok());
+            }
             _ => {}
         }
     }
     if capture {
-        Some((pid.unwrap_or(0), title.filter(|t| !t.is_empty())))
+        Some(CaptureRequest {
+            pid: pid.unwrap_or(0),
+            title: title.filter(|t| !t.is_empty()),
+            window_id: window_id.filter(|id| *id > 0),
+        })
     } else {
         None
     }
 }
 
 /// Helper entry: write a PNG to stdout, or nothing. Always succeeds the process.
-pub fn run_helper(pid: u32, title: Option<&str>) {
-    if let Some(png) = capture_pid(pid, title) {
+pub fn run_helper(request: CaptureRequest) {
+    if let Some(png) = capture_pid(request.pid, request.title.as_deref(), request.window_id) {
         let mut out = std::io::stdout().lock();
         let _ = out.write_all(&png);
         let _ = out.flush();
     }
 }
 
+/// Platform window id for `--wid` (macOS `windowNumber`). Other platforms: `None`.
+pub fn native_window_id(window: &gpui::Window) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        preview_macos::cg_window_id_from_gpui(window)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        None
+    }
+}
+
 /// Capture this host process's window from a helper. Call off the UI thread.
-pub fn capture_host_window(title: &str) -> Option<String> {
-    let png = spawn_helper(std::process::id(), Some(title))?;
+pub fn capture_host_window(title: &str, window_id: Option<u32>) -> Option<String> {
+    let png = spawn_helper(std::process::id(), Some(title), window_id)?;
     Some(STANDARD.encode(png))
 }
 
-fn spawn_helper(pid: u32, title: Option<&str>) -> Option<Vec<u8>> {
+fn spawn_helper(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<Vec<u8>> {
     let exe = std::env::current_exe().ok()?;
     let mut cmd = Command::new(exe);
     cmd.arg("--capture-preview")
@@ -80,6 +117,9 @@ fn spawn_helper(pid: u32, title: Option<&str>) -> Option<Vec<u8>> {
         .env_remove("CLJ_GPUI_PORT");
     if let Some(title) = title.filter(|t| !t.is_empty()) {
         cmd.arg("--title").arg(title);
+    }
+    if let Some(window_id) = window_id.filter(|id| *id > 0) {
+        cmd.arg("--wid").arg(window_id.to_string());
     }
     let mut child = cmd.spawn().ok()?;
     let stdout = child.stdout.take()?;
@@ -111,11 +151,22 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
     }
 }
 
-fn capture_pid(pid: u32, title: Option<&str>) -> Option<Vec<u8>> {
-    if pid == 0 {
-        return None;
-    }
+fn capture_pid(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<Vec<u8>> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(window_id) = window_id.filter(|id| *id > 0) {
+                let image = preview_macos::capture_window_id(window_id)?;
+                return rgba_to_png(&image);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window_id;
+        }
+        if pid == 0 {
+            return None;
+        }
         let window = select_window(pid, title)?;
         let image = window.capture_image().ok()?;
         rgba_to_png(&image)
@@ -139,6 +190,9 @@ fn window_rank(window: &xcap::Window, pid: u32, title: Option<&str>) -> Option<(
     if window.pid().ok()? != pid {
         return None;
     }
+    // xcap's macOS is_minimized is `!kCGWindowIsOnscreen`, which is also true
+    // for occluded / other-Space windows. Skip that filter there.
+    #[cfg(not(target_os = "macos"))]
     if window.is_minimized().ok()? {
         return None;
     }
@@ -176,7 +230,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_capture_args_reads_pid_and_title() {
+    fn parse_capture_args_reads_pid_title_and_wid() {
         let got = parse_capture_args([
             "clj-gpui",
             "--capture-preview",
@@ -184,8 +238,17 @@ mod tests {
             "4242",
             "--title",
             "TodoMVC",
+            "--wid",
+            "99",
         ]);
-        assert_eq!(got, Some((4242, Some("TodoMVC".into()))));
+        assert_eq!(
+            got,
+            Some(CaptureRequest {
+                pid: 4242,
+                title: Some("TodoMVC".into()),
+                window_id: Some(99),
+            })
+        );
     }
 
     #[test]
@@ -196,7 +259,7 @@ mod tests {
 
     #[test]
     fn unknown_pid_does_not_panic() {
-        assert!(capture_pid(1, Some("clj-gpui-no-such-window")).is_none());
+        assert!(capture_pid(1, Some("clj-gpui-no-such-window"), None).is_none());
     }
 
     #[test]

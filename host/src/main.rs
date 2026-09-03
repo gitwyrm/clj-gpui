@@ -11,8 +11,8 @@ mod rows;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    if let Some((pid, title)) = preview::parse_capture_args(std::env::args()) {
-        preview::run_helper(pid, title.as_deref());
+    if let Some(request) = preview::parse_capture_args(std::env::args()) {
+        preview::run_helper(request);
         return Ok(());
     }
 
