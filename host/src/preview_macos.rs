@@ -6,7 +6,11 @@
 //!    `NSWindowOcclusionStateVisible` is set
 //!    ([zed#63217](https://github.com/zed-industries/zed/issues/63217)).
 //!    Override `-[GPUIWindow occlusionState]` (and `GPUIPanel`, not
-//!    `NSWindow`) so the display link keeps presenting.
+//!    `NSWindow`) so the display link keeps presenting. Install this on
+//!    the first `capture-preview` only, so ordinary apps keep GPUI's
+//!    occlusion power-saving until Preview is used. Then re-run
+//!    `windowDidChangeOcclusionState:` so a link that already stopped
+//!    starts again.
 //! 2. Read those pixels in-process with ScreenCaptureKit's
 //!    desktop-independent window filter. A helper is a different PID;
 //!    recent macOS will not give that process an occluded window.
@@ -79,8 +83,7 @@ pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
 /// GPUI has no public `set_draw_while_occluded` in 0.2.2. Overriding the
 /// getter on `GPUIWindow` / `GPUIPanel` only (not `NSWindow`) makes
 /// `start_display_link` and `windowDidChangeOcclusionState:` take the visible
-/// branch. Install before the window is created so the first
-/// `start_display_link` does not bail out.
+/// branch. Install from `capture-preview`, not window creation.
 pub fn keep_painting_when_occluded() {
     install_occlusion_override();
 }

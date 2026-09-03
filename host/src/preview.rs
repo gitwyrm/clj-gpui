@@ -13,10 +13,13 @@
 //! windows owned by the current process so `GetWindowText` cannot deadlock
 //! the GPUI message loop. The parent waits on a background thread, never the
 //! UI thread, because Windows capture may `PrintWindow` the host.
+//! Linux window enumeration/capture is X11/XCB. X11 and XWayland windows
+//! work; native Wayland windows are not reliably listed and may yield `None`.
 //!
-//! **macOS:** capture in-process. Keep GPUI's display link running while
-//! occluded (zed#63217), then ScreenCaptureKit-read the window. A helper is a
-//! different PID and cannot snapshot a covered window.
+//! **macOS:** capture in-process. On the first `capture-preview`, keep GPUI's
+//! display link running while occluded (zed#63217), then ScreenCaptureKit-read
+//! the window. Ordinary apps keep GPUI's occlusion power-saving until then.
+//! A helper is a different PID and cannot snapshot a covered window.
 //!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
@@ -105,14 +108,14 @@ pub fn native_window_id(window: &gpui::Window) -> Option<u32> {
 }
 
 /// Disable GPUI's macOS "don't paint while occluded" display-link gate.
-/// No-op on other platforms. Call before the window is created.
+/// No-op on other platforms. Call from `capture-preview`, not window open.
 pub fn keep_painting_when_occluded() {
     #[cfg(target_os = "macos")]
     preview_macos::keep_painting_when_occluded();
 }
 
-/// Start the display link again now that `occlusionState` always looks visible.
-/// Main thread, after a `GPUIWindow` exists.
+/// Install the occlusion override if needed, then restart the display link.
+/// Main thread, when a `GPUIWindow` already exists.
 pub fn restart_occluded_display_link() {
     #[cfg(target_os = "macos")]
     preview_macos::restart_occluded_display_link();

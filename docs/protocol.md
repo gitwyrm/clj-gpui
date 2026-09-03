@@ -60,15 +60,15 @@ Ask the host for a PNG of the current native window. Clojure waits on the matchi
 {"op":"capture-preview","request-id":"cap-1"}
 ```
 
-The host does **not** read the GPUI framebuffer. Capture runs on a background thread after dirtying the window. GPUI 0.2.2 stops its macOS CVDisplayLink unless `NSWindowOcclusionStateVisible` is set ([zed#63217](https://github.com/zed-industries/zed/issues/63217)), so a window covered by Evalight would otherwise never present. The host overrides `-[GPUIWindow occlusionState]` (not global `NSWindow`) so the display link keeps running, then ScreenCaptureKit-reads the window in-process.
+The host does **not** read the GPUI framebuffer. Capture runs on a background thread after dirtying the window. GPUI 0.2.2 stops its macOS CVDisplayLink unless `NSWindowOcclusionStateVisible` is set ([zed#63217](https://github.com/zed-industries/zed/issues/63217)), so a window covered by Evalight would otherwise never present. On the first `capture-preview` the host overrides `-[GPUIWindow occlusionState]` (not global `NSWindow`) so the display link keeps running, then ScreenCaptureKit-reads the window in-process. Ordinary apps keep GPUI's occlusion power-saving until Preview is used.
 
 `WindowOptions::inactive_frame_interval` from [zed#62628](https://github.com/zed-industries/zed/pull/62628) is not in crates.io `gpui` 0.2.2 and only throttles animation while unfocused. Inactive is not the same as occluded.
 
-Linux and Windows spawn a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) and [xcap](https://crates.io/crates/xcap). A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked.
+Linux and Windows spawn a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) and [xcap](https://crates.io/crates/xcap) 0.4.1. A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked. On Linux, xcap enumerates and captures through X11/XCB: X11 and XWayland windows work; native Wayland windows are not reliably listed and capture may return `nil`.
 
 macOS captures **in-process** with ScreenCaptureKit `SCContentFilter(desktopIndependentWindow:)`. A helper has a different PID and cannot snapshot a covered window. `CGWindowListCreateImage` is a fallback if ScreenCaptureKit is unavailable.
 
-No window, minimized, headless, or a Wayland portal refusal is an omitted `png` field (`nil` in Clojure). The helper must not print the image anywhere except its stdout. The UI-tree schema is unchanged from v6.
+No window, minimized, headless, native Wayland (this xcap path), or a missing macOS Screen Recording permission is an omitted `png` field (`nil` in Clojure). The helper must not print the image anywhere except its stdout. The UI-tree schema is unchanged from v6.
 
 v7 added this capture pair. A v6 host ignores `capture-preview`, so the version must match exactly.
 
