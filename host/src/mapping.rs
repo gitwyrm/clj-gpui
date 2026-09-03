@@ -1,6 +1,8 @@
-//! Mapping from clj-gpui JSON node fields onto gpui-component 0.5.1 types.
+//! Mapping from clj-gpui JSON node fields onto GPUI Kit 0.6 types.
 
 use crate::catalog;
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use gpui::Axis;
 use gpui_component::{
     button::ToggleVariant, group_box::GroupBoxVariant, tab::TabVariant, tag::TagVariant, IconName,

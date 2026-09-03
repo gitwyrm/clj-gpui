@@ -7,6 +7,8 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use chrono::NaiveDate;
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use gpui::{
     div, prelude::*, px, size, App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
     Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window,
@@ -14,7 +16,7 @@ use gpui::{
 use gpui_component::{
     calendar::Date,
     chart::{AreaChart, BarChart, LineChart, PieChart},
-    dock::{Panel, PanelControl, PanelEvent},
+    dock::{Panel as StyledPanel, PanelControl, PanelEvent},
     h_virtual_list,
     input::InputState,
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
@@ -237,12 +239,7 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
         .into_any_element()
 }
 
-pub fn paint_markdown(
-    node: &Node,
-    key: &str,
-    window: &mut Window,
-    cx: &mut App,
-) -> gpui::AnyElement {
+pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     let body = node
         .text
         .clone()
@@ -256,9 +253,9 @@ pub fn paint_markdown(
         == Some("html")
         || node.kind == "html";
     let mut view = if html {
-        TextView::html(SharedString::from(key.to_string()), body, window, cx)
+        TextView::html(SharedString::from(key.to_string()), body)
     } else {
-        TextView::markdown(SharedString::from(key.to_string()), body, window, cx)
+        TextView::markdown(SharedString::from(key.to_string()), body)
     };
     view = view.selectable(true);
     if node.height.is_some() || node.flex.unwrap_or(0.0) >= 1.0 {
@@ -432,7 +429,7 @@ pub fn paint_panel_body(
     cx: &mut App,
 ) -> gpui::AnyElement {
     match node.kind.as_str() {
-        "markdown" | "html" => paint_markdown(node, path, window, cx),
+        "markdown" | "html" => paint_markdown(node, path),
         "chart" => {
             let (width, height) = chart_viewport(node);
             v_flex()
@@ -447,20 +444,26 @@ pub fn paint_panel_body(
     }
 }
 
-impl Panel for CljPanel {
+impl gpui::base::dock::Panel for CljPanel {
     fn panel_name(&self) -> &'static str {
         "clj-gpui-panel"
-    }
-
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.title.clone()
     }
 
     fn closable(&self, _: &App) -> bool {
         false
     }
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+}
+
+impl StyledPanel for CljPanel {
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.title.clone()
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         None
     }
 }

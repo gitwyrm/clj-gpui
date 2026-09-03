@@ -9,20 +9,22 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  7)
+  8)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
   "clj-gpui")
 
 (def named-themes
-  "gpui-component palette names the host ships (plus Default Light/Dark).
+  "GPUI Kit palette names the host ships (plus Default Light/Dark).
 
   Use the display string (`\"Tokyo Night\"`) or a kebab/underscore spelling
-  (`:tokyo-night`) as `:theme`. See https://longbridge.github.io/gpui-component/docs/theme"
+  (`:tokyo-night`) as `:theme`. See https://gpui-kit.com"
   ["Adventure"
    "Adventure Time"
    "Alduin"
+   "Asciinema"
+   "Aurora Light"
    "Ayu Dark"
    "Ayu Light"
    "Catppuccin Frappe"
@@ -45,7 +47,6 @@
    "Kibble"
    "macOS Classic Dark"
    "macOS Classic Light"
-   "Matrix"
    "Mellifluous Dark"
    "Mellifluous Light"
    "Molokai Dark"
@@ -389,7 +390,7 @@
   `:theme` may live here (default for the window and the footer) or on
   any nested node, so different parts of the app can use different themes.
   Appearance is `:system` (follow the OS), `:light`, or `:dark`. A named
-  gpui-component palette is a string such as `\"Tokyo Night\"` (kebab
+  GPUI Kit palette is a string such as `\"Tokyo Night\"` (kebab
   `:tokyo-night` is the same name). Custom ThemeSets registered with
   `gpui.theme/register!` are also names. See `themes` / `named-themes`.
 
@@ -417,7 +418,7 @@
   "Vertical stack. An optional leading map is treated as layout/style.
 
   `:theme :system`, `:light`, or `:dark` is appearance, not window chrome.
-  A named gpui-component palette (`\"Tokyo Night\"`, `:ayu-light`) is also
+  A named GPUI Kit palette (`\"Tokyo Night\"`, `:ayu-light`) is also
   a style, as is a custom ThemeSet registered with `gpui.theme/register!`.
   It can sit on this stack, on `ui/window`, or on any other node.
   `:system` (the default when omitted) follows the OS appearance.
@@ -447,7 +448,7 @@
 (defn checkbox
   "A checkbox. `on-click` is a 0-arg Clojure function; toggle the atom yourself.
 
-  `:shape :circle` paints a round toggle instead of gpui-component's square.
+  `:shape :circle` paints a round toggle instead of Kit's square.
 
   (ui/checkbox (:done item) #(swap! state update-in [:items i :done] not) \"Done\")
   (ui/checkbox done toggle {:shape :circle})"
@@ -479,35 +480,56 @@
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
 
-(defn text-field
-  "Single-line text input rendered with gpui-component's Input.
+(defn input
+  "Single-line text input rendered with GPUI Kit's Input.
 
   `on-change` and `:on-submit` receive the current string. Prefer a
   stable `:id` so typed text survives layout shifts. `:focus true`
   requests keyboard focus. `:on-blur` gets the string; `:on-escape`
   is 0-arg.
 
-  (ui/text-field draft
-                 {:id \"new-todo\"
-                  :placeholder \"What needs to be done?\"
-                  :on-change #(swap! !state assoc :draft %)
-                  :on-submit add-todo})
-  (ui/text-field draft
-                 {:id \"edit-1\"
-                  :focus true
-                  :on-submit save
-                  :on-blur save
-                  :on-escape cancel})"
+  (ui/input draft
+            {:id \"new-todo\"
+             :placeholder \"What needs to be done?\"
+             :on-change #(swap! !state assoc :draft %)
+             :on-submit add-todo})
+  (ui/input draft
+            {:id \"edit-1\"
+             :focus true
+             :on-submit save
+             :on-blur save
+             :on-escape cancel})"
   ([value]
-   {:type :text-field :text (str (or value ""))})
+   {:type :input :text (str (or value ""))})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge {:type :text-field :text (str (or value ""))} on-change-or-opts)
-     {:type :text-field
+     (merge {:type :input :text (str (or value ""))} on-change-or-opts)
+     {:type :input
       :text (str (or value ""))
       :on-change on-change-or-opts}))
   ([value on-change opts]
-   (merge {:type :text-field
+   (merge {:type :input
+           :text (str (or value ""))
+           :on-change on-change}
+          opts)))
+
+(defn textarea
+  "Multi-line text input (`Textarea` / `TextareaState`).
+
+  Same string callbacks as `input`. `:rows` is the visible height
+  (default 3). Prefer a stable `:id`.
+
+  (ui/textarea notes {:id \"notes\" :rows 6 :on-change set!})"
+  ([value]
+   {:type :textarea :text (str (or value ""))})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge {:type :textarea :text (str (or value ""))} on-change-or-opts)
+     {:type :textarea
+      :text (str (or value ""))
+      :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge {:type :textarea
            :text (str (or value ""))
            :on-change on-change}
           opts)))
@@ -541,7 +563,7 @@
                  opts)))
 
 (defn toggle
-  "Button-style toggle (gpui-component Toggle), distinct from `switch`.
+  "Button-style toggle (Kit Toggle), distinct from `switch`.
 
   `on-change` receives the new boolean.
 
@@ -603,22 +625,22 @@
   ([value opts]
    (merge {:type :progress :value (or value 0)} opts)))
 
-(defn divider
+(defn separator
   "Horizontal (default) or vertical rule. Optional label.
 
-  (ui/divider)
-  (ui/divider \"or\")
-  (ui/divider {:orientation :vertical})
-  (ui/divider \"or\" {:dashed true})"
+  (ui/separator)
+  (ui/separator \"or\")
+  (ui/separator {:orientation :vertical})
+  (ui/separator \"or\" {:dashed true})"
   ([]
-   {:type :divider})
+   {:type :separator})
   ([label-or-opts]
    (cond
-     (map? label-or-opts) (merge {:type :divider} label-or-opts)
-     (nil? label-or-opts) {:type :divider}
-     :else {:type :divider :text (str label-or-opts)}))
+     (map? label-or-opts) (merge {:type :separator} label-or-opts)
+     (nil? label-or-opts) {:type :separator}
+     :else {:type :separator :text (str label-or-opts)}))
   ([label opts]
-   (merge {:type :divider :text (str label)} opts)))
+   (merge {:type :separator :text (str label)} opts)))
 
 (defn spinner
   "Loading spinner.
@@ -759,7 +781,7 @@
                    opts))))
 
 (defn icon
-  "Bundled gpui-component icon. `name` is a kebab keyword such as `:check`.
+  "Bundled GPUI Kit icon. `name` is a kebab keyword such as `:check`.
 
   (ui/icon :star)
   (ui/icon :loader {:size :small})"
@@ -927,7 +949,7 @@
 (defn dialog
   "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
 
-  Not painted inline — the host opens it through gpui-component `Root`.
+  Not painted inline — the host opens it through GPUI Kit `Root`.
   The open dialog always uses the latest Clojure tree: callback ids,
   title, and body update on the next paint without closing. `:on-close`
   is 0-arg. `:on-ok` / `:on-cancel` are 0-arg. Crate order per action:
@@ -938,10 +960,11 @@
 
   The host sends that whole chain as one batch against the same callback
   generation, then fetches one tree. `:on-ok` cannot re-export and rewire
-  `:on-close`. Each handler runs at most once per action. `:variant` is `:confirm`
-  (OK+Cancel), `:alert` (OK only), or omitted (content + close button).
-  Clicking the dimmed overlay dismisses the dialog (crate `confirm`/`alert`
-  turn that off; this host keeps it on unless `:overlay-closable false`).
+  `:on-close`. Each handler runs at most once per action. `:variant` is
+  `:confirm` (OK+Cancel) or omitted (content + close button). Alerts that
+  must not dismiss on backdrop use `ui/alert-dialog`. Clicking the dimmed
+  overlay dismisses a generic dialog unless `:overlay-closable false`.
+  Confirm dialogs follow Kit (not overlay-closable unless you set it).
 
   (ui/dialog open?
     {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
@@ -960,12 +983,36 @@
            opts
            {:open (boolean open?)})))
 
+(defn alert-dialog
+  "Alert dialog overlay. Kit `AlertDialog`: not backdrop-dismissible.
+
+  Same controlled `open?` / `:on-ok` / `:on-cancel` / `:on-close`
+  contract as `ui/dialog`. Confirm still closes unless
+  `:overlay-closable` is true.
+
+  (ui/alert-dialog open?
+    {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
+    (ui/label \"This cannot be undone.\"))"
+  [open?-or-opts & args]
+  (let [[open? opts children]
+        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
+          (let [[opts children] (leading-opts args)]
+            [open?-or-opts opts children])
+          (let [[opts children] (leading-opts (cons open?-or-opts args))]
+            [(or (:open? opts) (:open opts) false) opts children]))
+        opts (-> opts rewrite-open (dissoc :open?) apply-control-size)]
+    (merge {:type :alert-dialog
+            :open (boolean open?)
+            :children (flatten-children children)}
+           opts
+           {:open (boolean open?)})))
+
 (defn popover
   "Anchored popover. Controlled by `open?`. `:trigger` is a button (or
   label wrapped as a button). `:on-open-change` receives the new boolean.
 
   Content is rebuilt each paint from the child nodes (label, button,
-  stacks, divider).
+  stacks, separator).
 
   (ui/popover open?
     {:trigger (ui/button \"More\") :on-open-change set-open!}
@@ -1028,7 +1075,7 @@
 
   (ui/context-menu [{:id :copy :label \"Copy\"} {:id :paste :label \"Paste\"}]
                    {:on-change handle!}
-                   (ui/table {:columns cols :rows rows :flex 1}))"
+                   (ui/data-table {:columns cols :rows rows :flex 1}))"
   ([items child]
    (context-menu items nil child))
   ([items opts child]
@@ -1049,7 +1096,7 @@
 
   `:on-change` fires when selection changes (arrow keys, and also the
   selection implied by a confirm). `:on-confirm` fires when the item is
-  activated (mouse click or Enter). gpui-component 0.5.1 emits Select for
+  activated (mouse click or Enter). Kit emits Select for
   arrows and Confirm only for click/Enter; the host maps those to this
   contract. Click/Enter is one batch: `:on-change` then `:on-confirm`
   against the same callback generation, then one tree fetch. Escape /
@@ -1074,22 +1121,24 @@
                     :items (option-items raw)}
                    opts))))
 
-(defn table
-  "Virtualized table. `:columns` are `{id, label, width}` maps (not the
-  description-list `:columns` count). `:rows` are `{id, cells [...]}`.
-  `on-change` receives the selected row's original id. `:on-confirm` (or
-  `:on-double-click`) fires on double-click with that same original id.
-  gpui-component 0.5.1 `on_row_left_click` always emits `SelectRow`; when
-  `click_count` is 2 it then emits `DoubleClickedRow` from that same call.
-  A count-1 click is only `:on-change` (deferred to the end of the GPUI
-  effect cycle). A count-2 click is `:on-change` then `:on-confirm` as one
-  batch against one callback generation, then one tree fetch. Programmatic
-  `:selected` does not emit `:on-change`.
+(defn data-table
+  "Virtualized data table (Kit DataTable). `:columns` are `{id, label, width}`
+  maps (not the description-list `:columns` count). `:rows` are
+  `{id, cells [...]}`. `on-change` receives the selected row's original
+  id. `:on-confirm` (or `:on-double-click`) fires on double-click with
+  that same original id. Kit `on_row_left_click` always emits
+  `SelectRow`; when `click_count` is 2 it then emits `DoubleClickedRow`
+  from that same call. A count-1 click is only `:on-change` (deferred to
+  the end of the GPUI effect cycle). A count-2 click is `:on-change`
+  then `:on-confirm` as one batch against one callback generation, then
+  one tree fetch. Programmatic `:selected` does not emit `:on-change`.
 
-  (ui/table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
-             :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
-             :selected :ada
-             :on-change set-row!})"
+  `ui/table` is reserved for a later declarative Kit Table constructor.
+
+  (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
+                  :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
+                  :selected :ada
+                  :on-change set-row!})"
   [opts]
   (let [opts (if (map? opts) opts {})
         columns (or (:columns opts) (:options opts) [])
@@ -1103,7 +1152,7 @@
                (dissoc opts :value)
                rows
                [:on-change :on-confirm :on-double-click])]
-    (merge-widget {:type :table
+    (merge-widget {:type :data-table
                    :value (wire-id selected)
                    :options (into [] (keep table-column) columns)
                    :items (into [] (keep table-row) rows)}
@@ -1136,7 +1185,7 @@
 (defn sheet
   "Slide-over sheet on the overlay layer. Controlled by `open?`.
 
-  gpui-component 0.5.1 holds one active sheet. The last open sheet in
+  Kit holds one active sheet. The last open sheet in
   tree order wins. `:placement` is `:left` / `:right` / `:top` /
   `:bottom` (default `:right`). `:footer` is a child node. Overlay
   click dismisses unless `:overlay-closable false`. `:on-close` is
@@ -1266,9 +1315,12 @@
                  opts)))
 
 (defn editor
-  "Code highlighter input (`InputState::code_editor`). Not an LSP
-  editor. `:language` is a highlighter name (`\"rust\"`, `\"clojure\"`,
-  omitted is `\"text\"`). `on-change` receives the string.
+  "Code editor wrapping Kit `Editor` / `EditorState`. Not an LSP
+  editor. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
+  `\"markdown\"`; omitted is `\"text\"`). Kit's
+  `tree-sitter-languages` bundle is enabled; there is no Clojure
+  grammar, so `:language \"clojure\"` is plain text. `on-change`
+  receives the string.
 
   (ui/editor src {:language \"rust\" :height 200 :on-change set!})"
   ([value]
@@ -1396,8 +1448,8 @@
 (defn dock
   "Dock area. Items are `{id, label, side, content}` maps. `:side` is
   `:left`, `:right`, `:bottom`, or `:center` (default). Panel bodies
-  are the static overlay subset (label / button / stack / divider)
-  plus `markdown` and `chart` — not list/table/editor.
+  are the static overlay subset (label / button / stack / separator)
+  plus `markdown` and `chart` — not list/data-table/editor.
 
   (ui/dock {:items [{:id :files :side :left :label \"Files\"
                      :content (ui/markdown \"…\")}]})"

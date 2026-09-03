@@ -105,7 +105,7 @@
      {:gap 12 :padding 8 :border-bottom line :align :center}
      (ui/checkbox done #(toggle-item id) {:shape :circle :size 30})
      (if edit
-       (ui/text-field
+       (ui/input)
         (:draft edit)
         {:id (str "edit-" id)
          :flex 1
@@ -157,7 +157,7 @@
                       :compact true
                       :font-size 22
                       :color (if all-done? "#737373" "#e6e6e6")}))
-        (ui/text-field
+        (ui/input)
          draft
          {:id "new-todo"
           :flex 1

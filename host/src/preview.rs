@@ -24,6 +24,7 @@
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use gpui_kit as gpui;
 #[cfg(not(target_os = "macos"))]
 use std::io::Read;
 use std::io::Write;

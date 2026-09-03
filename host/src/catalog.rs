@@ -1,4 +1,4 @@
-//! gpui-component named themes for Clojure `:theme`.
+//! GPUI Kit named themes for Clojure `:theme`.
 //!
 //! Appearance values (`system`, `light`, `dark`) are not palettes. Everything
 //! else is looked up by ThemeConfig `name` or ThemeSet family `name`.
@@ -9,6 +9,8 @@
 //! 3. bundled gpui-component JSON
 //! 4. ThemeRegistry (Default Light / Default Dark)
 
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use gpui::App;
 use gpui_component::theme::{Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet};
 use serde_json::Value;
@@ -21,6 +23,8 @@ use std::time::SystemTime;
 const BUNDLED_JSON: &[&str] = &[
     include_str!("../themes/adventure.json"),
     include_str!("../themes/alduin.json"),
+    include_str!("../themes/asciinema.json"),
+    include_str!("../themes/aurora.json"),
     include_str!("../themes/ayu.json"),
     include_str!("../themes/catppuccin.json"),
     include_str!("../themes/everforest.json"),
@@ -32,7 +36,6 @@ const BUNDLED_JSON: &[&str] = &[
     include_str!("../themes/jellybeans.json"),
     include_str!("../themes/kibble.json"),
     include_str!("../themes/macos-classic.json"),
-    include_str!("../themes/matrix.json"),
     include_str!("../themes/mellifluous.json"),
     include_str!("../themes/molokai.json"),
     include_str!("../themes/solarized.json"),

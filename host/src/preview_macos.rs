@@ -24,6 +24,7 @@
 
 #![allow(deprecated)] // CGWindowListCreateImage*; ScreenCaptureKit is preferred.
 
+use gpui_kit as gpui;
 use std::ffi::c_char;
 use std::ptr::NonNull;
 use std::sync::{mpsc, Once};

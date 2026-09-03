@@ -9,6 +9,8 @@ mod renderer;
 mod rows;
 
 use anyhow::Result;
+use gpui_kit::application;
+use gpui_kit::assets as gpui_kit_assets;
 
 fn main() -> Result<()> {
     if let Some(request) = preview::parse_capture_args(std::env::args()) {
@@ -26,10 +28,10 @@ fn main() -> Result<()> {
     let cmd_tx = host.cmd_tx.clone();
     let event_rx = host.event_rx.clone();
 
-    gpui::Application::new()
-        .with_assets(gpui_component_assets::Assets)
+    application()
+        .with_assets(gpui_kit_assets::Assets)
         .run(move |cx| {
-            gpui_component::init(cx);
+            gpui_kit::init(cx);
             renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
         });
 

@@ -83,7 +83,7 @@
 (defn- schedule-render!
   []
   ;; The host always fetches a tree after a callback RPC (needed for
-  ;; text-field submit sequencing and for handlers that do not touch an
+  ;; input submit sequencing and for handlers that do not touch an
   ;; atom). Skip the r/atom watch's request-render while that RPC is
   ;; running so one click is not two paints. A multi-callback native
   ;; action sets `defer-render` on every item so hold stays up across

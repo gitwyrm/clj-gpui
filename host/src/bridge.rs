@@ -1,5 +1,6 @@
 use crate::catalog;
 use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION};
+use gpui_kit::component as gpui_component;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;

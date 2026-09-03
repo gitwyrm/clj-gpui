@@ -316,7 +316,7 @@
                 ;; assign confirm's old cb-N to X, not back to the table.
                 (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" #(swap! x-fired inc)))
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
                            :on-change (fn [id]
                                         (reset! !shift true)
@@ -358,7 +358,7 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}
                                   {:id :grace :cells ["Grace"]}]
                            :on-change #(swap! log conj [:change %])
@@ -372,7 +372,7 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
                            :on-change #(swap! log conj [:change %])
                            :on-double-click #(swap! log conj [:dbl %])})))]
@@ -387,7 +387,7 @@
   (let [got (atom nil)
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
                            :on-confirm #(reset! got %)})))]
     (is (nil? (:on-change table)))
@@ -400,7 +400,7 @@
   (let [log (atom [])
         table (exported-table
                (runtime/export-tree
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
                            :on-change #(swap! log conj %)})))]
     (is (nil? (:on-confirm table)))
@@ -418,7 +418,7 @@
                (ui/vstack
                 (when @!shift (ui/button "pad" (fn [])))
                 (when @!shift (ui/button "X" (fn [] :x)))
-                (ui/table {:columns [{:id :n :label "N"}]
+                (ui/data-table {:columns [{:id :n :label "N"}]
                            :rows [{:id :ada :cells ["Ada"]}]
                            :on-change (fn [id]
                                         (reset! !shift true)

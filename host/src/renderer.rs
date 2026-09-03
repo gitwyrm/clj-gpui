@@ -5,6 +5,8 @@ use crate::overlay;
 use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use gpui::{
     canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
     DismissEvent, Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId,
@@ -22,13 +24,12 @@ use gpui_component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
-    divider::Divider,
-    dock::{DockArea, DockItem},
+    dock::{panel_handle, DockArea, DockLayout, DockPlacement, DockSkin},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     input::{
-        Input, InputEvent, InputState, NumberInput, NumberInputEvent, OtpInput, OtpState,
-        StepAction,
+        Editor, EditorState, Input, InputEvent, InputState, NumberInput, NumberInputEvent,
+        OtpInput, OtpState, StepAction, Textarea, TextareaState,
     },
     kbd::Kbd,
     link::Link,
@@ -41,13 +42,14 @@ use gpui_component::{
     resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    separator::Separator,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     spinner::Spinner,
     switch::Switch,
     tab::{Tab, TabBar},
-    table::{Table, TableEvent, TableState},
+    table::{DataTable, TableEvent, TableState},
     tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
     tooltip::Tooltip,
@@ -83,6 +85,23 @@ struct InputSlot {
     /// flush once per callback-id generation. See
     /// `protocol::InputChangeCoalesce`.
     change: protocol::InputChangeCoalesce,
+}
+
+struct TextControlSlot<S> {
+    state: Entity<S>,
+    on_change: Option<String>,
+    on_submit: Option<String>,
+    on_blur: Option<String>,
+    on_escape: Option<String>,
+    wait_for_seq: Option<u64>,
+    submitted: Option<String>,
+    change: protocol::InputChangeCoalesce,
+}
+
+enum TextFlush {
+    Input,
+    Textarea,
+    Editor,
 }
 
 struct SliderSlot {
@@ -276,7 +295,8 @@ pub struct RootView {
     otps: HashMap<String, OtpSlot>,
     colors: HashMap<String, ColorSlot>,
     dates: HashMap<String, DateSlot>,
-    editors: HashMap<String, InputSlot>,
+    editors: HashMap<String, TextControlSlot<EditorState>>,
+    textareas: HashMap<String, TextControlSlot<TextareaState>>,
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
     docks: HashMap<String, DockSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
@@ -301,6 +321,7 @@ pub struct RootView {
     used_colors: HashSet<String>,
     used_dates: HashSet<String>,
     used_editors: HashSet<String>,
+    used_textareas: HashSet<String>,
     used_vlists: HashSet<String>,
     used_docks: HashSet<String>,
     _appearance: Subscription,
@@ -409,6 +430,7 @@ impl RootView {
             colors: HashMap::new(),
             dates: HashMap::new(),
             editors: HashMap::new(),
+            textareas: HashMap::new(),
             vlists: HashMap::new(),
             docks: HashMap::new(),
             resizables: HashMap::new(),
@@ -433,6 +455,7 @@ impl RootView {
             used_colors: HashSet::new(),
             used_dates: HashSet::new(),
             used_editors: HashSet::new(),
+            used_textareas: HashSet::new(),
             used_vlists: HashSet::new(),
             used_docks: HashSet::new(),
             _appearance: appearance,
@@ -652,45 +675,70 @@ impl RootView {
 
     fn schedule_input_change_flush(
         key: String,
-        editor: bool,
+        kind: TextFlush,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         cx.defer_in(window, move |this, _, _cx| {
-            this.flush_input_change(&key, editor);
+            this.flush_input_change(&key, kind);
         });
     }
 
-    fn flush_input_change(&mut self, key: &str, editor: bool) {
-        let slot = if editor {
-            self.editors.get_mut(key)
-        } else {
-            self.inputs.get_mut(key)
-        };
-        let Some(slot) = slot else {
-            return;
-        };
+    fn flush_text_slot<S>(
+        slot: &mut TextControlSlot<S>,
+        as_number: bool,
+    ) -> Option<(String, Value)> {
         if slot.wait_for_seq.is_some() {
             slot.change.clear();
-            return;
+            return None;
         }
-        let Some(value) = slot.change.take_pending() else {
-            return;
-        };
+        let value = slot.change.take_pending()?;
         if slot.submitted.as_ref() == Some(&value) {
             slot.change.clear();
-            return;
+            return None;
         }
         slot.submitted = None;
-        let Some(id) = slot.on_change.clone() else {
-            slot.change.clear();
-            return;
+        let id = slot.on_change.clone()?;
+        let payload = extra::input_change_payload(as_number, &value)?;
+        Some((id, payload))
+    }
+
+    fn flush_input_change(&mut self, key: &str, kind: TextFlush) {
+        let flushed = match kind {
+            TextFlush::Input => {
+                let Some(slot) = self.inputs.get_mut(key) else {
+                    return;
+                };
+                if slot.wait_for_seq.is_some() {
+                    slot.change.clear();
+                    return;
+                }
+                let Some(value) = slot.change.take_pending() else {
+                    return;
+                };
+                if slot.submitted.as_ref() == Some(&value) {
+                    slot.change.clear();
+                    return;
+                }
+                slot.submitted = None;
+                let Some(id) = slot.on_change.clone() else {
+                    slot.change.clear();
+                    return;
+                };
+                extra::input_change_payload(slot.as_number, &value).map(|payload| (id, payload))
+            }
+            TextFlush::Textarea => self
+                .textareas
+                .get_mut(key)
+                .and_then(|slot| Self::flush_text_slot(slot, false)),
+            TextFlush::Editor => self
+                .editors
+                .get_mut(key)
+                .and_then(|slot| Self::flush_text_slot(slot, false)),
         };
-        let Some(payload) = extra::input_change_payload(slot.as_number, &value) else {
-            slot.change.clear();
-            return;
-        };
-        self.emit_value(id, payload);
+        if let Some((id, payload)) = flushed {
+            self.emit_value(id, payload);
+        }
     }
 
     fn input_slot(
@@ -742,7 +790,7 @@ impl RootView {
                 state.read(cx).focus_handle(cx).focus(window);
             }
             if refresh {
-                Self::schedule_input_change_flush(key.to_string(), false, window, cx);
+                Self::schedule_input_change_flush(key.to_string(), TextFlush::Input, window, cx);
             }
             return state;
         }
@@ -792,7 +840,7 @@ impl RootView {
                     }
                     slot.submitted = None;
                     if slot.change.on_change(value) {
-                        Self::schedule_input_change_flush(key_owned.clone(), false, window, cx);
+                        Self::schedule_input_change_flush(key_owned.clone(), TextFlush::Input, window, cx);
                     }
                 }
                 InputEvent::PressEnter { .. } => {
@@ -1126,16 +1174,20 @@ impl RootView {
                 }
             }
             "scroll" => self.render_scroll(node, path, &key, window, cx),
-            "text-field" => {
+            "input" => {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(Input::new(&state), node, cx).into_any_element()
+            }
+            "textarea" => {
+                let state = self.textarea_slot(&key, node, window, cx);
+                apply_style(Textarea::new(&state), node, cx).into_any_element()
             }
             "switch" => self.render_switch(node, &key, cx),
             "toggle" => self.render_toggle(node, &key, cx),
             "radio-group" => self.render_radio_group(node, &key, cx),
             "slider" => self.render_slider(node, &key, window, cx),
             "progress" => self.render_progress(node, cx),
-            "divider" => self.render_divider(node, cx),
+            "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
             "tag" => self.render_tag(node, cx),
             "alert" => self.render_alert(node, &key, cx),
@@ -1152,12 +1204,12 @@ impl RootView {
             "avatar" => self.render_avatar(node, cx),
             "accordion" => self.render_accordion(node, path, &key, window, cx),
             "description-list" => self.render_description_list(node, cx),
-            "dialog" => div().into_any_element(),
+            "dialog" | "alert-dialog" => div().into_any_element(),
             "popover" => self.render_popover(node, &key, cx),
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
-            "table" => self.render_table(node, &key, window, cx),
+            "data-table" => self.render_data_table(node, &key, window, cx),
             "tree" => self.render_tree(node, &key, window, cx),
             "sheet" => div().into_any_element(),
             "notification" => div().into_any_element(),
@@ -1169,7 +1221,7 @@ impl RootView {
             "virtual-list" => self.render_virtual_list(node, &key, window, cx),
             "chart" => viewport_sized(extra::paint_chart(node, &key, cx), node, 180.0, cx),
             "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
-                .child(extra::paint_markdown(node, &key, window, cx))
+                .child(extra::paint_markdown(node, &key))
                 .into_any_element(),
             "sidebar" => self.render_sidebar(node, &key, cx),
             "settings" => viewport_sized(
@@ -1350,19 +1402,19 @@ impl RootView {
         apply_style(Progress::new().value(value), node, cx).into_any_element()
     }
 
-    fn render_divider(&self, node: &Node, cx: &App) -> AnyElement {
-        let mut divider = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
-            Divider::vertical()
+    fn render_separator(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut separator = if mapping::parse_axis(node.orientation.as_deref()) == Axis::Vertical {
+            Separator::vertical()
         } else {
-            Divider::horizontal()
+            Separator::horizontal()
         };
         if node.dashed {
-            divider = divider.dashed();
+            separator = separator.dashed();
         }
         if let Some(label) = node.text.clone().filter(|s| !s.is_empty()) {
-            divider = divider.label(label);
+            separator = separator.label(label);
         }
-        apply_style(divider, node, cx).into_any_element()
+        apply_style(separator, node, cx).into_any_element()
     }
 
     fn render_spinner(&self, node: &Node, cx: &App) -> AnyElement {
@@ -1818,7 +1870,7 @@ impl RootView {
         state
     }
 
-    fn render_table(
+    fn render_data_table(
         &mut self,
         node: &Node,
         key: &str,
@@ -1826,7 +1878,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.table_slot(key, node, window, cx);
-        viewport_sized(Table::new(&state), node, 220.0, cx)
+        viewport_sized(DataTable::new(&state), node, 220.0, cx)
     }
 
     fn table_slot(
@@ -2097,18 +2149,47 @@ impl RootView {
                 let live = live.clone();
                 let emit = emit.clone();
                 let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
-                window.open_dialog(cx, move |dialog, _, _cx| {
-                    let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
-                        return dialog;
-                    };
-                    let children = vec![overlay::paint_static(
-                        &spec.node.children,
-                        emit.clone(),
-                        &format!("{}/content", spec.key),
-                    )];
-                    let dialog = overlay::configure_dialog(dialog, &spec.node, children);
-                    overlay::bind_dialog_callbacks(dialog, key.clone(), emit.clone(), close.clone())
-                });
+                let is_alert = live
+                    .borrow()
+                    .iter()
+                    .any(|spec| spec.key == key && spec.node.kind == "alert-dialog");
+                if is_alert {
+                    window.open_alert_dialog(cx, move |alert, _, _cx| {
+                        let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
+                            return alert;
+                        };
+                        let children = vec![overlay::paint_static(
+                            &spec.node.children,
+                            emit.clone(),
+                            &format!("{}/content", spec.key),
+                        )];
+                        let alert = overlay::configure_alert_dialog(alert, &spec.node, children);
+                        overlay::bind_alert_dialog_callbacks(
+                            alert,
+                            key.clone(),
+                            emit.clone(),
+                            close.clone(),
+                        )
+                    });
+                } else {
+                    window.open_dialog(cx, move |dialog, _, _cx| {
+                        let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
+                            return dialog;
+                        };
+                        let children = vec![overlay::paint_static(
+                            &spec.node.children,
+                            emit.clone(),
+                            &format!("{}/content", spec.key),
+                        )];
+                        let dialog = overlay::configure_dialog(dialog, &spec.node, children);
+                        overlay::bind_dialog_callbacks(
+                            dialog,
+                            key.clone(),
+                            emit.clone(),
+                            close.clone(),
+                        )
+                    });
+                }
             }
         });
     }
@@ -2649,7 +2730,7 @@ impl RootView {
         let state = self.editor_slot(key, node, window, cx);
         // Code editor Input is multi-line but `h_auto` without an explicit
         // height collapses to a single row. Fill the viewport wrapper.
-        viewport_sized(Input::new(&state).h_full(), node, 200.0, cx)
+        viewport_sized(Editor::new(&state).h_full(), node, 200.0, cx)
     }
 
     fn editor_slot(
@@ -2658,7 +2739,7 @@ impl RootView {
         node: &Node,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
+    ) -> Entity<EditorState> {
         self.used_editors.insert(key.to_string());
         let language = extra::editor_language(node);
         let wanted = node.text.clone().unwrap_or_default();
@@ -2678,21 +2759,20 @@ impl RootView {
             let lang = language.clone();
             state.update(cx, |input, cx| input.set_highlighter(lang, cx));
             if refresh {
-                Self::schedule_input_change_flush(key.to_string(), true, window, cx);
+                Self::schedule_input_change_flush(key.to_string(), TextFlush::Editor, window, cx);
             }
             return state;
         }
         let placeholder = node.placeholder.clone().unwrap_or_default();
         let state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(language)
+            EditorState::new(window, cx)
+                .language(language)
                 .placeholder(placeholder)
                 .default_value(wanted)
-                .rows(12)
         });
         self.editors.insert(
             key.to_string(),
-            InputSlot {
+            TextControlSlot {
                 state: state.clone(),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
@@ -2700,11 +2780,6 @@ impl RootView {
                 on_escape: node.on_escape.clone(),
                 wait_for_seq: None,
                 submitted: None,
-                as_number: false,
-                number_min: None,
-                number_max: None,
-                number_step: None,
-                number_stepped: false,
                 change: protocol::InputChangeCoalesce::default(),
             },
         );
@@ -2719,12 +2794,116 @@ impl RootView {
                     };
                     let value = input.read(cx).value().to_string();
                     if slot.change.on_change(value) {
-                        Self::schedule_input_change_flush(key_owned.clone(), true, window, cx);
+                        Self::schedule_input_change_flush(key_owned.clone(), TextFlush::Editor, window, cx);
                     }
                 }
                 InputEvent::Blur => {
                     if let Some(id) = this.editors.get(&key_owned).and_then(|s| s.on_blur.clone()) {
                         let value = input.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        state
+    }
+
+    fn textarea_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        self.used_textareas.insert(key.to_string());
+        let wanted = node.text.clone().unwrap_or_default();
+        let rows = node.rows.unwrap_or(3).max(1) as usize;
+        if let Some(slot) = self.textareas.get_mut(key) {
+            let id_changed = slot.on_change != node.on_change;
+            slot.on_change = node.on_change.clone();
+            slot.on_submit = node.on_submit.clone();
+            slot.on_blur = node.on_blur.clone();
+            slot.on_escape = node.on_escape.clone();
+            let refresh = id_changed && slot.change.on_ids_refreshed();
+            let state = slot.state.clone();
+            let focused = state.read(cx).focus_handle(cx).is_focused(window);
+            let current = state.read(cx).value().to_string();
+            if current != wanted && !focused {
+                state.update(cx, |input, cx| input.set_value(wanted, window, cx));
+            }
+            if let Some(placeholder) = node.placeholder.clone() {
+                state.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder, window, cx);
+                });
+            }
+            state.update(cx, |input, cx| input.set_rows(rows, cx));
+            if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
+                state.read(cx).focus_handle(cx).focus(window);
+            }
+            if refresh {
+                Self::schedule_input_change_flush(key.to_string(), TextFlush::Textarea, window, cx);
+            }
+            return state;
+        }
+        let placeholder = node.placeholder.clone().unwrap_or_default();
+        let want_focus = node.focus;
+        let state = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(placeholder)
+                .default_value(wanted)
+                .rows(rows)
+        });
+        if want_focus {
+            state.read(cx).focus_handle(cx).focus(window);
+        }
+        self.textareas.insert(
+            key.to_string(),
+            TextControlSlot {
+                state: state.clone(),
+                on_change: node.on_change.clone(),
+                on_submit: node.on_submit.clone(),
+                on_blur: node.on_blur.clone(),
+                on_escape: node.on_escape.clone(),
+                wait_for_seq: None,
+                submitted: None,
+                change: protocol::InputChangeCoalesce::default(),
+            },
+        );
+        let key_owned = key.to_string();
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let Some(slot) = this.textareas.get_mut(&key_owned) else {
+                        return;
+                    };
+                    let value = input.read(cx).value().to_string();
+                    if slot.change.on_change(value) {
+                        Self::schedule_input_change_flush(
+                            key_owned.clone(),
+                            TextFlush::Textarea,
+                            window,
+                            cx,
+                        );
+                    }
+                }
+                InputEvent::Blur => {
+                    if let Some(id) = this.textareas.get(&key_owned).and_then(|s| s.on_blur.clone())
+                    {
+                        let value = input.read(cx).value().to_string();
+                        this.emit_value(id, json!(value));
+                    }
+                }
+                InputEvent::PressEnter { secondary: false, shift: false } => {
+                    let Some(slot) = this.textareas.get_mut(&key_owned) else {
+                        return;
+                    };
+                    if let Some(id) = slot.on_submit.clone() {
+                        let value = input.read(cx).value().to_string();
+                        slot.submitted = Some(value.clone());
                         this.emit_value(id, json!(value));
                     }
                 }
@@ -2842,11 +3021,10 @@ impl RootView {
                 return viewport_sized(slot.area.clone(), node, 360.0, cx);
             }
         }
-        let area =
-            cx.new(|cx| DockArea::new(SharedString::from(key.to_string()), None, window, cx));
-        let weak = area.downgrade();
+        let (area, _skin) =
+            DockSkin::dock_area(SharedString::from(key.to_string()), None, window, cx);
         let mut panels: HashMap<String, Entity<extra::CljPanel>> = HashMap::new();
-        let mut by_side: HashMap<&str, Vec<std::sync::Arc<dyn gpui_component::dock::PanelView>>> =
+        let mut by_side: HashMap<&str, Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>> =
             HashMap::new();
         for (ix, item) in node.collection().iter().enumerate() {
             let id = item.id_or_label();
@@ -2869,35 +3047,26 @@ impl RootView {
             by_side
                 .entry(side)
                 .or_default()
-                .push(std::sync::Arc::new(panel.clone()));
+                .push(panel_handle(panel.clone()));
             panels.insert(id, panel);
         }
         area.update(cx, |dock, cx| {
             if let Some(center) = by_side.remove("center") {
                 if !center.is_empty() {
-                    dock.set_center(DockItem::tabs(center, &weak, window, cx), window, cx);
+                    dock.set_center(dock_tabs(center, cx), window, cx);
                 }
             }
             if let Some(left) = by_side.remove("left") {
                 if !left.is_empty() {
-                    dock.set_left_dock(
-                        DockItem::tabs(left, &weak, window, cx),
-                        node.width.map(px),
-                        true,
-                        window,
-                        cx,
-                    );
+                    dock.set_dock(DockPlacement::Left, dock_tabs(left, cx), window, cx);
+                    let size = node.width.unwrap_or(240.0);
+                    dock.set_dock_size(DockPlacement::Left, px(size), window, cx);
                 }
             }
             if let Some(right) = by_side.remove("right") {
                 if !right.is_empty() {
-                    dock.set_right_dock(
-                        DockItem::tabs(right, &weak, window, cx),
-                        Some(px(240.)),
-                        true,
-                        window,
-                        cx,
-                    );
+                    dock.set_dock(DockPlacement::Right, dock_tabs(right, cx), window, cx);
+                    dock.set_dock_size(DockPlacement::Right, px(240.), window, cx);
                 }
             }
             if let Some(bottom) = by_side.remove("bottom") {
@@ -2906,13 +3075,8 @@ impl RootView {
                         .height
                         .map(|h| (h * 0.34).clamp(64.0, 140.0))
                         .unwrap_or(96.0);
-                    dock.set_bottom_dock(
-                        DockItem::tabs(bottom, &weak, window, cx),
-                        Some(px(bottom_h)),
-                        true,
-                        window,
-                        cx,
-                    );
+                    dock.set_dock(DockPlacement::Bottom, dock_tabs(bottom, cx), window, cx);
+                    dock.set_dock_size(DockPlacement::Bottom, px(bottom_h), window, cx);
                 }
             }
         });
@@ -3094,6 +3258,7 @@ impl Render for RootView {
         self.used_colors.clear();
         self.used_dates.clear();
         self.used_editors.clear();
+        self.used_textareas.clear();
         self.used_vlists.clear();
         self.used_docks.clear();
         self.used_resizables.clear();
@@ -3137,6 +3302,9 @@ impl Render for RootView {
         self.dates.retain(|key, _| used_dates.contains(key));
         let used_editors = std::mem::take(&mut self.used_editors);
         self.editors.retain(|key, _| used_editors.contains(key));
+        let used_textareas = std::mem::take(&mut self.used_textareas);
+        self.textareas
+            .retain(|key, _| used_textareas.contains(key));
         let used_vlists = std::mem::take(&mut self.used_vlists);
         self.vlists.retain(|key, _| used_vlists.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
@@ -3406,6 +3574,17 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
 /// List/Table/Tree owns virtualization (`size_full` inside the wrapper).
 /// `:size` is a square. Omitted width fills the parent. Default height
 /// applies only when height, size, and flex-fill are all omitted.
+fn dock_tabs(
+    panels: Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>,
+    cx: &App,
+) -> DockLayout {
+    let mut layout = DockLayout::tabs();
+    for panel in panels {
+        layout = layout.panel_view(panel, cx);
+    }
+    layout
+}
+
 fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {
     let mut wrap = v_flex().min_h_0();
     if node.width.is_none() && node.size.is_none() {
@@ -4308,7 +4487,7 @@ mod widget_wrap_tests {
 
     #[test]
     fn list_table_tree_viewport_default_height() {
-        for kind in ["list", "table", "tree"] {
+        for kind in ["list", "data-table", "tree"] {
             let node = Node {
                 kind: kind.into(),
                 ..Node::default()
@@ -4340,7 +4519,7 @@ mod widget_wrap_tests {
         assert!(wrap.visual);
 
         let square = Node {
-            kind: "table".into(),
+            kind: "data-table".into(),
             size: Some(160.0),
             width: Some(300.0),
             ..Node::default()
@@ -4381,7 +4560,7 @@ mod widget_wrap_tests {
     #[test]
     fn context_menu_inherits_flex_only_when_omitted() {
         let child = Node {
-            kind: "table".into(),
+            kind: "data-table".into(),
             flex: Some(1.0),
             ..Node::default()
         };
