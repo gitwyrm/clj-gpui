@@ -390,7 +390,7 @@ JSON still works: put extra theme-set files (same schema as [gpui-component them
 * **gpui-component Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
-* **`preview-png` is an OS window shot**, not GPU readback. The host spawns `clj-gpui --capture-preview --pid <host-pid>` (and on macOS `--wid <windowNumber>`) and [xcap](https://crates.io/crates/xcap) / CoreGraphics captures that process's window, including when it sits behind Evalight. Wayland portals and missing macOS Screen Recording permission return `nil`. Xvfb/X11 is the deterministic Linux CI path.
+* **`preview-png` is an OS window shot**, not GPU readback. Linux/Windows spawn `clj-gpui --capture-preview --pid <host-pid>` and [xcap](https://crates.io/crates/xcap). macOS captures in-process with ScreenCaptureKit so a window covered by Evalight still snapshots (a helper PID is treated as a different app). Wayland portals and missing macOS Screen Recording permission return `nil`. Xvfb/X11 is the deterministic Linux CI path.
 * **Packaging** is native-only (macOS `.app` on macOS, AppImage/deb on Linux). See [Packaging](#packaging).
 
 ## Packaging

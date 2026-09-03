@@ -1,7 +1,7 @@
 //! Snapshot the live native window for Evalight's Preview pane.
 //!
-//! GPUI does not expose framebuffer readback. The host process (PID A) spawns
-//! this same binary as a helper (PID B):
+//! GPUI does not expose framebuffer readback. Linux and Windows spawn this
+//! same binary as a helper (PID B):
 //!
 //! ```text
 //! clj-gpui --capture-preview --pid <host-pid> [--title <window-title>] [--wid <id>]
@@ -13,16 +13,21 @@
 //! the GPUI message loop. The parent waits on a background thread, never the
 //! UI thread, because Windows capture may `PrintWindow` the host.
 //!
-//! On macOS the helper prefers `--wid` (NSWindow `windowNumber`) and
-//! `CGWindowListCreateImage(CGRectNull, IncludingWindow, …)` so an occluded
-//! window (Evalight in front) still snapshots. Do not wait for GPUI's next
-//! presented frame: the display link stops while the window is occluded.
+//! macOS captures in-process. A helper is a different PID, and recent macOS
+//! will snapshot a visible window from that process while refusing the same
+//! window once Evalight covers it. ScreenCaptureKit's desktop-independent
+//! window filter reads our own window's backing store. Do not wait for GPUI's
+//! next presented frame: the display link stops while the window is occluded.
 //!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::io::{Read, Write};
+#[cfg(not(target_os = "macos"))]
+use std::io::Read;
+use std::io::Write;
+#[cfg(not(target_os = "macos"))]
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(not(target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
@@ -30,6 +35,7 @@ use std::time::{Duration, Instant};
 mod preview_macos;
 
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+#[cfg(not(target_os = "macos"))]
 const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,12 +105,22 @@ pub fn native_window_id(window: &gpui::Window) -> Option<u32> {
     }
 }
 
-/// Capture this host process's window from a helper. Call off the UI thread.
+/// Capture this host process's window. Call off the UI thread.
 pub fn capture_host_window(title: &str, window_id: Option<u32>) -> Option<String> {
-    let png = spawn_helper(std::process::id(), Some(title), window_id)?;
-    Some(STANDARD.encode(png))
+    #[cfg(target_os = "macos")]
+    {
+        let _ = title;
+        let image = preview_macos::capture_this_process(window_id)?;
+        return Some(STANDARD.encode(rgba_to_png(&image)?));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let png = spawn_helper(std::process::id(), Some(title), window_id)?;
+        Some(STANDARD.encode(png))
+    }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn spawn_helper(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<Vec<u8>> {
     let exe = std::env::current_exe().ok()?;
     let mut cmd = Command::new(exe);
@@ -138,6 +154,7 @@ fn spawn_helper(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
     let started = Instant::now();
     loop {
@@ -155,8 +172,7 @@ fn capture_pid(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(target_os = "macos")]
         {
-            if let Some(window_id) = window_id.filter(|id| *id > 0) {
-                let image = preview_macos::capture_window_id(window_id)?;
+            if let Some(image) = preview_macos::capture_this_process(window_id) {
                 return rgba_to_png(&image);
             }
         }

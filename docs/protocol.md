@@ -60,9 +60,11 @@ Ask the host for a PNG of the current native window. Clojure waits on the matchi
 {"op":"capture-preview","request-id":"cap-1"}
 ```
 
-The host does **not** read the GPUI framebuffer. It immediately spawns a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) on a background thread — not after the next presented frame. GPUI stops its macOS display link while the native window is occluded (Evalight in front), so waiting for `on_next_frame` would hang until Mission Control or a side-by-side layout made the window visible.
+The host does **not** read the GPUI framebuffer. Capture runs on a background thread — not after the next presented frame. GPUI stops its macOS display link while the native window is occluded (Evalight in front), so waiting for `on_next_frame` would hang until Mission Control or a side-by-side layout made the window visible.
 
-The helper uses [xcap](https://crates.io/crates/xcap) on Linux and Windows. On macOS it prefers `--wid` (the NSWindow `windowNumber`) and `CGWindowListCreateImage(CGRectNull, IncludingWindow)` so the window-server backing store is captured even when another app covers the window. A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked.
+Linux and Windows spawn a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) and [xcap](https://crates.io/crates/xcap). A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked.
+
+macOS captures **in-process**. A helper has a different PID, and recent macOS will snapshot a visible foreign window while returning empty once that window is covered. The host uses ScreenCaptureKit `SCContentFilter(desktopIndependentWindow:)` for our own window, then `CGWindowListCreateImageFromArray` of that `windowNumber`.
 
 No window, minimized, headless, or a Wayland portal refusal is an omitted `png` field (`nil` in Clojure). The helper must not print the image anywhere except its stdout. The UI-tree schema is unchanged from v6.
 

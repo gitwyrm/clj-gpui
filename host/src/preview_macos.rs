@@ -1,30 +1,38 @@
-//! Capture a CGWindow by id, including windows covered by other apps.
+//! Capture this process's GPUI window, including when Evalight covers it.
 //!
-//! xcap lists `kCGWindowListOptionOnScreenOnly` and snapshots the window's
-//! screen rect. GPUI also stops its display link when macOS reports the
-//! window occluded, so waiting for the next presented frame never runs
-//! while Evalight is in front. We snapshot `CGRectNull` +
-//! `kCGWindowListOptionIncludingWindow` from the window server backing
-//! store instead, using the NSWindow's `windowNumber`.
+//! A helper process is a different PID. On recent macOS, `CGWindowListCreateImage`
+//! from another process can snapshot an on-screen window (side-by-side) and
+//! still return empty once that window is occluded. Capture therefore runs
+//! in-process: ScreenCaptureKit's desktop-independent window filter first,
+//! then CoreGraphics `CGWindowListCreateImageFromArray` of only our window.
 
-// CGWindowListCreateImage is deprecated in favor of ScreenCaptureKit; it is
-// still the occlusion-friendly backing-store read on current GPUI macOS SDKs.
-#![allow(deprecated)]
+#![allow(deprecated)] // CGWindowListCreateImage*; ScreenCaptureKit is preferred.
 
+use std::ptr::NonNull;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use block2::RcBlock;
 use image::RgbaImage;
+use objc2::rc::Retained;
+use objc2::{msg_send, sel, AnyThread, ClassType};
 use objc2_app_kit::NSView;
-use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFArray, CFNumber, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDataProvider, CGImage, CGWindowID, CGWindowImageOption, CGWindowListCreateImage,
-    CGWindowListOption,
+    CGWindowListCreateImageFromArray, CGWindowListOption,
+};
+use objc2_foundation::NSError;
+use objc2_screen_capture_kit::{
+    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-/// `kCGWindowImageBoundsIgnoreFraming | ShouldBeOpaque | BestResolution`
-const IMAGE_OPTIONS: u32 = (1 << 0) | (1 << 1) | (1 << 3);
+const IMAGE_OPTIONS: CGWindowImageOption =
+    CGWindowImageOption::from_bits_retain((1 << 0) | (1 << 1) | (1 << 3));
+const SCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn cg_rect_null() -> CGRect {
-    // CGRectNull: origin at infinity, empty size.
     CGRect {
         origin: CGPoint {
             x: f64::INFINITY,
@@ -38,8 +46,6 @@ fn cg_rect_null() -> CGRect {
 }
 
 pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
-    // `Window::window_handle` is GPUI's AnyWindowHandle. The AppKit NSView
-    // comes from the raw-window-handle trait.
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
         return None;
@@ -49,21 +55,136 @@ pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
     (number > 0).then_some(number as u32)
 }
 
+/// In-process capture used by Evalight. Do not spawn a helper: that PID is
+/// not the window owner, so occluded snapshots are rejected.
+pub fn capture_this_process(window_id: Option<u32>) -> Option<RgbaImage> {
+    let window_id = window_id.filter(|id| *id > 0);
+    capture_sck(window_id)
+        .or_else(|| window_id.and_then(capture_from_array))
+        .or_else(|| window_id.and_then(capture_window_id))
+}
+
 pub fn capture_window_id(window_id: u32) -> Option<RgbaImage> {
     let cg_image = CGWindowListCreateImage(
         cg_rect_null(),
         CGWindowListOption::OptionIncludingWindow,
         window_id as CGWindowID,
-        CGWindowImageOption::from_bits_retain(IMAGE_OPTIONS),
+        IMAGE_OPTIONS,
     );
-    let width = CGImage::width(cg_image.as_deref());
-    let height = CGImage::height(cg_image.as_deref());
+    cg_image_to_rgba(cg_image.as_deref())
+}
+
+fn capture_from_array(window_id: u32) -> Option<RgbaImage> {
+    let id = CFNumber::new_i32(window_id as i32);
+    let array = CFArray::from_retained_objects(&[id]);
+    let array: CFRetained<CFArray> = unsafe { CFRetained::cast_unchecked(array) };
+    let cg_image =
+        unsafe { CGWindowListCreateImageFromArray(cg_rect_null(), &array, IMAGE_OPTIONS) };
+    cg_image_to_rgba(cg_image.as_deref())
+}
+
+fn capture_sck(window_id: Option<u32>) -> Option<RgbaImage> {
+    let window = sck_content(true)
+        .and_then(|content| find_sc_window(&content, window_id))
+        .or_else(|| sck_content(false).and_then(|content| find_sc_window(&content, window_id)))?;
+    screenshot_sc_window(&window)
+}
+
+fn sck_content(current_process: bool) -> Option<Retained<SCShareableContent>> {
+    let (tx, rx) = mpsc::channel();
+    let block = RcBlock::new(
+        move |content: *mut SCShareableContent, _err: *mut NSError| {
+            let _ = tx.send(unsafe { Retained::retain(content) });
+        },
+    );
+    unsafe {
+        if current_process && class_responds_to_current_process_content() {
+            SCShareableContent::getCurrentProcessShareableContentWithCompletionHandler(&block);
+        } else {
+            SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+                true, false, &block,
+            );
+        }
+    }
+    rx.recv_timeout(SCK_TIMEOUT).ok().flatten()
+}
+
+fn class_responds_to_current_process_content() -> bool {
+    let sel = sel!(getCurrentProcessShareableContentWithCompletionHandler:);
+    unsafe { msg_send![SCShareableContent::class(), respondsToSelector: sel] }
+}
+
+fn find_sc_window(content: &SCShareableContent, want: Option<u32>) -> Option<Retained<SCWindow>> {
+    let windows = unsafe { content.windows() };
+    let pid = std::process::id() as i32;
+    let mut best: Option<(i64, Retained<SCWindow>)> = None;
+    for i in 0..windows.count() {
+        let window = windows.objectAtIndex(i);
+        let id = unsafe { window.windowID() };
+        if want == Some(id) && id > 0 {
+            return Some(window);
+        }
+        let owner = unsafe { window.owningApplication() };
+        let owner_pid = owner
+            .as_ref()
+            .map(|app| unsafe { app.processID() as i32 })
+            .unwrap_or(0);
+        if owner_pid != pid || unsafe { window.windowLayer() } != 0 {
+            continue;
+        }
+        let frame = unsafe { window.frame() };
+        let area = (frame.size.width * frame.size.height) as i64;
+        if best.as_ref().map(|(a, _)| *a).unwrap_or(-1) < area {
+            best = Some((area, window));
+        }
+    }
+    best.map(|(_, window)| window)
+}
+
+fn screenshot_sc_window(window: &SCWindow) -> Option<RgbaImage> {
+    let filter = unsafe {
+        SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window)
+    };
+    let config = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        config.setShowsCursor(false);
+        let rect = filter.contentRect();
+        let scale = f64::from(filter.pointPixelScale());
+        let width = (rect.size.width * scale).round() as usize;
+        let height = (rect.size.height * scale).round() as usize;
+        if width > 0 && height > 0 {
+            config.setWidth(width);
+            config.setHeight(height);
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
+        let _ = tx.send(retain_cg_image(image));
+    });
+    unsafe {
+        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+            &filter,
+            &config,
+            Some(&block),
+        );
+    }
+    let image = rx.recv_timeout(SCK_TIMEOUT).ok().flatten()?;
+    cg_image_to_rgba(Some(&image))
+}
+
+fn retain_cg_image(ptr: *mut CGImage) -> Option<CFRetained<CGImage>> {
+    NonNull::new(ptr).map(|ptr| unsafe { CFRetained::retain(ptr) })
+}
+
+fn cg_image_to_rgba(cg_image: Option<&CGImage>) -> Option<RgbaImage> {
+    let width = CGImage::width(cg_image);
+    let height = CGImage::height(cg_image);
     if width == 0 || height == 0 {
         return None;
     }
-    let data_provider = CGImage::data_provider(cg_image.as_deref());
+    let data_provider = CGImage::data_provider(cg_image);
     let data = CGDataProvider::data(data_provider.as_deref())?.to_vec();
-    let bytes_per_row = CGImage::bytes_per_row(cg_image.as_deref());
+    let bytes_per_row = CGImage::bytes_per_row(cg_image);
     if bytes_per_row < width * 4 {
         return None;
     }
@@ -74,5 +195,6 @@ pub fn capture_window_id(window_id: u32) -> Option<RgbaImage> {
     for bgra in buffer.chunks_exact_mut(4) {
         bgra.swap(0, 2);
     }
-    RgbaImage::from_raw(width as u32, height as u32, buffer)
+    let image = RgbaImage::from_raw(width as u32, height as u32, buffer)?;
+    image.pixels().any(|p| p.0[3] > 8).then_some(image)
 }
