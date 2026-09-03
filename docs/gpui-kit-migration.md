@@ -427,7 +427,7 @@ Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **
 | Counter / TodoMVC | existing examples | 3 |
 | Preview | `gpui.runtime/preview-png` after connect | 3 |
 
-GitHub Actions on Ubuntu and macOS already covers the first four rows (`./scripts/ci.sh`; see the CI PR if it is not on `main` yet). The migration PR should stay green there. Do not add a second workflow in the Kit bump. Gallery, themes, examples, and `preview-png` stay manual: they need a real window.
+GitHub Actions on Ubuntu and macOS covers the first four rows (`./scripts/ci.sh`; [PR #12](https://github.com/gitwyrm/clj-gpui/pull/12)). The Kit 0.6 implementation PR should stay green on that workflow. Do not add a second CI file in the bump. Gallery, themes, examples, and `preview-png` stay manual: they need a real window.
 
 Baseline on the current 0.5.1 host (2026-09-03): `cargo test --locked --manifest-path host/Cargo.toml` — 116 passed; `clojure -M:test` — 103 tests / 626 assertions; `clojure -M:cljfmt check`; `clojure -M:protocol-test` with a debug `host/target/debug/clj-gpui`. A first `cargo test` after a cold crates.io fetch is on the order of two minutes of compile once D-Bus and libstdc++ are installed; the linker fails with `unable to find library -lstdc++` if `cc` is clang and the GCC install it selects has no `libstdc++-N-dev`.
 
