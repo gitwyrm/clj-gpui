@@ -5,19 +5,24 @@
 //! `RootView::render_node` arms stay in `renderer`.
 
 use crate::mapping;
-use crate::protocol::{self, Cmd, Item, Node};
+use crate::protocol::{self, ChartLabelLine, Cmd, Item, Node};
 use chrono::NaiveDate;
 use gpui::{
-    App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px, size,
+    App, Axis, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div, linear_color_stop, prelude::*, px,
+    size,
 };
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
     calendar::Date,
-    chart::{AreaChart, BarChart, LineChart, PieChart},
+    chart::{
+        AreaChart, BarChart, CandlestickChart, LineChart, PieChart, RadarChart, RadarLabel,
+        SankeyChart, SankeyLabel,
+    },
     dock::{Panel as StyledPanel, PanelControl, PanelEvent},
     h_virtual_list,
     input::InputState,
+    plot::shape::{BarAlignment, SankeyAlign, SankeyLink, SankeyValueScale},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     text::TextView,
     v_flex, v_virtual_list,
@@ -283,93 +288,859 @@ pub fn date_to_value(date: Date) -> Value {
     }
 }
 
-pub fn chart_points(node: &Node) -> Vec<(String, f64)> {
+/// One chart datum. Series charts use `value` / `values`; candlesticks use
+/// OHLC; sankey nodes use `id`/`label`/`color` and links live on the node.
+#[derive(Debug, Clone)]
+pub struct ChartPoint {
+    pub index: usize,
+    pub id: String,
+    pub label: String,
+    pub value: Option<f64>,
+    pub values: Vec<f64>,
+    pub color: Option<String>,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub close: Option<f64>,
+    #[allow(dead_code)]
+    pub source: Option<String>,
+    #[allow(dead_code)]
+    pub target: Option<String>,
+    pub label_lines: Vec<ChartLabelLine>,
+    pub content: Option<Box<Node>>,
+    pub inner_radius: Option<f32>,
+    pub outer_radius: Option<f32>,
+}
+
+impl ChartPoint {
+    pub fn from_item(item: &Item) -> Self {
+        let values = item_number_list(item);
+        let value = item
+            .number_value()
+            .map(|n| n as f64)
+            .or_else(|| values.first().copied());
+        Self {
+            index: 0,
+            id: item.id_or_label(),
+            label: item.label_or_id(),
+            value,
+            values,
+            color: item.color.clone(),
+            open: item.open.map(|n| n as f64),
+            high: item.high.map(|n| n as f64),
+            low: item.low.map(|n| n as f64),
+            close: item.close.map(|n| n as f64),
+            source: item.source.clone(),
+            target: item.target.clone(),
+            label_lines: item.label_lines.clone(),
+            content: item.content.clone(),
+            inner_radius: item.inner_radius,
+            outer_radius: item.outer_radius,
+        }
+    }
+
+    pub fn with_index(mut self, index: usize) -> Self {
+        self.index = index;
+        self
+    }
+
+    pub fn series_y(&self) -> Option<f64> {
+        self.value.or_else(|| self.values.first().copied())
+    }
+
+    pub fn has_ohlc(&self) -> bool {
+        self.open.is_some() && self.high.is_some() && self.low.is_some() && self.close.is_some()
+    }
+}
+
+fn json_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn item_number_list(item: &Item) -> Vec<f64> {
+    match &item.values {
+        Some(Value::Array(xs)) => xs.iter().filter_map(json_f64).collect(),
+        _ => match &item.value {
+            Some(Value::Array(xs)) => xs.iter().filter_map(json_f64).collect(),
+            _ => Vec::new(),
+        },
+    }
+}
+
+pub fn chart_points(node: &Node) -> Vec<ChartPoint> {
     node.collection()
         .iter()
-        .filter_map(|item| {
-            let y = item.number_value()? as f64;
-            let x = item.label_or_id();
-            if x.is_empty() { None } else { Some((x, y)) }
-        })
+        .map(ChartPoint::from_item)
+        .filter(|p| !p.label.is_empty() && p.series_y().is_some())
+        .enumerate()
+        .map(|(index, point)| point.with_index(index))
         .collect()
 }
 
-/// Default chart viewport when Clojure omits `:width` / `:height` / `:size`
-/// / `:flex 1`. Outer layout is applied by the caller (`viewport_sized`).
-pub fn chart_viewport(node: &Node) -> (f32, f32) {
-    (
-        node.width.or(node.size).unwrap_or(320.0),
-        node.height.or(node.size).unwrap_or(180.0),
-    )
+pub fn chart_kind(node: &Node) -> String {
+    node.variant
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .unwrap_or_else(|| "line".into())
 }
 
-/// Theme tokens for pie slices, in paint order. Slice `i` uses
-/// `PIE_SLICE_TOKENS[i % PIE_SLICE_TOKENS.len()]`. Labels are not hashed.
-const PIE_SLICE_TOKENS: [&str; 7] = [
-    "chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger",
-];
+pub fn bar_alignment(node: &Node) -> BarAlignment {
+    match node
+        .alignment
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("top") => BarAlignment::Top,
+        Some("left") => BarAlignment::Left,
+        Some("right") => BarAlignment::Right,
+        _ => BarAlignment::Bottom,
+    }
+}
 
-/// Color token for pie slice `index`. The slice label does not affect this.
+pub fn sankey_align(node: &Node) -> Option<SankeyAlign> {
+    match node
+        .node_align
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("left") => Some(SankeyAlign::Left),
+        Some("right") => Some(SankeyAlign::Right),
+        Some("center") => Some(SankeyAlign::Center),
+        Some("justify") => Some(SankeyAlign::Justify),
+        _ => None,
+    }
+}
+
+pub fn sankey_value_scale(node: &Node) -> Option<SankeyValueScale> {
+    match node
+        .value_scale
+        .as_deref()
+        .map(crate::catalog::normalize)
+        .as_deref()
+    {
+        Some("sqrt") => Some(SankeyValueScale::Sqrt),
+        Some("linear") => Some(SankeyValueScale::Linear),
+        _ => None,
+    }
+}
+
+/// Kit's `build_band_labels` / `build_point_x_labels` do `(i + 1) % tick_margin`
+/// and do not clamp. Zero panics. The bridge always forwards ≥1.
+pub fn chart_tick_margin(node: &Node) -> usize {
+    node.tick_margin.unwrap_or(1).max(1) as usize
+}
+
+/// Kit hover tooltip is off until `.id(...)` is set. Default follows Kit.
+pub fn chart_interactive(node: &Node) -> bool {
+    node.interactive.unwrap_or(false)
+}
+
+/// Candlestick `body_width_ratio`. Kit's builder does not clamp; neither do we.
+pub fn chart_body_width_ratio(node: &Node) -> Option<f32> {
+    node.body_width_ratio
+}
+
+/// Theme tokens Kit cycles for radar / sankey / line-area series (`chart_1`…`chart_5`).
+const CHART_SERIES_TOKENS: [&str; 5] = ["chart_1", "chart_2", "chart_3", "chart_4", "chart_5"];
+
 #[cfg(test)]
-fn pie_slice_token(index: usize) -> &'static str {
-    PIE_SLICE_TOKENS[index % PIE_SLICE_TOKENS.len()]
+pub fn chart_series_token(index: usize) -> &'static str {
+    CHART_SERIES_TOKENS[index % CHART_SERIES_TOKENS.len()]
 }
 
-fn pie_palette(cx: &App) -> [Hsla; 7] {
-    // Keep this in lockstep with `PIE_SLICE_TOKENS`.
+fn chart_5_palette(cx: &App) -> [Hsla; 5] {
     [
         cx.theme().chart_1,
         cx.theme().chart_2,
         cx.theme().chart_3,
         cx.theme().chart_4,
         cx.theme().chart_5,
-        cx.theme().warning,
-        cx.theme().danger,
     ]
 }
 
-pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
-    let points = chart_points(node);
-    let (width, height) = chart_viewport(node);
-    let kind = node
-        .variant
-        .as_deref()
-        .map(crate::catalog::normalize)
-        .unwrap_or_else(|| "line".into());
-    let stroke = cx.theme().chart_1;
-    let fill = cx.theme().chart_2;
-    let chart: gpui::AnyElement = match kind.as_str() {
-        "bar" => BarChart::new(points)
-            .band(|p| p.0.clone())
-            .value(|p| p.1)
-            .fill(move |_, _, _, _| stroke)
-            .into_any_element(),
-        "area" => AreaChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
-            .stroke(stroke)
-            .fill(fill)
-            .into_any_element(),
-        "pie" => {
-            let palette = pie_palette(cx);
-            let radius = width.min(height) * 0.42;
-            let pie_data: Vec<(usize, f64)> = points
-                .iter()
-                .enumerate()
-                .map(|(ix, (_, value))| (ix, *value))
-                .collect();
-            PieChart::new(pie_data)
-                .value(|p| p.1 as f32)
-                .outer_radius(radius)
-                .color(move |p| palette[p.0 % PIE_SLICE_TOKENS.len()])
-                .into_any_element()
+/// Partial Sankey `:color` must not collapse the rest of the graph onto `chart_1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SankeyNodeColorKind {
+    Custom(String),
+    Palette(usize),
+}
+
+pub fn sankey_node_color_kind(index: usize, color: Option<&str>) -> SankeyNodeColorKind {
+    match color {
+        Some(c) if parse_hex_color(c).is_some() => SankeyNodeColorKind::Custom(c.to_string()),
+        _ => SankeyNodeColorKind::Palette(index % CHART_SERIES_TOKENS.len()),
+    }
+}
+
+/// Custom hex vs Kit's own default when a color builder is omitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChartColorKind {
+    Custom(String),
+    KitDefault,
+}
+
+pub fn chart_color_kind(color: Option<&str>) -> ChartColorKind {
+    match color {
+        Some(c) if parse_hex_color(c).is_some() => ChartColorKind::Custom(c.to_string()),
+        _ => ChartColorKind::KitDefault,
+    }
+}
+
+/// Area series stroke: custom hex, or Kit `chart_2` when the builder is omitted.
+pub fn area_series_stroke_kind(color: Option<&str>) -> ChartColorKind {
+    chart_color_kind(color)
+}
+
+/// Pie slice color: custom hex, or Kit `chart_2` when `.color(...)` is omitted.
+pub fn pie_slice_color_kind(color: Option<&str>) -> ChartColorKind {
+    chart_color_kind(color)
+}
+
+/// Last index that must receive an explicit builder so Kit's parallel `Vec`s
+/// do not assign a later custom value to an earlier unspecified series.
+pub fn last_custom_color_index(kinds: &[ChartColorKind]) -> Option<usize> {
+    kinds
+        .iter()
+        .rposition(|kind| matches!(kind, ChartColorKind::Custom(_)))
+}
+
+pub fn pie_installs_color_fn(points: &[ChartPoint]) -> bool {
+    points.iter().any(|p| {
+        matches!(
+            pie_slice_color_kind(p.color.as_deref()),
+            ChartColorKind::Custom(_)
+        )
+    })
+}
+
+pub fn pie_uses_inner_radius_fn(points: &[ChartPoint]) -> bool {
+    points.iter().any(|p| p.inner_radius.is_some())
+}
+
+pub fn pie_uses_outer_radius_fn(points: &[ChartPoint]) -> bool {
+    points.iter().any(|p| p.outer_radius.is_some())
+}
+
+/// Kit pie *layout* uses `height × 0.4` when `outer_radius` is 0, but
+/// `get_outer_radius` still returns 0 into `arc.paint`. Kit then drops the
+/// path (`r1 < EPSILON`), so a donut with only `:inner-radius` shows labels
+/// and no ring. Forward that layout default so paint matches labels.
+pub fn pie_paint_outer_radius(node: &Node) -> f32 {
+    node.outer_radius
+        .unwrap_or_else(|| chart_viewport(node).1 * 0.4)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartFillGradient {
+    PerBar,
+    Chart,
+    Stops {
+        start: String,
+        start_at: f32,
+        end: String,
+        end_at: f32,
+    },
+}
+
+fn gradient_stop(value: &Value) -> Option<(String, f32)> {
+    match value {
+        Value::Object(map) => {
+            let color = map.get("color")?.as_str()?.to_string();
+            if color.is_empty() {
+                return None;
+            }
+            let at = map.get("at").and_then(json_f64).unwrap_or(0.0) as f32;
+            Some((color, at))
         }
-        _ => LineChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
-            .stroke(stroke)
-            .dot()
-            .into_any_element(),
+        _ => None,
+    }
+}
+
+pub fn chart_fill_gradient(node: &Node) -> Option<ChartFillGradient> {
+    let mode = node
+        .fill_gradient_mode
+        .as_deref()
+        .map(crate::catalog::normalize);
+    match &node.fill_gradient {
+        Some(Value::Array(stops)) if stops.len() >= 2 => {
+            let (start, start_at) = gradient_stop(&stops[0])?;
+            let (end, end_at) = gradient_stop(&stops[1])?;
+            Some(ChartFillGradient::Stops {
+                start,
+                start_at,
+                end,
+                end_at,
+            })
+        }
+        Some(Value::String(s)) => match crate::catalog::normalize(s).as_str() {
+            "chart" => Some(ChartFillGradient::Chart),
+            "bar" | "per bar" | "true" => Some(ChartFillGradient::PerBar),
+            _ => None,
+        },
+        Some(Value::Bool(true)) => {
+            if mode.as_deref() == Some("chart") {
+                Some(ChartFillGradient::Chart)
+            } else {
+                Some(ChartFillGradient::PerBar)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn json_object_f32(map: &serde_json::Map<String, Value>, key: &str) -> f32 {
+    map.get(key).and_then(json_f64).unwrap_or(0.0) as f32
+}
+
+pub fn chart_corner_radii(node: &Node) -> Option<Corners<gpui::Pixels>> {
+    if let Some(Value::Number(n)) = node.corner_radii.as_ref() {
+        return Some(Corners::all(px(n.as_f64()? as f32)));
+    }
+    if let Some(Value::Object(map)) = node.corner_radii.as_ref() {
+        return Some(Corners {
+            top_left: px(json_object_f32(map, "top-left")),
+            top_right: px(json_object_f32(map, "top-right")),
+            bottom_right: px(json_object_f32(map, "bottom-right")),
+            bottom_left: px(json_object_f32(map, "bottom-left")),
+        });
+    }
+    node.corner_radius.map(|r| Corners::all(px(r)))
+}
+
+fn normalized_opt(value: Option<&str>) -> Option<String> {
+    value.map(crate::catalog::normalize)
+}
+
+/// Kit `StrokeStyle` name after catalog normalize, if the wire value is known.
+pub fn chart_stroke_style_name(value: Option<&str>) -> Option<&'static str> {
+    match normalized_opt(value).as_deref() {
+        Some("linear") => Some("linear"),
+        Some("step after") | Some("stepafter") => Some("step-after"),
+        Some("natural") => Some("natural"),
+        _ => None,
+    }
+}
+
+fn ensure_series_values(points: &mut [ChartPoint]) {
+    for point in points {
+        if point.values.is_empty() {
+            if let Some(v) = point.value {
+                point.values = vec![v];
+            }
+        }
+    }
+}
+
+struct ChartSeriesMeta {
+    name: String,
+    stroke: Option<String>,
+    fill: Option<String>,
+    stroke_style: Option<String>,
+}
+
+fn custom_hex(color: Option<&str>) -> Option<String> {
+    match chart_color_kind(color) {
+        ChartColorKind::Custom(c) => Some(c),
+        ChartColorKind::KitDefault => None,
+    }
+}
+
+fn chart_series_meta(node: &Node) -> Vec<ChartSeriesMeta> {
+    node.series
+        .iter()
+        .map(|item| ChartSeriesMeta {
+            name: item.label_or_id(),
+            stroke: custom_hex(item.stroke.as_deref().or(item.color.as_deref())),
+            fill: custom_hex(item.fill.as_deref()),
+            stroke_style: item.stroke_style.clone(),
+        })
+        .collect()
+}
+
+fn area_stroke_hex<'a>(meta: &'a [ChartSeriesMeta], i: usize, node: &'a Node) -> Option<&'a str> {
+    meta.get(i).and_then(|s| s.stroke.as_deref()).or_else(|| {
+        if i == 0 && meta.is_empty() {
+            node.stroke.as_deref()
+        } else {
+            None
+        }
+    })
+}
+
+fn area_fill_hex(meta: &[ChartSeriesMeta], i: usize) -> Option<&str> {
+    meta.get(i).and_then(|s| s.fill.as_deref())
+}
+
+fn area_style_raw<'a>(meta: &'a [ChartSeriesMeta], i: usize, node: &'a Node) -> Option<&'a str> {
+    meta.get(i)
+        .and_then(|s| s.stroke_style.as_deref())
+        .or_else(|| {
+            if i == 0 && meta.is_empty() {
+                node.stroke_style.as_deref()
+            } else {
+                None
+            }
+        })
+}
+
+fn radar_dimension_label(point: &ChartPoint) -> RadarLabel {
+    if let Some(content) = point.content.as_deref() {
+        RadarLabel::Element(crate::overlay::paint_chart_label(
+            content,
+            &format!("radar-label/{}", point.index),
+        ))
+    } else {
+        RadarLabel::Text(SharedString::from(point.label.clone()))
+    }
+}
+
+fn sankey_fallback_labels(node: &ChartPoint, value: f64) -> Vec<SankeyLabel> {
+    let mut lines = Vec::new();
+    lines.push(SankeyLabel::new(format_chart_number(value)));
+    if !node.label.is_empty() {
+        lines.push(SankeyLabel::new(node.label.clone()));
+    }
+    lines
+}
+
+fn sankey_custom_labels(node: &ChartPoint, value: f64) -> Vec<SankeyLabel> {
+    if node.label_lines.is_empty() {
+        return sankey_fallback_labels(node, value);
+    }
+    node.label_lines
+        .iter()
+        .map(|line| {
+            let mut label = SankeyLabel::new(line.text.clone());
+            if let Some(color) = line.color.as_deref().and_then(parse_hex_color) {
+                label = label.color(color);
+            }
+            if let Some(size) = line.font_size {
+                label = label.font_size(size);
+            }
+            label
+        })
+        .collect()
+}
+
+pub fn sankey_nodes(node: &Node) -> Vec<ChartPoint> {
+    node.collection()
+        .iter()
+        .map(ChartPoint::from_item)
+        .filter(|p| !p.id.is_empty() || !p.label.is_empty())
+        .enumerate()
+        .map(|(index, point)| point.with_index(index))
+        .collect()
+}
+
+pub fn sankey_links(nodes: &[ChartPoint], links: &[Item]) -> Vec<SankeyLink> {
+    let index_of =
+        |key: &str| -> Option<usize> { nodes.iter().position(|n| n.id == key || n.label == key) };
+    links
+        .iter()
+        .filter_map(|link| {
+            let src = link.source.as_deref().or(link.id.as_deref())?;
+            let tgt = link.target.as_deref()?;
+            let value = link.number_value()? as f64;
+            Some(SankeyLink::new(index_of(src)?, index_of(tgt)?, value))
+        })
+        .collect()
+}
+
+fn format_chart_number(value: f64) -> String {
+    if (value - value.round()).abs() < 0.001 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+fn point_fill(point: &ChartPoint, fallback: Hsla) -> Hsla {
+    point
+        .color
+        .as_deref()
+        .and_then(parse_hex_color)
+        .unwrap_or(fallback)
+}
+
+/// Default chart viewport when Clojure omits `:width` / `:height` / `:size`
+/// / `:flex 1`. Outer layout is applied by the caller (`viewport_sized`).
+/// Horizontal bar charts grow with category count so cljdu-style
+/// directory rows are not clipped at 180px.
+pub fn chart_viewport(node: &Node) -> (f32, f32) {
+    let width = node.width.or(node.size).unwrap_or(320.0);
+    let height = node.height.or(node.size).unwrap_or_else(|| {
+        if chart_kind(node) == "bar" && bar_alignment(node).is_horizontal() {
+            let n = node.collection().len().max(1) as f32;
+            (n * 28.0 + 40.0).max(180.0)
+        } else {
+            180.0
+        }
+    });
+    (width, height)
+}
+
+pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
+    let mut points = chart_points(node);
+    let kind = chart_kind(node);
+    let stroke = cx.theme().chart_1;
+    let chart: gpui::AnyElement = match kind.as_str() {
+        "bar" => {
+            let mut bar = BarChart::new(points)
+                .band(|p| p.label.clone())
+                .value(|p| p.series_y().unwrap_or(0.0))
+                .alignment(bar_alignment(node));
+            if chart_interactive(node) {
+                bar = bar.id(SharedString::from(format!("{key}/plot")));
+            }
+            if let Some(name) = node.name.as_ref() {
+                bar = bar.name(name.clone());
+            }
+            match chart_fill_gradient(node) {
+                Some(ChartFillGradient::PerBar) => {
+                    bar = bar.fill_gradient(move |p, _, _| {
+                        let color = point_fill(p, stroke);
+                        [
+                            linear_color_stop(color.opacity(0.3), 0.0),
+                            linear_color_stop(color, 1.0),
+                        ]
+                    });
+                }
+                Some(ChartFillGradient::Chart) => {
+                    bar = bar.fill_gradient(move |p, range, chart_to_bar| {
+                        let color = point_fill(p, stroke);
+                        [
+                            linear_color_stop(color.opacity(0.3), chart_to_bar(*range.start())),
+                            linear_color_stop(color, chart_to_bar(*range.end())),
+                        ]
+                    });
+                }
+                Some(ChartFillGradient::Stops {
+                    start,
+                    start_at,
+                    end,
+                    end_at,
+                }) => {
+                    let start_c = parse_hex_color(&start).unwrap_or(stroke);
+                    let end_c = parse_hex_color(&end).unwrap_or(stroke);
+                    bar = bar.fill_gradient(move |_, _, _| {
+                        [
+                            linear_color_stop(start_c, start_at),
+                            linear_color_stop(end_c, end_at),
+                        ]
+                    });
+                }
+                None => {
+                    bar = bar.fill(move |p, _, _, _| point_fill(p, stroke));
+                }
+            }
+            if let Some(corners) = chart_corner_radii(node) {
+                bar = bar.corner_radii(corners);
+            }
+            bar = bar
+                .label_axis(node.label_axis.unwrap_or(true))
+                .value_axis(node.value_axis.unwrap_or(false))
+                .grid(node.grid.unwrap_or(true))
+                .tick_margin(chart_tick_margin(node));
+            if let Some(ticks) = node.value_tick_count {
+                bar = bar.value_tick_count(ticks as usize);
+            }
+            if node.labels.unwrap_or(false) {
+                bar = bar.label(|p| format_chart_number(p.series_y().unwrap_or(0.0)));
+            }
+            bar.into_any_element()
+        }
+        "area" => {
+            ensure_series_values(&mut points);
+            let n = points
+                .iter()
+                .map(|p| p.values.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            let meta = chart_series_meta(node);
+            let stroke_kinds: Vec<ChartColorKind> = (0..n)
+                .map(|i| area_series_stroke_kind(area_stroke_hex(&meta, i, node)))
+                .collect();
+            let fill_kinds: Vec<ChartColorKind> = (0..n)
+                .map(|i| chart_color_kind(area_fill_hex(&meta, i)))
+                .collect();
+            let last_stroke = last_custom_color_index(&stroke_kinds);
+            let last_fill = last_custom_color_index(&fill_kinds);
+            let last_style = (0..n)
+                .rev()
+                .find(|&i| chart_stroke_style_name(area_style_raw(&meta, i, node)).is_some());
+            let any_name = meta.iter().any(|s| !s.name.is_empty());
+            let kit_chart_2 = cx.theme().chart_2;
+            let mut chart = AreaChart::new(points).x(|p| p.label.clone());
+            if chart_interactive(node) {
+                chart = chart.id(SharedString::from(format!("{key}/plot")));
+            }
+            for i in 0..n {
+                chart = chart.y(move |p| p.values.get(i).copied().unwrap_or(0.0));
+                if any_name {
+                    chart = chart.name(meta.get(i).map(|s| s.name.clone()).unwrap_or_default());
+                }
+                if last_stroke.is_some_and(|last| i <= last) {
+                    let series_stroke = area_stroke_hex(&meta, i, node)
+                        .and_then(parse_hex_color)
+                        .unwrap_or(kit_chart_2);
+                    chart = chart.stroke(series_stroke);
+                }
+                if last_fill.is_some_and(|last| i <= last) {
+                    let series_fill = area_fill_hex(&meta, i)
+                        .and_then(parse_hex_color)
+                        .unwrap_or(kit_chart_2.opacity(0.4));
+                    chart = chart.fill(series_fill);
+                }
+                if last_style.is_some_and(|last| i <= last) {
+                    chart = match chart_stroke_style_name(area_style_raw(&meta, i, node)) {
+                        Some("linear") => chart.linear(),
+                        Some("step-after") => chart.step_after(),
+                        _ => chart.natural(),
+                    };
+                }
+            }
+            chart = chart.tick_margin(chart_tick_margin(node));
+            if let Some(show) = node.x_axis {
+                chart = chart.x_axis(show);
+            }
+            if let Some(grid) = node.grid {
+                chart = chart.grid(grid);
+            }
+            chart.into_any_element()
+        }
+        "pie" => {
+            let pie_data: Vec<ChartPoint> = points
+                .into_iter()
+                .filter(|p| p.series_y().is_some())
+                .collect();
+            let install_color = pie_installs_color_fn(&pie_data);
+            let any_inner = pie_uses_inner_radius_fn(&pie_data);
+            let any_outer = pie_uses_outer_radius_fn(&pie_data);
+            let node_inner = node.inner_radius.unwrap_or(0.0);
+            let paint_outer = pie_paint_outer_radius(node);
+            let kit_chart_2 = cx.theme().chart_2;
+            let mut pie = PieChart::new(pie_data).value(|p| p.series_y().unwrap_or(0.0) as f32);
+            if install_color {
+                pie = pie.color(move |p| {
+                    p.color
+                        .as_deref()
+                        .and_then(parse_hex_color)
+                        .unwrap_or(kit_chart_2)
+                });
+            }
+            if any_inner {
+                pie = pie.inner_radius_fn(move |arc| arc.data.inner_radius.unwrap_or(node_inner));
+            } else if let Some(radius) = node.inner_radius {
+                pie = pie.inner_radius(radius);
+            }
+            // Always install a paint outer radius. Kit's own default of 0 is
+            // only a layout sentinel; `arc.paint(Some(0))` draws nothing.
+            pie = pie.outer_radius(paint_outer);
+            if any_outer {
+                pie = pie.outer_radius_fn(move |arc| arc.data.outer_radius.unwrap_or(paint_outer));
+            }
+            if let Some(angle) = node.pad_angle {
+                pie = pie.pad_angle(angle);
+            }
+            if node.labels.unwrap_or(false) {
+                pie = pie.label(|p| SharedString::from(p.label.clone()));
+            }
+            if let Some(color) = node.label_color.as_deref().and_then(parse_hex_color) {
+                pie = pie.label_color(color);
+            }
+            if let Some(color) = node.label_line_color.as_deref().and_then(parse_hex_color) {
+                pie = pie.label_line_color(move |_| color);
+            }
+            if let Some(gap) = node.label_gap {
+                pie = pie.label_gap(gap);
+            }
+            pie.into_any_element()
+        }
+        "radar" => {
+            ensure_series_values(&mut points);
+            let n = points.iter().map(|p| p.values.len()).max().unwrap_or(0);
+            let meta = chart_series_meta(node);
+            let any_stroke = meta.iter().any(|s| s.stroke.is_some());
+            let any_fill = meta.iter().any(|s| s.fill.is_some());
+            let any_name = meta.iter().any(|s| !s.name.is_empty());
+            let palette = chart_5_palette(cx);
+            let mut radar = RadarChart::new(points).label(radar_dimension_label);
+            if chart_interactive(node) {
+                radar = radar.id(SharedString::from(format!("{key}/plot")));
+            }
+            if let Some(max) = node.max {
+                radar = radar.max_value(max as f64);
+            }
+            if node.dot {
+                radar = radar.dot();
+            }
+            radar = radar.grid(node.grid.unwrap_or(true));
+            if let Some(color) = node.label_color.as_deref().and_then(parse_hex_color) {
+                radar = radar.label_color(color);
+            }
+            if let Some(gap) = node.label_gap {
+                radar = radar.label_gap(gap);
+            }
+            if let Some(radius) = node.outer_radius {
+                radar = radar.outer_radius(radius);
+            }
+            if let Some(levels) = node.grid_levels {
+                radar = radar.grid_levels(levels as usize);
+            }
+            for i in 0..n {
+                radar = radar.value(move |p| p.values.get(i).copied().unwrap_or(0.0));
+                if any_name {
+                    radar = radar.name(meta.get(i).map(|s| s.name.clone()).unwrap_or_default());
+                }
+                if any_stroke {
+                    let series_stroke = meta
+                        .get(i)
+                        .and_then(|s| s.stroke.as_deref())
+                        .and_then(parse_hex_color)
+                        .unwrap_or(palette[i % palette.len()]);
+                    radar = radar.stroke(series_stroke);
+                }
+                if any_fill {
+                    let series_fill = meta
+                        .get(i)
+                        .and_then(|s| s.fill.as_deref())
+                        .and_then(parse_hex_color)
+                        .unwrap_or_else(|| {
+                            meta.get(i)
+                                .and_then(|s| s.stroke.as_deref())
+                                .and_then(parse_hex_color)
+                                .unwrap_or(palette[i % palette.len()])
+                                .opacity(0.3)
+                        });
+                    radar = radar.fill(series_fill);
+                }
+            }
+            radar.into_any_element()
+        }
+        "candlestick" => {
+            let candles: Vec<ChartPoint> = node
+                .collection()
+                .iter()
+                .map(ChartPoint::from_item)
+                .filter(|p| !p.label.is_empty() && p.has_ohlc())
+                .enumerate()
+                .map(|(index, point)| point.with_index(index))
+                .collect();
+            let mut chart = CandlestickChart::new(candles)
+                .x(|p| p.label.clone())
+                .open(|p| p.open.unwrap_or(0.0))
+                .high(|p| p.high.unwrap_or(0.0))
+                .low(|p| p.low.unwrap_or(0.0))
+                .close(|p| p.close.unwrap_or(0.0))
+                .tick_margin(chart_tick_margin(node))
+                .grid(node.grid.unwrap_or(true));
+            if let Some(ratio) = chart_body_width_ratio(node) {
+                chart = chart.body_width_ratio(ratio);
+            }
+            if let Some(show) = node.x_axis {
+                chart = chart.x_axis(show);
+            }
+            chart.into_any_element()
+        }
+        "sankey" => {
+            let nodes = sankey_nodes(node);
+            let links = sankey_links(&nodes, &node.links);
+            let palette = chart_5_palette(cx);
+            let any_custom = nodes.iter().any(|n| {
+                matches!(
+                    sankey_node_color_kind(n.index, n.color.as_deref()),
+                    SankeyNodeColorKind::Custom(_)
+                )
+            });
+            let custom_labels = nodes.iter().any(|n| !n.label_lines.is_empty());
+            let mut chart = SankeyChart::new(nodes, links);
+            if custom_labels {
+                chart = chart.labels(sankey_custom_labels);
+            } else {
+                if node.node_label.unwrap_or(true) {
+                    chart = chart.node_label(|n| n.label.clone().into());
+                }
+                if node.value_label.unwrap_or(true) {
+                    chart = chart.value_label(|_, v| format_chart_number(v).into());
+                }
+            }
+            if let Some(align) = sankey_align(node) {
+                chart = chart.node_align(align);
+            }
+            if let Some(scale) = sankey_value_scale(node) {
+                chart = chart.value_scale(scale);
+            }
+            if let Some(width) = node.node_width {
+                chart = chart.node_width(width);
+            }
+            if let Some(padding) = node.node_padding {
+                chart = chart.node_padding(padding);
+            }
+            if let Some(iterations) = node.iterations {
+                chart = chart.iterations(iterations as usize);
+            }
+            if let Some(radius) = node.node_corner_radius {
+                chart = chart.node_corner_radius(px(radius));
+            }
+            if let Some(opacity) = node.link_opacity {
+                chart = chart.link_opacity(opacity);
+            }
+            if let Some(width) = node.min_link_width {
+                chart = chart.min_link_width(width);
+            }
+            if let Some(gap) = node.label_gap {
+                chart = chart.label_gap(gap);
+            }
+            if any_custom {
+                chart = chart.node_color(move |n| {
+                    match sankey_node_color_kind(n.index, n.color.as_deref()) {
+                        SankeyNodeColorKind::Custom(color) => {
+                            parse_hex_color(&color).unwrap_or(palette[n.index % palette.len()])
+                        }
+                        SankeyNodeColorKind::Palette(index) => palette[index],
+                    }
+                });
+            }
+            chart.into_any_element()
+        }
+        _ => {
+            let mut chart = LineChart::new(points)
+                .x(|p| p.label.clone())
+                .y(|p| p.series_y().unwrap_or(0.0))
+                .tick_margin(chart_tick_margin(node));
+            if chart_interactive(node) {
+                chart = chart.id(SharedString::from(format!("{key}/plot")));
+            }
+            if let Some(name) = node.name.as_ref() {
+                chart = chart.name(name.clone());
+            }
+            if let Some(color) = node.stroke.as_deref().and_then(parse_hex_color) {
+                chart = chart.stroke(color);
+            }
+            chart = match chart_stroke_style_name(node.stroke_style.as_deref()) {
+                Some("linear") => chart.linear(),
+                Some("step-after") => chart.step_after(),
+                Some("natural") => chart.natural(),
+                _ => chart,
+            };
+            if node.dot {
+                chart = chart.dot();
+            }
+            if let Some(show) = node.x_axis {
+                chart = chart.x_axis(show);
+            }
+            if let Some(grid) = node.grid {
+                chart = chart.grid(grid);
+            }
+            chart.into_any_element()
+        }
     };
     // Inner chart fills the clj-gpui viewport wrapper (layout/style live
     // on the outer `viewport_sized` / panel wrap, not here).
@@ -853,6 +1624,7 @@ pub fn sync_input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_component::plot::shape::{BarAlignment, SankeyAlign, SankeyValueScale};
     use serde_json::json;
 
     #[test]
@@ -1041,57 +1813,209 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            chart_points(&node),
-            vec![("A".into(), 1.0), ("B".into(), 2.5)]
+            chart_points(&node)
+                .iter()
+                .map(|p| (p.label.clone(), p.series_y()))
+                .collect::<Vec<_>>(),
+            vec![("A".into(), Some(1.0)), ("B".into(), Some(2.5))]
         );
     }
 
     #[test]
-    fn pie_first_seven_indices_are_distinct_tokens() {
-        let tokens: Vec<_> = (0..7).map(pie_slice_token).collect();
+    fn bar_alignment_left_is_horizontal() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "alignment": "left"
+        }))
+        .unwrap();
+        assert_eq!(bar_alignment(&node), BarAlignment::Left);
+        assert!(bar_alignment(&node).is_horizontal());
+        let omitted: Node =
+            serde_json::from_value(json!({"type": "chart", "variant": "bar"})).unwrap();
+        assert_eq!(bar_alignment(&omitted), BarAlignment::Bottom);
+        assert!(!bar_alignment(&omitted).is_horizontal());
+        let top: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "alignment": "top"
+        }))
+        .unwrap();
+        assert_eq!(bar_alignment(&top), BarAlignment::Top);
+    }
+
+    #[test]
+    fn chart_kind_covers_kit_names() {
+        let kind = |variant: &str| {
+            let node: Node =
+                serde_json::from_value(json!({"type": "chart", "variant": variant})).unwrap();
+            chart_kind(&node)
+        };
+        assert_eq!(kind("bar"), "bar");
+        assert_eq!(kind("radar"), "radar");
+        assert_eq!(kind("candlestick"), "candlestick");
+        assert_eq!(kind("sankey"), "sankey");
+        assert_eq!(kind("line"), "line");
+        let omitted: Node = serde_json::from_value(json!({"type": "chart"})).unwrap();
+        assert_eq!(chart_kind(&omitted), "line");
+    }
+
+    #[test]
+    fn radar_values_from_array_or_value() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "radar",
+            "items": [
+                {"label": "Speed", "values": [80, 60]},
+                {"label": "Range", "value": [10, 20]},
+                {"label": "Solo", "value": 5}
+            ]
+        }))
+        .unwrap();
+        let points = chart_points(&node);
+        assert_eq!(points[0].values, vec![80.0, 60.0]);
+        assert_eq!(points[1].values, vec![10.0, 20.0]);
+        assert_eq!(points[2].series_y(), Some(5.0));
+        assert!(points[2].values.is_empty());
+    }
+
+    #[test]
+    fn candlestick_point_needs_ohlc() {
+        let item: Item = serde_json::from_value(json!({
+            "label": "Mon", "open": 100, "high": 110, "low": 95, "close": 105
+        }))
+        .unwrap();
+        let p = ChartPoint::from_item(&item);
+        assert!(p.has_ohlc());
+        assert_eq!(p.open, Some(100.0));
+        let skip: Item = serde_json::from_value(json!({"label": "Mon", "value": 10})).unwrap();
+        assert!(!ChartPoint::from_item(&skip).has_ohlc());
+    }
+
+    #[test]
+    fn sankey_links_resolve_ids() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "sankey",
+            "items": [
+                {"id": "rev", "label": "Revenue"},
+                {"id": "cost", "label": "Cost"}
+            ],
+            "links": [
+                {"source": "rev", "target": "cost", "value": 55},
+                {"source": "missing", "target": "cost", "value": 1}
+            ]
+        }))
+        .unwrap();
+        let nodes = sankey_nodes(&node);
+        let links = sankey_links(&nodes, &node.links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].source, 0);
+        assert_eq!(links[0].target, 1);
+        assert_eq!(links[0].value, 55.0);
+        assert_eq!(sankey_align(&node), None);
+        let aligned: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "node-align": "left",
+            "value-scale": "sqrt"
+        }))
+        .unwrap();
+        assert_eq!(sankey_align(&aligned), Some(SankeyAlign::Left));
+        assert_eq!(sankey_value_scale(&aligned), Some(SankeyValueScale::Sqrt));
+    }
+
+    #[test]
+    fn chart_interactive_is_opt_in() {
+        let omitted: Node = serde_json::from_value(json!({"type": "chart"})).unwrap();
+        assert!(
+            !chart_interactive(&omitted),
+            "Kit default is id: None; hover tooltip stays non-interactive"
+        );
+        let off: Node =
+            serde_json::from_value(json!({"type": "chart", "interactive": false})).unwrap();
+        assert!(!chart_interactive(&off));
+        let on: Node =
+            serde_json::from_value(json!({"type": "chart", "interactive": true})).unwrap();
+        assert!(chart_interactive(&on));
+    }
+
+    #[test]
+    fn pie_slice_color_kind_preserves_kit_default() {
+        assert_eq!(pie_slice_color_kind(None), ChartColorKind::KitDefault);
         assert_eq!(
-            tokens,
+            pie_slice_color_kind(Some("not-a-color")),
+            ChartColorKind::KitDefault
+        );
+        assert_eq!(
+            pie_slice_color_kind(Some("#ff0000")),
+            ChartColorKind::Custom("#ff0000".into())
+        );
+        let none: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "pie",
+            "items": [
+                {"label": "A", "value": 2},
+                {"label": "B", "value": 5}
+            ]
+        }))
+        .unwrap();
+        assert!(!pie_installs_color_fn(&chart_points(&none)));
+        let mixed: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "pie",
+            "items": [
+                {"label": "A", "value": 2, "color": "#3366ff"},
+                {"label": "B", "value": 5}
+            ]
+        }))
+        .unwrap();
+        let points = chart_points(&mixed);
+        assert!(pie_installs_color_fn(&points));
+        assert_eq!(
+            pie_slice_color_kind(points[1].color.as_deref()),
+            ChartColorKind::KitDefault
+        );
+    }
+
+    #[test]
+    fn area_partial_series_stroke_keeps_kit_default() {
+        assert_eq!(area_series_stroke_kind(None), ChartColorKind::KitDefault);
+        assert_eq!(
+            area_series_stroke_kind(Some("#ff0000")),
+            ChartColorKind::Custom("#ff0000".into())
+        );
+        let kinds = [
+            area_series_stroke_kind(Some("#ff0000")),
+            area_series_stroke_kind(None),
+        ];
+        assert_eq!(last_custom_color_index(&kinds), Some(0));
+        let later = [
+            area_series_stroke_kind(None),
+            area_series_stroke_kind(Some("#ff0000")),
+        ];
+        assert_eq!(last_custom_color_index(&later), Some(1));
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "area",
+            "series": [
+                {"stroke": "#ff0000"},
+                {}
+            ]
+        }))
+        .unwrap();
+        let meta = chart_series_meta(&node);
+        assert_eq!(meta[0].stroke.as_deref(), Some("#ff0000"));
+        assert_eq!(meta[1].stroke, None);
+        let kinds: Vec<_> = (0..2)
+            .map(|i| area_series_stroke_kind(area_stroke_hex(&meta, i, &node)))
+            .collect();
+        assert_eq!(
+            kinds,
             vec![
-                "chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"
+                ChartColorKind::Custom("#ff0000".into()),
+                ChartColorKind::KitDefault
             ]
         );
-        for i in 0..7 {
-            for j in (i + 1)..7 {
-                assert_ne!(
-                    pie_slice_token(i),
-                    pie_slice_token(j),
-                    "indices {i} and {j}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn pie_color_depends_on_index_not_label() {
-        let color_for = |index: usize, _label: &str| pie_slice_token(index);
-        assert_eq!(color_for(0, "flutter"), color_for(0, "Other"));
-        assert_eq!(color_for(0, "flutter"), "chart_1");
-        assert_ne!(color_for(0, "flutter"), color_for(1, "flutter"));
-        assert_ne!(color_for(0, "flutter"), color_for(1, "Other"));
-        assert_eq!(color_for(1, "Other"), "chart_2");
-    }
-
-    #[test]
-    fn pie_index_colors_avoid_former_label_hash_collisions() {
-        fn label_hash_bucket(label: &str) -> usize {
-            label
-                .bytes()
-                .fold(0usize, |acc, b| acc.wrapping_add(b as usize))
-                % 5
-        }
-        assert_eq!(
-            label_hash_bucket("flutter"),
-            label_hash_bucket("Other"),
-            "these labels collided on the old 5-color hash"
-        );
-        assert_ne!(pie_slice_token(0), pie_slice_token(1));
-        assert_eq!(pie_slice_token(0), "chart_1");
-        assert_eq!(pie_slice_token(1), "chart_2");
+        assert_eq!(last_custom_color_index(&kinds), Some(0));
     }
 
     #[test]
@@ -1236,6 +2160,291 @@ mod tests {
             (320.0, 180.0),
             "flex is owned by the outer wrapper; inner pie radius still needs a fallback span"
         );
+        let hbar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "alignment": "left",
+            "items": [
+                {"label": "a", "value": 1},
+                {"label": "b", "value": 2},
+                {"label": "c", "value": 3},
+                {"label": "d", "value": 4},
+                {"label": "e", "value": 5},
+                {"label": "f", "value": 6},
+                {"label": "g", "value": 7},
+                {"label": "h", "value": 8}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(chart_viewport(&hbar), (320.0, 8.0 * 28.0 + 40.0));
+    }
+
+    #[test]
+    fn chart_tick_margin_clamps_zero() {
+        let omitted: Node = serde_json::from_value(json!({"type": "chart"})).unwrap();
+        assert_eq!(chart_tick_margin(&omitted), 1);
+        let zero: Node =
+            serde_json::from_value(json!({"type": "chart", "tick-margin": 0})).unwrap();
+        assert_eq!(chart_tick_margin(&zero), 1);
+        let two: Node = serde_json::from_value(json!({"type": "chart", "tick-margin": 2})).unwrap();
+        assert_eq!(chart_tick_margin(&two), 2);
+    }
+
+    #[test]
+    fn sankey_partial_node_color_keeps_palette_index() {
+        assert_eq!(
+            sankey_node_color_kind(2, Some("#3366ff")),
+            SankeyNodeColorKind::Custom("#3366ff".into())
+        );
+        assert_eq!(
+            sankey_node_color_kind(0, None),
+            SankeyNodeColorKind::Palette(0)
+        );
+        assert_eq!(
+            sankey_node_color_kind(1, Some("not-a-color")),
+            SankeyNodeColorKind::Palette(1)
+        );
+        assert_eq!(
+            sankey_node_color_kind(4, None),
+            SankeyNodeColorKind::Palette(4)
+        );
+        assert_eq!(
+            sankey_node_color_kind(5, None),
+            SankeyNodeColorKind::Palette(0)
+        );
+        assert_eq!(chart_series_token(0), "chart_1");
+        assert_eq!(chart_series_token(4), "chart_5");
+        assert_ne!(chart_series_token(0), chart_series_token(1));
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "sankey",
+            "items": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C", "color": "#ff00aa"},
+                {"id": "d", "label": "D"},
+                {"id": "e", "label": "E"}
+            ]
+        }))
+        .unwrap();
+        let kinds: Vec<_> = sankey_nodes(&node)
+            .iter()
+            .map(|n| sankey_node_color_kind(n.index, n.color.as_deref()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SankeyNodeColorKind::Palette(0),
+                SankeyNodeColorKind::Palette(1),
+                SankeyNodeColorKind::Custom("#ff00aa".into()),
+                SankeyNodeColorKind::Palette(3),
+                SankeyNodeColorKind::Palette(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn chart_fill_gradient_and_corner_radii_parse() {
+        let per_bar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "fill-gradient": true
+        }))
+        .unwrap();
+        assert_eq!(
+            chart_fill_gradient(&per_bar),
+            Some(ChartFillGradient::PerBar)
+        );
+        let chart: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "fill-gradient": true,
+            "fill-gradient-mode": "chart"
+        }))
+        .unwrap();
+        assert_eq!(chart_fill_gradient(&chart), Some(ChartFillGradient::Chart));
+        let named: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "fill-gradient": "chart"
+        }))
+        .unwrap();
+        assert_eq!(chart_fill_gradient(&named), Some(ChartFillGradient::Chart));
+        let stops: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "fill-gradient": [
+                {"color": "#111111", "at": -1.0},
+                {"color": "#ffffff", "at": 1}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            chart_fill_gradient(&stops),
+            Some(ChartFillGradient::Stops {
+                start: "#111111".into(),
+                start_at: -1.0,
+                end: "#ffffff".into(),
+                end_at: 1.0,
+            })
+        );
+        let uniform: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "corner-radii": 4
+        }))
+        .unwrap();
+        let corners = chart_corner_radii(&uniform).unwrap();
+        assert_eq!(corners.top_left, px(4.0));
+        assert_eq!(corners.bottom_right, px(4.0));
+        let mapped: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "corner-radii": {
+                "top-left": 1,
+                "top-right": 2,
+                "bottom-right": 3,
+                "bottom-left": 4
+            }
+        }))
+        .unwrap();
+        let corners = chart_corner_radii(&mapped).unwrap();
+        assert_eq!(corners.top_left, px(1.0));
+        assert_eq!(corners.top_right, px(2.0));
+        assert_eq!(corners.bottom_right, px(3.0));
+        assert_eq!(corners.bottom_left, px(4.0));
+        let via_radius: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "corner-radius": 6
+        }))
+        .unwrap();
+        assert_eq!(chart_corner_radii(&via_radius).unwrap().top_left, px(6.0));
+    }
+
+    #[test]
+    fn chart_stroke_style_and_line_opt_in_dot() {
+        assert_eq!(chart_stroke_style_name(Some("linear")), Some("linear"));
+        assert_eq!(
+            chart_stroke_style_name(Some("step-after")),
+            Some("step-after")
+        );
+        assert_eq!(
+            chart_stroke_style_name(Some("step_after")),
+            Some("step-after")
+        );
+        assert_eq!(chart_stroke_style_name(Some("natural")), Some("natural"));
+        assert_eq!(chart_stroke_style_name(Some("nope")), None);
+        let line: Node =
+            serde_json::from_value(json!({"type": "chart", "variant": "line"})).unwrap();
+        assert!(
+            !line.dot,
+            "Kit LineChart default is no dots; :dot is opt-in"
+        );
+    }
+
+    #[test]
+    fn area_and_radar_series_values_share_the_item_model() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "area",
+            "items": [
+                {"label": "Mon", "values": [4, 8]},
+                {"label": "Tue", "value": [5, 9]}
+            ],
+            "series": [
+                {"id": "desktop", "label": "Desktop", "color": "#3366ff", "fill": "#3366ff"},
+                {"id": "mobile", "label": "Mobile", "stroke-style": "linear"}
+            ]
+        }))
+        .unwrap();
+        let points = chart_points(&node);
+        assert_eq!(points[0].values, vec![4.0, 8.0]);
+        assert_eq!(points[1].values, vec![5.0, 9.0]);
+        assert_eq!(node.series[0].fill.as_deref(), Some("#3366ff"));
+        assert_eq!(node.series[1].stroke_style.as_deref(), Some("linear"));
+    }
+
+    #[test]
+    fn pie_donut_and_sankey_layout_fields_round_trip() {
+        let pie: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "pie",
+            "inner-radius": 40,
+            "outer-radius": 70,
+            "pad-angle": 0.04,
+            "labels": true,
+            "label-gap": 12,
+            "items": [
+                {
+                    "label": "A",
+                    "value": 2,
+                    "inner-radius": 20,
+                    "outer-radius": 80
+                },
+                {"label": "B", "value": 5}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(pie.inner_radius, Some(40.0));
+        assert_eq!(pie.outer_radius, Some(70.0));
+        assert_eq!(pie.pad_angle, Some(0.04));
+        assert_eq!(pie.labels, Some(true));
+        let points = chart_points(&pie);
+        assert_eq!(points[0].inner_radius, Some(20.0));
+        assert_eq!(points[0].outer_radius, Some(80.0));
+        assert_eq!(points[1].inner_radius, None);
+        assert!(pie_uses_inner_radius_fn(&points));
+        assert!(pie_uses_outer_radius_fn(&points));
+        let donut_only_inner: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "pie",
+            "height": 160,
+            "inner-radius": 42
+        }))
+        .unwrap();
+        assert_eq!(pie_paint_outer_radius(&donut_only_inner), 64.0);
+        assert_eq!(pie_paint_outer_radius(&pie), 70.0);
+        let default_h: Node =
+            serde_json::from_value(json!({"type": "chart", "variant": "pie"})).unwrap();
+        assert_eq!(pie_paint_outer_radius(&default_h), 180.0 * 0.4);
+        let sankey: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "sankey",
+            "node-width": 14,
+            "node-padding": 20,
+            "iterations": 8,
+            "node-corner-radius": 3,
+            "link-opacity": 0.5,
+            "min-link-width": 2,
+            "node-label": false,
+            "items": [{
+                "id": "a",
+                "label": "A",
+                "label-lines": [{"text": "A", "font-size": 11}]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(sankey.node_width, Some(14.0));
+        assert_eq!(sankey.node_label, Some(false));
+        assert_eq!(sankey.items[0].label_lines[0].text, "A");
+        assert_eq!(sankey.items[0].label_lines[0].font_size, Some(11.0));
+        let radar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "radar",
+            "grid-levels": 6,
+            "items": [{"label": "Speed", "value": 8, "content": {"type": "badge", "count": 1, "children": [{"type": "label", "text": "Go"}]}}]
+        }))
+        .unwrap();
+        assert_eq!(radar.grid_levels, Some(6));
+        let points = chart_points(&radar);
+        assert_eq!(
+            points[0].content.as_ref().map(|n| n.kind.as_str()),
+            Some("badge")
+        );
+        let candle: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "candlestick",
+            "body-width-ratio": 1.5,
+            "x-axis": false
+        }))
+        .unwrap();
+        assert_eq!(chart_body_width_ratio(&candle), Some(1.5));
+        assert_eq!(candle.body_width_ratio, Some(1.5));
+        assert_eq!(candle.x_axis, Some(false));
     }
 
     fn settings_page(value: serde_json::Value) -> Item {

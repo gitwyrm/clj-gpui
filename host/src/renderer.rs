@@ -1318,7 +1318,10 @@ impl RootView {
             "date-picker" => self.render_date_picker(node, &key, window, cx),
             "editor" => self.render_editor(node, &key, window, cx),
             "virtual-list" => self.render_virtual_list(node, &key, window, cx),
-            "chart" => viewport_sized(extra::paint_chart(node, &key, cx), node, 180.0, cx),
+            "chart" => {
+                let default_h = extra::chart_viewport(node).1;
+                viewport_sized(extra::paint_chart(node, &key, cx), node, default_h, cx)
+            }
             "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
                 .child(extra::paint_markdown(node, &key))
                 .into_any_element(),
@@ -5114,6 +5117,9 @@ mod accordion_control_tests {
 #[cfg(test)]
 mod widget_wrap_tests {
     use super::{Node, content_wrap, context_menu_wrap, outer_layout, viewport_wrap};
+    use crate::extra;
+    use crate::protocol::Item;
+    use serde_json::json;
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {
@@ -5217,6 +5223,51 @@ mod widget_wrap_tests {
         assert!(wrap.flex_fill);
         assert!(wrap.fill_width);
         assert_eq!(wrap.default_height, None);
+    }
+
+    #[test]
+    fn chart_outer_viewport_uses_horizontal_bar_height() {
+        let node = Node {
+            kind: "chart".into(),
+            variant: Some("bar".into()),
+            alignment: Some("left".into()),
+            items: (0..8)
+                .map(|i| Item {
+                    id: Some(format!("r{i}")),
+                    label: Some(format!("row-{i}")),
+                    value: Some(json!(10 + i)),
+                    ..Item::default()
+                })
+                .collect(),
+            ..Node::default()
+        };
+        let default_h = extra::chart_viewport(&node).1;
+        let wrap = viewport_wrap(&node, default_h);
+        assert_eq!(wrap.default_height, Some(8.0 * 28.0 + 40.0));
+        assert_eq!(wrap.height, None);
+        assert!(!wrap.flex_fill);
+    }
+
+    #[test]
+    fn chart_outer_viewport_keeps_flex_without_fixed_height() {
+        let node = Node {
+            kind: "chart".into(),
+            variant: Some("bar".into()),
+            alignment: Some("left".into()),
+            flex: Some(1.0),
+            items: (0..8)
+                .map(|i| Item {
+                    id: Some(format!("r{i}")),
+                    label: Some(format!("row-{i}")),
+                    value: Some(json!(1)),
+                    ..Item::default()
+                })
+                .collect(),
+            ..Node::default()
+        };
+        let wrap = viewport_wrap(&node, extra::chart_viewport(&node).1);
+        assert_eq!(wrap.default_height, None);
+        assert!(wrap.flex_fill);
     }
 
     #[test]

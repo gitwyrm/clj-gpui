@@ -406,17 +406,53 @@
 (defn- docs-panel [_]
   (ui/vstack
    {:gap 12}
+   (ui/label "Disk-style horizontal bars (cljdu)" {:font-size 13})
+   (ui/horizontal-bar-chart
+    [{:id :src :label "src" :value 412}
+     {:id :target :label "target" :value 128}
+     {:id :docs :label "docs" :value 48}
+     {:id :test :label "test" :value 36}
+     {:id :host :label "host" :value 29}
+     {:id :examples :label "examples" :value 22}
+     {:id :other :label "Other" :value 19}
+     {:id :tmp :label "tmp" :value 11}]
+    {:labels true :value-axis true})
    (ui/chart :line [{:id :a :label "Mon" :value 4}
                     {:id :b :label "Tue" :value 8}
                     {:id :c :label "Wed" :value 6}
                     {:id :d :label "Thu" :value 10}]
-             {:height 160 :flex 1})
+             {:name "Desktop" :height 160 :flex 1 :interactive true})
    (ui/bar-chart [{:id :a :label "A" :value 3}
                   {:id :b :label "B" :value 7}]
-                 {:width 220 :height 140})
-   (ui/pie-chart [{:id :a :label "A" :value 2}
+                 {:name "Count" :width 220 :height 140 :corner-radii 4 :fill-gradient true})
+   (ui/area-chart [{:id :a :label "Mon" :values [4 2]}
+                   {:id :b :label "Tue" :values [8 5]}
+                   {:id :c :label "Wed" :values [6 4]}]
+                  {:series [{:id :desk :label "Desktop" :stroke "#ff0000"}
+                            {:id :mob :label "Mobile"}]
+                   :height 140})
+   (ui/radar-chart [{:id :speed :label "Speed" :values [80 55]
+                     :content (ui/badge 1 (ui/label "Sp"))}
+                    {:id :range :label "Range" :values [40 90]}
+                    {:id :rel :label "Reliability" :values [70 60]}]
+                   {:series [{:id :a :label "A"} {:id :b :label "B"}]
+                    :height 200
+                    :dot true
+                    :grid-levels 5})
+   (ui/candlestick-chart [{:id :mon :label "Mon" :open 100 :high 110 :low 95 :close 105}
+                          {:id :tue :label "Tue" :open 105 :high 118 :low 101 :close 112}
+                          {:id :wed :label "Wed" :open 112 :high 115 :low 98 :close 101}]
+                         {:height 160 :body-width-ratio 0.7})
+   (ui/sankey-chart [{:id :rev :label "Revenue"}
+                     {:id :profit :label "Profit"}
+                     {:id :cost :label "Cost"}]
+                    {:links [{:source :rev :target :profit :value 45}
+                             {:source :rev :target :cost :value 55}]
+                     :height 180
+                     :node-corner-radius 3})
+   (ui/pie-chart [{:id :a :label "A" :value 2 :color "#3366ff"}
                   {:id :b :label "B" :value 5}]
-                 {:width 180 :height 160})
+                 {:width 180 :height 160 :inner-radius 42 :labels true})
    (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"
                 {:height 140})))
 

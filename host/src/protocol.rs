@@ -3,7 +3,7 @@ use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub const PROTOCOL_VERSION: u64 = 9;
+pub const PROTOCOL_VERSION: u64 = 10;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -406,6 +406,56 @@ pub struct Item {
     pub max: Option<f32>,
     #[serde(default)]
     pub step: Option<f32>,
+    /// Chart item fill (hex). Bar / pie / sankey node.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Radar series values when a dimension has more than one number.
+    /// A JSON array on `value` is also accepted.
+    #[serde(default)]
+    pub values: Option<Value>,
+    /// Candlestick OHLC. Omitted on other items.
+    #[serde(default)]
+    pub open: Option<f32>,
+    #[serde(default)]
+    pub high: Option<f32>,
+    #[serde(default)]
+    pub low: Option<f32>,
+    #[serde(default)]
+    pub close: Option<f32>,
+    /// Sankey link endpoints (node id or label).
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Area / radar series fill (hex). Distinct from `color` (stroke / bar fill).
+    #[serde(default)]
+    pub fill: Option<String>,
+    /// Area / radar series stroke (hex). `:color` is the same stroke when `stroke` is omitted.
+    #[serde(default)]
+    pub stroke: Option<String>,
+    /// Line / area series stroke style: `natural`, `linear`, `step-after`.
+    #[serde(default, rename = "stroke-style")]
+    pub stroke_style: Option<String>,
+    /// Pie per-slice inner radius (pixels). Kit `inner_radius_fn` from this value.
+    #[serde(default, rename = "inner-radius")]
+    pub inner_radius: Option<f32>,
+    /// Pie per-slice outer radius (pixels). Kit `outer_radius_fn` from this value.
+    #[serde(default, rename = "outer-radius")]
+    pub outer_radius: Option<f32>,
+    /// Sankey custom label lines. When any node sets this, Kit `.labels()` wins.
+    #[serde(default, rename = "label-lines")]
+    pub label_lines: Vec<ChartLabelLine>,
+}
+
+/// One line of a custom Sankey node label (`SankeyLabel`).
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+pub struct ChartLabelLine {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default, rename = "font-size")]
+    pub font_size: Option<f32>,
 }
 
 impl Item {
@@ -551,6 +601,10 @@ pub struct Node {
     pub disabled: bool,
     #[serde(default)]
     pub tooltip: Option<String>,
+    /// Chart hover tooltip. Kit default is `id: None` (non-interactive). `true` calls `.id(...)`.
+    /// Not the string `tooltip` field on any node.
+    #[serde(default)]
+    pub interactive: Option<bool>,
     /// Selected / numeric / string value. JSON number, string, or bool.
     #[serde(default)]
     pub value: Option<Value>,
@@ -642,6 +696,113 @@ pub struct Node {
     /// not used as the accessible name.
     #[serde(default, rename = "accessibility-label")]
     pub accessibility_label: Option<String>,
+    /// `BarChart` alignment: `bottom` (default), `top`, `left`, `right`.
+    /// `left` is horizontal bars growing right (ncdu / cljdu).
+    #[serde(default)]
+    pub alignment: Option<String>,
+    /// Chart: show band-axis labels. Default true.
+    #[serde(default, rename = "label-axis")]
+    pub label_axis: Option<bool>,
+    /// Chart: show value-axis tick labels. Default false.
+    #[serde(default, rename = "value-axis")]
+    pub value_axis: Option<bool>,
+    /// Chart: stride over band-axis category labels. Default 1.
+    #[serde(default, rename = "tick-margin")]
+    pub tick_margin: Option<u32>,
+    /// Chart: value-axis intervals. Default 4.
+    #[serde(default, rename = "value-tick-count")]
+    pub value_tick_count: Option<u32>,
+    /// Chart: grid lines. Default true.
+    #[serde(default)]
+    pub grid: Option<bool>,
+    /// Bar chart: paint numeric labels on bars. Default false.
+    #[serde(default)]
+    pub labels: Option<bool>,
+    /// Sankey links. Nodes stay on `items`.
+    #[serde(default)]
+    pub links: Vec<Item>,
+    /// Radar / area series names, colors, fills, in value-index order.
+    #[serde(default)]
+    pub series: Vec<Item>,
+    /// Sankey `SankeyAlign`: `justify` (default), `left`, `right`, `center`.
+    #[serde(default, rename = "node-align")]
+    pub node_align: Option<String>,
+    /// Sankey `SankeyValueScale`: `linear` (default) or `sqrt`.
+    #[serde(default, rename = "value-scale")]
+    pub value_scale: Option<String>,
+    /// Chart tooltip series name (`LineChart` / `BarChart` `.name()`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Line / area stroke color (hex). Not layout `:color`.
+    #[serde(default)]
+    pub stroke: Option<String>,
+    /// Line / area stroke style: `natural` (default), `linear`, `step-after`.
+    #[serde(default, rename = "stroke-style")]
+    pub stroke_style: Option<String>,
+    /// Line / area / candlestick x-axis. Default true. Not bar `label-axis`.
+    #[serde(default, rename = "x-axis")]
+    pub x_axis: Option<bool>,
+    /// Bar uniform corner radius in pixels. `corner-radii` wins when both set.
+    #[serde(default, rename = "corner-radius")]
+    pub corner_radius: Option<f32>,
+    /// Bar `Corners`: number (uniform) or `{top-left, top-right, bottom-right, bottom-left}`.
+    #[serde(default, rename = "corner-radii")]
+    pub corner_radii: Option<Value>,
+    /// Bar `fill_gradient`: `true` / `"bar"` per-bar, `"chart"` chart-wide, or two stops.
+    #[serde(default, rename = "fill-gradient")]
+    pub fill_gradient: Option<Value>,
+    /// Bar fill-gradient helper when `fill-gradient` is `true`: `bar` (default) or `chart`.
+    #[serde(default, rename = "fill-gradient-mode")]
+    pub fill_gradient_mode: Option<String>,
+    /// Pie inner radius in pixels (donut). Kit default 0.
+    #[serde(default, rename = "inner-radius")]
+    pub inner_radius: Option<f32>,
+    /// Pie / radar outer radius in pixels. Omitted pie paint uses height×0.4
+    /// (Kit's layout default; Kit's paint path does not apply that fallback).
+    #[serde(default, rename = "outer-radius")]
+    pub outer_radius: Option<f32>,
+    /// Pie pad angle.
+    #[serde(default, rename = "pad-angle")]
+    pub pad_angle: Option<f32>,
+    /// Pie / radar / sankey label color (hex).
+    #[serde(default, rename = "label-color")]
+    pub label_color: Option<String>,
+    /// Pie label leader-line color (hex).
+    #[serde(default, rename = "label-line-color")]
+    pub label_line_color: Option<String>,
+    /// Pie / radar / sankey label gap in pixels.
+    #[serde(default, rename = "label-gap")]
+    pub label_gap: Option<f32>,
+    /// Radar concentric grid rings. Kit default 4; Kit clamps to ≥1.
+    #[serde(default, rename = "grid-levels")]
+    pub grid_levels: Option<u32>,
+    /// Candlestick body width as a fraction of the band. Kit default 0.8.
+    #[serde(default, rename = "body-width-ratio")]
+    pub body_width_ratio: Option<f32>,
+    /// Sankey node rectangle width. Kit default 10.
+    #[serde(default, rename = "node-width")]
+    pub node_width: Option<f32>,
+    /// Sankey vertical gap between nodes in a column. Kit default 16.
+    #[serde(default, rename = "node-padding")]
+    pub node_padding: Option<f32>,
+    /// Sankey relaxation passes. Kit default 6.
+    #[serde(default)]
+    pub iterations: Option<u32>,
+    /// Sankey node corner radius in pixels. Kit default 0.
+    #[serde(default, rename = "node-corner-radius")]
+    pub node_corner_radius: Option<f32>,
+    /// Sankey link ribbon opacity. Kit default 0.3.
+    #[serde(default, rename = "link-opacity")]
+    pub link_opacity: Option<f32>,
+    /// Sankey minimum ribbon thickness. Kit default 1.
+    #[serde(default, rename = "min-link-width")]
+    pub min_link_width: Option<f32>,
+    /// Sankey name labels. Default true (convenience; Kit draws none unless set).
+    #[serde(default, rename = "node-label")]
+    pub node_label: Option<bool>,
+    /// Sankey value labels. Default true (convenience; Kit draws none unless set).
+    #[serde(default, rename = "value-label")]
+    pub value_label: Option<bool>,
 }
 
 impl Node {
@@ -676,6 +837,8 @@ impl Node {
                 .any(|child| child.contains_text(needle))
             || self.items.iter().any(|item| item_contains(item, needle))
             || self.options.iter().any(|item| item_contains(item, needle))
+            || self.links.iter().any(|item| item_contains(item, needle))
+            || self.series.iter().any(|item| item_contains(item, needle))
             || self
                 .trigger
                 .as_ref()
@@ -1185,7 +1348,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(PROTOCOL_VERSION, 10);
     }
 
     #[test]
@@ -1366,7 +1529,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(PROTOCOL_VERSION, 10);
     }
 
     #[test]
@@ -1419,6 +1582,53 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(chart.items[0].number_value(), Some(3.5));
+
+        let hbar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "alignment": "left",
+            "labels": true,
+            "value-axis": true,
+            "items": [{"id": "src", "label": "src", "value": 412, "color": "#3366ff"}]
+        }))
+        .unwrap();
+        assert_eq!(hbar.alignment.as_deref(), Some("left"));
+        assert_eq!(hbar.labels, Some(true));
+        assert_eq!(hbar.value_axis, Some(true));
+        assert_eq!(hbar.items[0].color.as_deref(), Some("#3366ff"));
+
+        let candle: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "candlestick",
+            "items": [{"label": "Mon", "open": 100, "high": 110, "low": 95, "close": 105}]
+        }))
+        .unwrap();
+        assert_eq!(candle.items[0].open, Some(100.0));
+        assert_eq!(candle.items[0].close, Some(105.0));
+
+        let sankey: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "sankey",
+            "node-align": "left",
+            "value-scale": "sqrt",
+            "items": [{"id": "rev", "label": "Revenue"}],
+            "links": [{"source": "rev", "target": "cost", "value": 55}]
+        }))
+        .unwrap();
+        assert_eq!(sankey.node_align.as_deref(), Some("left"));
+        assert_eq!(sankey.value_scale.as_deref(), Some("sqrt"));
+        assert_eq!(sankey.links[0].source.as_deref(), Some("rev"));
+        assert_eq!(sankey.links[0].number_value(), Some(55.0));
+
+        let radar: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "radar",
+            "items": [{"label": "Speed", "values": [80, 60]}],
+            "series": [{"id": "desktop", "label": "Desktop"}]
+        }))
+        .unwrap();
+        assert!(radar.items[0].values.as_ref().unwrap().is_array());
+        assert_eq!(radar.series[0].label_or_id(), "Desktop");
 
         let date: Node = serde_json::from_value(json!({
             "type": "date-picker",

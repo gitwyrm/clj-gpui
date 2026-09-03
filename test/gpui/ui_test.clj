@@ -24,7 +24,10 @@
   (is (some? (ns-resolve 'gpui.ui 'table-row)))
   (is (some? (ns-resolve 'gpui.ui 'table-head)))
   (is (some? (ns-resolve 'gpui.ui 'table-cell)))
-  (is (some? (ns-resolve 'gpui.ui 'table-caption))))
+  (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
+  (is (some? (ns-resolve 'gpui.ui 'sankey-chart))))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
@@ -96,6 +99,12 @@
   (is (= {:id "clj" :label "Clojure"}
          (ui/option-item {:id :clj :label "Clojure"})))
   (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
+  (is (= "#ff0000" (:stroke (ui/option-item {:id :desk :stroke "#ff0000"}))))
+  (is (= 20 (:inner-radius (ui/option-item {:id :a :value 2 :inner-radius 20 :outer-radius 80}))))
+  (is (= [80 60] (:values (ui/option-item {:id :s :label "Speed" :values [80 60]}))))
+  (is (= [80 60] (:value (ui/option-item {:id :s :label "Speed" :value [80 60]}))))
+  (is (= "rev" (:source (ui/option-item {:source :rev :target :cost :value 55}))))
+  (is (= 100 (:open (ui/option-item {:id :mon :label "Mon" :open 100 :close 105}))))
   (is (true? (:checked (ui/option-item {:id :notify :label "N" :checked true}))))
   (is (= "left" (:side (ui/option-item {:id :files :side :left :label "Files"}))))
   (is (= ["a" "b"] (mapv :id (ui/option-items [:a nil :b]))))
@@ -700,6 +709,85 @@
       (is (= :chart (:type n)))
       (is (= "bar" (:variant n)))
       (is (= 3.5 (get-in n [:items 0 :value]))))
+    (let [n (ui/horizontal-bar-chart
+             [{:id :src :label "src" :value 412 :color "#3366ff"}]
+             {:labels true :value-axis true :height 220})]
+      (is (= "bar" (:variant n)))
+      (is (= "left" (:alignment n)))
+      (is (true? (:labels n)))
+      (is (true? (:value-axis n)))
+      (is (= "#3366ff" (get-in n [:items 0 :color]))))
+    (let [n (ui/radar-chart [{:id :speed :label "Speed" :values [80 60]
+                              :content (ui/badge 1 (ui/label "Sp"))}]
+                            {:series [{:id :desktop :label "Desktop"}
+                                      {:id :mobile :label "Mobile"}]})]
+      (is (= "radar" (:variant n)))
+      (is (= [80 60] (get-in n [:items 0 :values])))
+      (is (= "desktop" (get-in n [:series 0 :id])))
+      (is (= :badge (get-in n [:items 0 :content :type]))))
+    (let [n (ui/candlestick-chart [{:id :mon :label "Mon"
+                                    :open 100 :high 110 :low 95 :close 105}]
+                                  {:body-width-ratio 1.5})]
+      (is (= "candlestick" (:variant n)))
+      (is (= 100 (get-in n [:items 0 :open])))
+      (is (= 105 (get-in n [:items 0 :close])))
+      (is (= 1.5 (:body-width-ratio n))))
+    (let [n (ui/sankey-chart [{:id :rev :label "Revenue"} {:id :cost :label "Cost"}]
+                             {:links [{:source :rev :target :cost :value 55}]
+                              :node-align :left
+                              :value-scale :sqrt})]
+      (is (= "sankey" (:variant n)))
+      (is (= "rev" (get-in n [:links 0 :source])))
+      (is (= "cost" (get-in n [:links 0 :target])))
+      (is (= 55 (get-in n [:links 0 :value])))
+      (is (= "left" (:node-align n)))
+      (is (= "sqrt" (:value-scale n))))
+    (let [n (ui/chart :bar [{:id :a :label "A" :value 1}]
+                      {:name "Size"
+                       :tick-margin 0
+                       :fill-gradient true
+                       :fill-gradient-mode :chart
+                       :corner-radii 4
+                       :stroke-style :linear})]
+      (is (= "Size" (:name n)))
+      (is (= 0 (:tick-margin n)))
+      (is (true? (:fill-gradient n)))
+      (is (= "chart" (:fill-gradient-mode n)))
+      (is (= 4 (:corner-radii n)))
+      (is (= "linear" (:stroke-style n))))
+    (let [n (ui/chart :line [{:id :a :label "A" :value 1}] {:interactive true})]
+      (is (true? (:interactive n))))
+    (let [n (ui/area-chart [{:id :mon :label "Mon" :values [4 8]}]
+                           {:series [{:id :desk :label "Desktop" :stroke "#ff0000"}
+                                     {:id :mob :label "Mobile"}]})]
+      (is (= "area" (:variant n)))
+      (is (= "#ff0000" (get-in n [:series 0 :stroke])))
+      (is (nil? (get-in n [:series 1 :stroke]))))
+    (let [n (ui/area-chart [{:id :mon :label "Mon" :values [4 8]}]
+                           {:series [{:id :desk :label "Desktop" :fill "#3366ff"
+                                      :stroke-style :step-after}
+                                     {:id :mob :label "Mobile"}]})]
+      (is (= "area" (:variant n)))
+      (is (= [4 8] (get-in n [:items 0 :values])))
+      (is (= "#3366ff" (get-in n [:series 0 :fill])))
+      (is (= "step-after" (get-in n [:series 0 :stroke-style]))))
+    (let [n (ui/pie-chart [{:id :a :label "A" :value 2 :inner-radius 20 :outer-radius 80}
+                           {:id :b :label "B" :value 5}]
+                          {:inner-radius 40 :labels true :pad-angle 0.04})]
+      (is (= 40 (:inner-radius n)))
+      (is (true? (:labels n)))
+      (is (= 0.04 (:pad-angle n)))
+      (is (= 20 (get-in n [:items 0 :inner-radius])))
+      (is (= 80 (get-in n [:items 0 :outer-radius])))
+      (is (nil? (get-in n [:items 1 :inner-radius]))))
+    (let [n (ui/sankey-chart [{:id :rev :label "Revenue"
+                               :label-lines [{:text "Rev" :font-size 11}]}]
+                             {:links [{:source :rev :target :cost :value 1}]
+                              :node-width 14
+                              :node-label false})]
+      (is (= 14 (:node-width n)))
+      (is (false? (:node-label n)))
+      (is (= "Rev" (get-in n [:items 0 :label-lines 0 :text]))))
     (is (= :markdown (:type (ui/markdown "# Hi"))))
     (is (= :html (:type (ui/html "<p>x</p>"))))
     (let [n (ui/sidebar [{:id :home :label "Home" :icon :check}]

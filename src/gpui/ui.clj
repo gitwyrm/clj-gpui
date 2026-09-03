@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  9)
+  10)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -272,22 +272,35 @@
 
 (declare option-items)
 
+(defn- chart-label-line
+  [line]
+  (if (map? line)
+    (cond-> {:text (str (or (:text line) (:label line) ""))}
+      (some? (:color line)) (assoc :color (str (:color line)))
+      (some? (:font-size line)) (assoc :font-size (:font-size line)))
+    {:text (str line)}))
+
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
-  `:label` / `:text`, `:disabled`, `:on-click`, and `:content`."
+  `:label` / `:text`, `:disabled`, `:on-click`, and `:content`. Chart
+  items also keep `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
+  `:outer-radius`, and `:label-lines`."
   [x]
   (cond
     (nil? x) nil
     (map? x)
-    (let [id (or (:id x) (:value x) (:label x) (:text x))
-          label (or (:label x) (:text x) (:id x) (:value x))
-          value (:value x)
+    (let [value (:value x)
+          scalar-value? (or (nil? value)
+                            (string? value)
+                            (not (sequential? value)))
+          id (or (:id x) (when scalar-value? value) (:label x) (:text x))
+          label (or (:label x) (:text x) (:id x) (when scalar-value? value))
           content (:content x)]
       (cond-> {:id (wire-id id)
                :label (when (some? label) (str label))}
-        (some? value) (assoc :text (str value))
+        (and (some? value) scalar-value?) (assoc :text (str value))
         (contains? x :text) (assoc :text (str (:text x)))
         (true? (:disabled x)) (assoc :disabled true)
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
@@ -303,9 +316,30 @@
         (some? (:min x)) (assoc :min (:min x))
         (some? (:max x)) (assoc :max (:max x))
         (some? (:step x)) (assoc :step (:step x))
+        (some? (:color x)) (assoc :color (str (:color x)))
+        (some? (:stroke x)) (assoc :stroke (str (:stroke x)))
+        (some? (:fill x)) (assoc :fill (str (:fill x)))
+        (some? (:inner-radius x)) (assoc :inner-radius (:inner-radius x))
+        (some? (:outer-radius x)) (assoc :outer-radius (:outer-radius x))
+        (some? (:stroke-style x)) (assoc :stroke-style (if (keyword? (:stroke-style x))
+                                                         (name (:stroke-style x))
+                                                         (str (:stroke-style x))))
+        (seq (:label-lines x)) (assoc :label-lines (mapv chart-label-line (:label-lines x)))
+        (sequential? (:values x)) (assoc :values (vec (:values x)))
+        (some? (:open x)) (assoc :open (:open x))
+        (some? (:high x)) (assoc :high (:high x))
+        (some? (:low x)) (assoc :low (:low x))
+        (some? (:close x)) (assoc :close (:close x))
+        (some? (:source x)) (assoc :source (wire-id (:source x)))
+        (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
         (seq (:items x)) (assoc :items (option-items (:items x)))
-        (and (contains? x :id) (contains? x :value)) (assoc :value value)))
+        (number? value) (assoc :value value)
+        (and (sequential? value) (not (string? value))) (assoc :value (vec value))
+        (and (contains? x :id) (contains? x :value)
+             (not (number? value))
+             (not (and (sequential? value) (not (string? value)))))
+        (assoc :value value)))
     (keyword? x) {:id (wire-id x) :label (name x)}
     :else {:id (str x) :label (str x)}))
 
@@ -1668,21 +1702,58 @@
                     :items (option-items raw)}
                    opts))))
 
-(defn chart
-  "Series chart. `kind` is `:line` (default), `:bar`, `:area`, or `:pie`.
-  Points are `{id, label, value}` maps (`value` is the y / slice).
+(defn- chart-opts
+  "Stringify Kit alignment keys and normalize `:links` / `:series` items."
+  [opts]
+  (let [opts (or opts {})]
+    (cond-> opts
+      (keyword? (:alignment opts)) (update :alignment name)
+      (keyword? (:node-align opts)) (update :node-align name)
+      (keyword? (:value-scale opts)) (update :value-scale name)
+      (keyword? (:stroke-style opts)) (update :stroke-style name)
+      (keyword? (:fill-gradient opts)) (update :fill-gradient name)
+      (keyword? (:fill-gradient-mode opts)) (update :fill-gradient-mode name)
+      (seq (:links opts)) (update :links option-items)
+      (seq (:series opts)) (update :series option-items))))
 
-  (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})"
+(defn chart
+  "Series chart. `kind` is `:line` (default), `:bar`, `:area`, `:pie`,
+  `:radar`, `:candlestick`, or `:sankey`.
+
+  Convenience helpers (`horizontal-bar-chart`, `radar-chart`, …) stay;
+  `ui/chart` itself does not hide Kit 0.6 builders. Points are
+  `{id, label, value}` maps (`:values` for multi-series area/radar).
+  Bar charts take Kit `:alignment` (`:bottom` default, `:left` for
+  horizontal bars growing right). `:labels true` paints values on bars
+  or pie slice labels. Radar dimensions may use `:values [a b]` (or
+  `:value [a b]`) with `:series` names/colors/fills. Candlesticks use
+  `:open` / `:high` / `:low` / `:close`. Sankey nodes are `points`;
+  flows are `:links [{:source :target :value}]`.
+
+  Kit-named options include `:name`, `:stroke`, `:stroke-style`
+  (`:natural` / `:linear` / `:step-after`), `:dot`, `:tick-margin`
+  (clamped to ≥1 on the host), `:x-axis`, `:grid`, `:corner-radii`,
+  `:fill-gradient` (stop `at` is unclamped), `:inner-radius` (donut),
+  `:outer-radius`, `:pad-angle`, `:label-color`, `:label-gap`,
+  `:grid-levels`, `:body-width-ratio` (unclamped), `:interactive`
+  (Kit hover tooltip; default off), and Sankey `:node-width` /
+  `:node-padding` / `:iterations` / `:node-corner-radius` /
+  `:link-opacity` / `:min-link-width` / `:label-lines`. Pie slices may
+  set per-item `:inner-radius` / `:outer-radius` and `:color` (Kit
+  `chart_2` when omitted). Radar `:content` is any clj-gpui widget.
+
+  (ui/chart :line [{:id :a :label \"A\" :value 10}] {:height 180})
+  (ui/chart :bar dirs {:alignment :left :labels true :value-axis true})"
   ([kind points]
    (chart kind points nil))
   ([kind points opts]
    (merge-widget {:type :chart
                   :variant (if (keyword? kind) (name kind) (str (or kind "line")))
                   :items (option-items (or points []))}
-                 (or opts {}))))
+                 (chart-opts opts))))
 
 (defn line-chart
-  "See `chart` with `:line`."
+  "See `chart` with `:line`. Kit default has no dots; pass `:dot true` to show them."
   ([points] (chart :line points nil))
   ([points opts] (chart :line points opts)))
 
@@ -1691,15 +1762,46 @@
   ([points] (chart :bar points nil))
   ([points opts] (chart :bar points opts)))
 
+(defn horizontal-bar-chart
+  "Bar chart with Kit `:alignment :left` (bars grow right).
+
+  Same points as `bar-chart`. Intended for category lists such as
+  directory sizes in cljdu.
+
+  (ui/horizontal-bar-chart [{:id :src :label \"src\" :value 412}]
+                           {:labels true :value-axis true})"
+  ([points] (chart :bar points {:alignment :left}))
+  ([points opts] (chart :bar points (merge {:alignment :left} opts))))
+
 (defn area-chart
-  "See `chart` with `:area`."
+  "See `chart` with `:area`. Multiple `:values` plus `:series` overlay Kit `y()` series."
   ([points] (chart :area points nil))
   ([points opts] (chart :area points opts)))
 
 (defn pie-chart
-  "See `chart` with `:pie`."
+  "See `chart` with `:pie`. `:inner-radius` makes a donut; `:labels true` draws slice labels.
+  Per-slice `:inner-radius` / `:outer-radius` map to Kit `inner_radius_fn` / `outer_radius_fn`.
+  Omit slice `:color` to keep Kit `chart_2`. Omitted `:outer-radius` uses the chart height × 0.4 so the ring paints (Kit's layout default; Kit's paint path does not)."
   ([points] (chart :pie points nil))
   ([points opts] (chart :pie points opts)))
+
+(defn radar-chart
+  "See `chart` with `:radar`. Dimension `:content` is a Kit `RadarLabel::Element`
+  (badge, avatar, and other clj-gpui widgets, not only the static overlay subset)."
+  ([points] (chart :radar points nil))
+  ([points opts] (chart :radar points opts)))
+
+(defn candlestick-chart
+  "See `chart` with `:candlestick`. Points need `:open` `:high` `:low` `:close`.
+  `:body-width-ratio` and `:x-axis` map to Kit (ratio is not clamped)."
+  ([points] (chart :candlestick points nil))
+  ([points opts] (chart :candlestick points opts)))
+
+(defn sankey-chart
+  "See `chart` with `:sankey`. `points` are nodes; pass `:links` in `opts`.
+  Node `:label-lines` is Kit custom `SankeyLabel`s."
+  ([points] (chart :sankey points nil))
+  ([points opts] (chart :sankey points opts)))
 
 (defn markdown
   "Selectable markdown `TextView`. `:height` or `:flex 1` makes it scroll.

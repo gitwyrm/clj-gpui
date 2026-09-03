@@ -316,7 +316,17 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/date-picker "2026-09-02" {:on-change set!})
 (ui/editor src {:language "rust" :height 200 :on-change set!})
 (ui/virtual-list items {:selected id :on-change set! :height 200})
-(ui/chart :line [{:id :a :label "A" :value 10}] {:height 180})
+(ui/chart :line [{:id :a :label "A" :value 10}] {:height 180 :name "Desktop" :interactive true})
+(ui/horizontal-bar-chart [{:id :src :label "src" :value 412}]
+                         {:labels true :value-axis true})
+(ui/area-chart [{:id :mon :label "Mon" :values [4 8]}]
+               {:series [{:id :desk :label "Desktop" :stroke "#ff0000"} {:id :mob :label "Mobile"}]})
+(ui/pie-chart slices {:inner-radius 42 :labels true})
+(ui/radar-chart [{:id :speed :label "Speed" :values [80 55]
+                  :content (ui/badge 1 (ui/label "Sp"))}]
+                {:series [{:id :a :label "A"} {:id :b :label "B"}]})
+(ui/sankey-chart [{:id :rev :label "Revenue"} {:id :cost :label "Cost"}]
+                 {:links [{:source :rev :target :cost :value 55}]})
 (ui/markdown "# Hello")
 (ui/sidebar items {:selected id :side :left :on-change set!})
 (ui/settings pages {:on-change (fn [{:keys [id value]}])})
