@@ -107,15 +107,11 @@ pub fn native_window_id(window: &gpui::Window) -> Option<u32> {
     }
 }
 
-/// Disable GPUI's macOS "don't paint while occluded" display-link gate.
-/// No-op on other platforms. Call from `capture-preview`, not window open.
-pub fn keep_painting_when_occluded() {
-    #[cfg(target_os = "macos")]
-    preview_macos::keep_painting_when_occluded();
-}
-
-/// Install the occlusion override if needed, then restart the display link.
-/// Main thread, when a `GPUIWindow` already exists.
+/// Disable GPUI's macOS "don't paint while occluded" display-link gate
+/// (zed#63217) and restart the display link. No-op on other platforms.
+/// Call from `capture-preview` on the main thread, after a `GPUIWindow`
+/// exists — not during window open, so ordinary apps keep GPUI's occlusion
+/// power-saving until Preview is used.
 pub fn restart_occluded_display_link() {
     #[cfg(target_os = "macos")]
     preview_macos::restart_occluded_display_link();
@@ -307,7 +303,6 @@ mod tests {
 
     #[test]
     fn keep_painting_helpers_do_not_panic() {
-        keep_painting_when_occluded();
         restart_occluded_display_link();
     }
 }

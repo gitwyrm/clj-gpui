@@ -78,18 +78,13 @@ pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
     (number > 0).then_some(number as u32)
 }
 
-/// Keep GPUI's CVDisplayLink running while Evalight covers the window.
+/// Install the occlusion override if needed, then re-run GPUI's occlusion
+/// handler so a display link that already stopped is started again.
 ///
 /// GPUI has no public `set_draw_while_occluded` in 0.2.2. Overriding the
 /// getter on `GPUIWindow` / `GPUIPanel` only (not `NSWindow`) makes
 /// `start_display_link` and `windowDidChangeOcclusionState:` take the visible
-/// branch. Install from `capture-preview`, not window creation.
-pub fn keep_painting_when_occluded() {
-    install_occlusion_override();
-}
-
-/// After a window exists, re-run GPUI's occlusion handler so a display link
-/// that already stopped is started again (the override makes it see Visible).
+/// branch. Call from `capture-preview`, not window creation.
 pub fn restart_occluded_display_link() {
     install_occlusion_override();
     kick_gpui_windows_to_paint();
