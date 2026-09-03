@@ -5,17 +5,32 @@
 //! still return empty once that window is occluded. Capture therefore runs
 //! in-process: ScreenCaptureKit's desktop-independent window filter first,
 //! then CoreGraphics `CGWindowListCreateImageFromArray` of only our window.
+//!
+//! GPUI 0.2.2 also **stops painting** when AppKit reports the window occluded
+//! ([zed#63217](https://github.com/zed-industries/zed/issues/63217)):
+//! `start_display_link` returns early unless `occlusionState` contains
+//! `NSWindowOcclusionStateVisible`, and `windowDidChangeOcclusionState:` stops
+//! the CVDisplayLink when that bit is clear. Zed's later
+//! `WindowOptions::inactive_frame_interval`
+//! ([zed#62628](https://github.com/zed-industries/zed/pull/62628)) is unrelated:
+//! it only throttles animation while unfocused, is not in crates.io `gpui`
+//! 0.2.2, and does not keep the display link running while covered.
+//! This module overrides `-[GPUIWindow occlusionState]` (and `GPUIPanel`) so
+//! GPUI keeps presenting into the Metal layer that ScreenCaptureKit reads.
 
 #![allow(deprecated)] // CGWindowListCreateImage*; ScreenCaptureKit is preferred.
 
+use std::ffi::c_char;
 use std::ptr::NonNull;
-use std::sync::mpsc;
+use std::sync::{mpsc, Once};
 use std::time::Duration;
 
 use block2::RcBlock;
 use image::RgbaImage;
+use objc2::ffi::{class_addMethod, class_replaceMethod};
 use objc2::rc::Retained;
-use objc2::{msg_send, sel, AnyThread, ClassType};
+use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+use objc2::{msg_send, sel, AnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::NSView;
 use objc2_core_foundation::{CFArray, CFNumber, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
@@ -27,6 +42,10 @@ use objc2_screen_capture_kit::{
     SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+/// `NSWindowOcclusionStateVisible`. GPUI only starts its display link when
+/// this bit is set on `-[NSWindow occlusionState]`.
+const OCCLUSION_STATE_VISIBLE: usize = 1 << 1;
 
 const IMAGE_OPTIONS: CGWindowImageOption =
     CGWindowImageOption::from_bits_retain((1 << 0) | (1 << 1) | (1 << 3));
@@ -53,6 +72,87 @@ pub fn cg_window_id_from_gpui(window: &gpui::Window) -> Option<u32> {
     let view = unsafe { appkit.ns_view.cast::<NSView>().as_ref() };
     let number = view.window()?.windowNumber();
     (number > 0).then_some(number as u32)
+}
+
+/// Keep GPUI's CVDisplayLink running while Evalight covers the window.
+///
+/// GPUI has no public `set_draw_while_occluded` in 0.2.2. Overriding the
+/// getter on `GPUIWindow` / `GPUIPanel` only (not `NSWindow`) makes
+/// `start_display_link` and `windowDidChangeOcclusionState:` take the visible
+/// branch. Install before the window is created so the first
+/// `start_display_link` does not bail out.
+pub fn keep_painting_when_occluded() {
+    install_occlusion_override();
+}
+
+/// After a window exists, re-run GPUI's occlusion handler so a display link
+/// that already stopped is started again (the override makes it see Visible).
+pub fn restart_occluded_display_link() {
+    install_occlusion_override();
+    kick_gpui_windows_to_paint();
+}
+
+fn install_occlusion_override() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| unsafe {
+        override_occlusion_state(c"GPUIWindow");
+        override_occlusion_state(c"GPUIPanel");
+    });
+}
+
+unsafe fn override_occlusion_state(class_name: &std::ffi::CStr) {
+    let Some(cls) = AnyClass::get(class_name) else {
+        return;
+    };
+    let sel = sel!(occlusionState);
+    let imp: Imp = std::mem::transmute(
+        occlusion_state_always_visible as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> usize,
+    );
+    let types: *const c_char = c"Q@:".as_ptr() as *const c_char;
+    let cls_ptr = cls as *const AnyClass as *mut AnyClass;
+    if !class_addMethod(cls_ptr, sel, imp, types).as_bool() {
+        let _ = class_replaceMethod(cls_ptr, sel, imp, types);
+    }
+}
+
+unsafe extern "C-unwind" fn occlusion_state_always_visible(
+    _this: *mut AnyObject,
+    _cmd: Sel,
+) -> usize {
+    OCCLUSION_STATE_VISIBLE
+}
+
+fn kick_gpui_windows_to_paint() {
+    let Some(_mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(app_cls) = AnyClass::get(c"NSApplication") else {
+        return;
+    };
+    unsafe {
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let windows: *mut AnyObject = msg_send![app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = msg_send![windows, count];
+        for i in 0..count {
+            let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+            if window.is_null() {
+                continue;
+            }
+            let window = &*window;
+            let name = window.class().name();
+            if name != c"GPUIWindow" && name != c"GPUIPanel" {
+                continue;
+            }
+            let none: Option<&AnyObject> = None;
+            let _: () = msg_send![window, windowDidChangeOcclusionState: none];
+        }
+    }
 }
 
 /// In-process capture used by Evalight. Do not spawn a helper: that PID is

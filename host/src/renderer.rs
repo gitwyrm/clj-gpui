@@ -393,7 +393,7 @@ impl RootView {
         })
         .detach();
 
-        Self {
+        let this = Self {
             tree: None,
             status: format!("nREPL 127.0.0.1:{nrepl_port} · loading Clojure UI"),
             error: None,
@@ -443,7 +443,9 @@ impl RootView {
             applied_title: String::new(),
             applied_window_size: None,
             native_window_id: preview::native_window_id(window),
-        }
+        };
+        preview::restart_occluded_display_link();
+        this
     }
 
     fn requested_theme(&self) -> &str {
@@ -588,10 +590,11 @@ impl RootView {
             });
             return;
         }
-        // Do not wait for the next presented frame. GPUI stops its macOS
-        // display link while the window is occluded (Evalight in front),
-        // so on_next_frame would never run until the native window is
-        // visible again.
+        // GPUI 0.2.2 stops the macOS display link while occluded (zed#63217).
+        // Keep it running, dirty this view so the next tick presents (unfocused
+        // windows otherwise skip present), then capture off the UI thread.
+        preview::restart_occluded_display_link();
+        cx.notify();
         let title = self.preview_title();
         let window_id = self.native_window_id;
         let cmd_tx = self.cmd_tx.clone();
@@ -3908,6 +3911,9 @@ pub fn open_window(
     .detach();
 
     let bounds = Bounds::centered(None, size(px(580.), px(820.)), cx);
+    // Before the NSWindow exists: override occlusionState so the first
+    // start_display_link does not bail out if Evalight already covers us.
+    preview::keep_painting_when_occluded();
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

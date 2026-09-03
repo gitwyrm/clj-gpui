@@ -16,8 +16,11 @@
 //! macOS captures in-process. A helper is a different PID, and recent macOS
 //! will snapshot a visible window from that process while refusing the same
 //! window once Evalight covers it. ScreenCaptureKit's desktop-independent
-//! window filter reads our own window's backing store. Do not wait for GPUI's
-//! next presented frame: the display link stops while the window is occluded.
+//! window filter reads our own window's backing store. GPUI 0.2.2 stops its
+//! display link while occluded (zed#63217); this host overrides
+//! `GPUIWindow`'s `occlusionState` so painting continues. Zed's
+//! `inactive_frame_interval` (zed#62628) is not in 0.2.2 and does not
+//! control occlusion.
 //!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
@@ -105,11 +108,30 @@ pub fn native_window_id(window: &gpui::Window) -> Option<u32> {
     }
 }
 
+/// Disable GPUI's macOS "don't paint while occluded" display-link gate.
+/// No-op on other platforms. Call before the window is created.
+pub fn keep_painting_when_occluded() {
+    #[cfg(target_os = "macos")]
+    preview_macos::keep_painting_when_occluded();
+}
+
+/// Start the display link again now that `occlusionState` always looks visible.
+/// Main thread, after a `GPUIWindow` exists.
+pub fn restart_occluded_display_link() {
+    #[cfg(target_os = "macos")]
+    preview_macos::restart_occluded_display_link();
+}
+
 /// Capture this host process's window. Call off the UI thread.
 pub fn capture_host_window(title: &str, window_id: Option<u32>) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let _ = title;
+        // Give the display link one tick after `cx.notify()` dirtied the
+        // window. Unfocused GPUI skips `present` unless the invalidator is
+        // dirty, so the notify + short wait is what actually puts pixels in
+        // the Metal layer while Evalight is in front.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let image = preview_macos::capture_this_process(window_id)?;
         return Some(STANDARD.encode(rgba_to_png(&image)?));
     }
@@ -283,5 +305,11 @@ mod tests {
         let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
         let png = rgba_to_png(&image).expect("png");
         assert!(png.starts_with(&PNG_MAGIC));
+    }
+
+    #[test]
+    fn keep_painting_helpers_do_not_panic() {
+        keep_painting_when_occluded();
+        restart_occluded_display_link();
     }
 }
