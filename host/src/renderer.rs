@@ -178,6 +178,9 @@ struct ComboboxSlot {
     searchable: bool,
     multiple: bool,
     fingerprint: u64,
+    /// Last native or controlled selection. Updated from
+    /// `ComboboxEvent::Change` / `Confirm` so a Clojure echo of those
+    /// ids does not call `set_selected_values` (which clears the query).
     selected: Vec<SharedString>,
     on_change: Option<String>,
     on_confirm: Option<String>,
@@ -1739,8 +1742,8 @@ impl RootView {
                             state.set_items(SearchableVec::new(items.clone()), window, cx);
                         }
                         if sync.set_selected {
-                            // Kit clears the search query here. Only run when
-                            // the controlled selection actually changed.
+                            // Rebuilds Kit's cloned selection (labels / dropped
+                            // ids). Also clears the search query.
                             state.set_selected_values(&selected, window, cx);
                         }
                     });
@@ -1813,6 +1816,9 @@ impl RootView {
     ) -> AnyElement {
         let size = mapping::parse_scale(node.control_size.as_deref());
         let mut table = Table::new().with_size(size);
+        if let Some(label) = extra::table_accessibility_label(node) {
+            table = table.accessibility_label(label);
+        }
         if table_has_primitive_children(node) {
             table = self.paint_table_sections(table, node, path, window, cx);
         } else {
@@ -4301,6 +4307,9 @@ fn emit_combobox_change(
     let Some(slot) = this.comboboxes.get_mut(key) else {
         return;
     };
+    // Match a later Clojure echo of these ids so set_selected_values
+    // is a no-op and does not clear a still-open search query.
+    slot.selected = values.to_vec();
     let payload = extra::combobox_payload(slot.multiple, values);
     if !slot.coalesce.on_change(payload) {
         return;
@@ -4315,6 +4324,7 @@ fn emit_combobox_confirm(this: &mut RootView, key: &str, values: &[SharedString]
     let Some(slot) = this.comboboxes.get_mut(key) else {
         return;
     };
+    slot.selected = values.to_vec();
     let pending = slot.coalesce.on_confirm();
     let on_change = slot.on_change.clone();
     let on_confirm = slot.on_confirm.clone();

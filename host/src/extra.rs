@@ -126,6 +126,14 @@ pub fn table_align_node(node: &Node) -> TableAlign {
     table_align_name(node.align.as_deref())
 }
 
+/// Kit `Table::accessibility_label`. Empty / omitted is unset; a visible
+/// `TableCaption` is not used as the accessible name.
+pub fn table_accessibility_label(node: &Node) -> Option<&str> {
+    node.accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+}
+
 /// Last row with `variant: "footer"` is Kit `TableFooter`; the rest is body.
 pub fn split_table_footer(items: &[Item]) -> (&[Item], Option<&Item>) {
     match items.split_last() {
@@ -204,9 +212,14 @@ pub fn combobox_fingerprint(items: &[Item]) -> u64 {
 
 /// Whether a reused combobox slot should push items / selection into Kit.
 ///
-/// `ComboboxState::set_selected_values` clears the search query. Skip that
-/// call unless the controlled selection actually changed. `set_items` does
-/// not clear the query; still skip it when the collection is unchanged.
+/// `set_items` only replaces the delegate. Kit's cloned selection keeps
+/// old labels and dropped ids unless `set_selected_values` rebuilds it,
+/// so an item-collection change also sets `set_selected`.
+///
+/// `set_selected_values` clears the search query. Skip it when neither
+/// the collection nor the controlled ids changed. After a native
+/// `ComboboxEvent::Change`, the slot cache must already hold those ids
+/// so a Clojure echo of the same selection is a no-op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComboboxSlotSync {
     pub set_items: bool,
@@ -219,9 +232,10 @@ pub fn combobox_slot_sync(
     prev_selected: &[SharedString],
     next_selected: &[SharedString],
 ) -> ComboboxSlotSync {
+    let set_items = prev_fingerprint != next_fingerprint;
     ComboboxSlotSync {
-        set_items: prev_fingerprint != next_fingerprint,
-        set_selected: prev_selected != next_selected,
+        set_items,
+        set_selected: set_items || prev_selected != next_selected,
     }
 }
 
@@ -885,6 +899,21 @@ mod tests {
             }),
             TableAlign::End
         );
+        assert_eq!(
+            table_accessibility_label(&Node {
+                accessibility_label: Some("Recent invoices".into()),
+                ..Node::default()
+            }),
+            Some("Recent invoices")
+        );
+        assert_eq!(
+            table_accessibility_label(&Node {
+                accessibility_label: Some(String::new()),
+                ..Node::default()
+            }),
+            None
+        );
+        assert_eq!(table_accessibility_label(&Node::default()), None);
         let items = vec![
             Item {
                 id: Some("a".into()),
@@ -966,13 +995,29 @@ mod tests {
             label: Some("Clojure lang".into()),
             ..Item::default()
         }];
-        let items_only = combobox_slot_sync(fp, combobox_fingerprint(&renamed), &sel, &sel);
-        assert!(items_only.set_items);
-        assert!(!items_only.set_selected);
+        let items_changed = combobox_slot_sync(fp, combobox_fingerprint(&renamed), &sel, &sel);
+        assert!(items_changed.set_items);
+        assert!(
+            items_changed.set_selected,
+            "set_items does not rebuild Kit's cloned selection; renamed/removed options need set_selected_values"
+        );
+        let dropped = vec![Item {
+            id: Some("rs".into()),
+            label: Some("Rust".into()),
+            ..Item::default()
+        }];
+        let removed = combobox_slot_sync(fp, combobox_fingerprint(&dropped), &sel, &sel);
+        assert!(removed.set_items);
+        assert!(removed.set_selected);
         let next = [SharedString::from("rs")];
         let sel_only = combobox_slot_sync(fp, fp, &sel, &next);
         assert!(!sel_only.set_items);
         assert!(sel_only.set_selected);
+        let echo = combobox_slot_sync(fp, fp, &next, &next);
+        assert!(
+            !echo.set_selected,
+            "native Change cache matching a Clojure echo must not clear the query"
+        );
     }
 
     #[test]

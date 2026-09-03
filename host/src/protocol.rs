@@ -638,6 +638,10 @@ pub struct Node {
     /// `table-head` / `table-cell` Kit `col_span`. `0` / omitted is 1.
     #[serde(default)]
     pub span: u32,
+    /// Kit `Table::accessibility_label`. Caption is visible text and is
+    /// not used as the accessible name.
+    #[serde(default, rename = "accessibility-label")]
+    pub accessibility_label: Option<String>,
 }
 
 impl Node {
@@ -1259,6 +1263,19 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(omitted.span, 0);
+    }
+
+    #[test]
+    fn decodes_table_accessibility_label() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "table",
+            "accessibility-label": "Recent invoices",
+            "children": [{"type": "table-caption", "children": [{"type": "label", "text": "Invoices"}]}]
+        }))
+        .unwrap();
+        assert_eq!(node.accessibility_label.as_deref(), Some("Recent invoices"));
+        let omitted: Node = serde_json::from_value(json!({"type": "table"})).unwrap();
+        assert_eq!(omitted.accessibility_label, None);
     }
 
     #[test]

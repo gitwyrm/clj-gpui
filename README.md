@@ -290,8 +290,9 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/table {:columns [{:label "Name"} {:label "Amount" :align :end}]
            :rows [["Ada" "$250"] ["Rich" "$150"]]
            :footer ["Total" "$400"]
-           :caption "Recent invoices"})
-(ui/table
+           :caption "Recent invoices"
+           :accessibility-label "Recent invoices"})
+(ui/table {:accessibility-label "Staff"}
   (ui/table-header (ui/table-row (ui/table-head "Name") (ui/table-head {:align :end} "Amt")))
   (ui/table-body (ui/table-row (ui/table-cell (ui/avatar "Ada")) (ui/table-cell {:align :end} "$250")))
   (ui/table-footer (ui/table-row (ui/table-cell {:span 2 :align :end} "Total")))

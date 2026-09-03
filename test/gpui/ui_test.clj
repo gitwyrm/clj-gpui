@@ -575,7 +575,8 @@
                                  {:label "Amount" :align :end :width 80}]
                        :rows [["Ada" "$250"] {:id :rich :cells ["Rich" "$150"]}]
                        :footer [{:span 2 :align :end :text "Total $400"}]
-                       :caption "Invoices"})
+                       :caption "Invoices"
+                       :accessibility-label "Invoice table"})
           header-row (get-in n [:children 0 :children 0])
           body-row (get-in n [:children 1 :children 0])
           foot-row (get-in n [:children 2 :children 0])]
@@ -602,9 +603,11 @@
       (is (= "Invoices" (get-in n [:children 3 :children 0 :text])))
       (is (= 2 (get-in foot-row [:children 0 :span]))
           "footer cell span is independent of the body")
-      (is (= "end" (get-in foot-row [:children 0 :align])))))
+      (is (= "end" (get-in foot-row [:children 0 :align])))
+      (is (= "Invoice table" (:accessibility-label n)))))
   (testing "declarative table primitives accept widget children"
     (let [n (ui/table
+             {:accessibility-label "Staff"}
              (ui/table-header
               (ui/table-row
                (ui/table-head "Person")
@@ -618,6 +621,7 @@
                (ui/table-cell {:span 2 :align :end} "One pioneer")))
              (ui/table-caption "Staff"))]
       (is (= :table (:type n)))
+      (is (= "Staff" (:accessibility-label n)))
       (is (= :avatar (get-in n [:children 1 :children 0 :children 0 :children 0 :type])))
       (is (= :badge (get-in n [:children 1 :children 0 :children 1 :children 0 :type])))
       (is (= 2 (get-in n [:children 2 :children 0 :children 0 :span])))

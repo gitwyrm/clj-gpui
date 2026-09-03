@@ -322,8 +322,10 @@
                        ["INV002" "Pending" "$150.00"]
                        ["INV003" "Unpaid" "$350.00"]]
                 :footer ["Total" "" "$750.00"]
-                :caption "Declarative Kit Table shorthand (not virtualized)."})
+                :caption "Declarative Kit Table shorthand (not virtualized)."
+                :accessibility-label "Recent invoices"})
      (ui/table
+      {:accessibility-label "Staff"}
       (ui/table-header
        (ui/table-row
         (ui/table-head "Person")

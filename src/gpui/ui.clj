@@ -801,9 +801,14 @@
   batch against the same callback generation, then fetches one tree.
   Confirm without Change (dismiss) is `:on-confirm` only.
 
-  Controlled selection is pushed to Kit only when it actually changes.
-  Kit `set_selected_values` clears the search query, so an unrelated
-  atom rerender must not wipe in-progress typing.
+  Controlled selection is pushed to Kit when the ids change *or* the
+  option collection changes (`set_items` does not rebuild Kit's cloned
+  selection, so a renamed or removed selected option would otherwise
+  stick). Kit `set_selected_values` clears the search query, so an
+  unrelated atom rerender with the same options and ids must not wipe
+  in-progress typing. A native `Change` updates the host cache first:
+  Clojure echoing those same ids is a no-op; a different Clojure value
+  still overrides native state.
 
   (ui/combobox selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
@@ -1225,10 +1230,13 @@
   [opts]
   (let [opts (apply-control-size (or opts {}))
         align (:align opts)
-        span (:span opts)]
+        span (:span opts)
+        a11y (:accessibility-label opts)]
     (cond-> opts
       (some? align) (assoc :align (table-align-name align))
-      (or (nil? span) (not (number? span)) (<= span 1)) (dissoc :span))))
+      (or (nil? span) (not (number? span)) (<= span 1)) (dissoc :span)
+      (some? a11y) (assoc :accessibility-label
+                          (if (keyword? a11y) (name a11y) (str a11y))))))
 
 (defn table-caption
   "Visible caption below a `ui/table`. Children may be text or widgets.
@@ -1405,6 +1413,8 @@
 
   `table-head` and `table-cell` accept any clj-gpui children, not only
   strings. `:span` / `:align` / `:width` belong on the individual cell.
+  `:accessibility-label` is Kit `Table::accessibility_label` (the name a
+  screen reader announces). A visible `:caption` is not used as that name.
 
   `{:columns … :rows … :footer … :caption …}` remains as shorthand and
   expands into those primitives. Column `:span` applies to the header
@@ -1414,7 +1424,8 @@
   (ui/table {:columns [{:label \"Name\"} {:label \"Amount\" :align :end}]
              :rows [[\"Ada\" \"$250\"] [\"Rich\" \"$150\"]]
              :footer [\"Total\" \"$400\"]
-             :caption \"Recent invoices\"})"
+             :caption \"Recent invoices\"
+             :accessibility-label \"Recent invoices\"})"
   [& args]
   (let [[opts children] (leading-opts args)]
     (if (table-shorthand? opts children)
