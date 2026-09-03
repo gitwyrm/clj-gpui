@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  6)
+  7)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."

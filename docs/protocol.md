@@ -10,7 +10,7 @@ Environment for the host process:
 | `CLJ_GPUI_PORT` | TCP port of the Clojure listener (required) |
 | `CLJ_GPUI_HOST` | TCP host, default `127.0.0.1` |
 
-Protocol version is **6**. Clojure sends it on `:ready`. The host refuses a mismatch.
+Protocol version is **7**. Clojure sends it on `:ready`. The host refuses a mismatch.
 
 ## Handshake
 
@@ -22,7 +22,7 @@ Protocol version is **6**. Clojure sends it on `:ready`. The host refuses a mism
 ### `ready` (Clojure → host)
 
 ```json
-{"op":"ready","protocol-version":6,"nrepl":7888,"app":"counter.app/app"}
+{"op":"ready","protocol-version":7,"nrepl":7888,"app":"counter.app/app"}
 ```
 
 ### `request-render` (Clojure → host)
@@ -51,6 +51,26 @@ On Linux the host uses the xdg desktop portal, then `zenity --file-selection --d
 ```
 
 `reveal-path` shows the path in Finder / the file manager. `open-path` opens it with the system handler. No reply.
+
+### `capture-preview` (Clojure → host)
+
+Ask the host for a PNG of the current native window. Clojure waits on the matching `preview-captured` RPC. Evalight calls `gpui.runtime/preview-png` over nREPL after connect / Run.
+
+```json
+{"op":"capture-preview","request-id":"cap-1"}
+```
+
+The host does **not** read the GPUI framebuffer. Capture runs on a background thread after dirtying the window. GPUI 0.2.2 stops its macOS CVDisplayLink unless `NSWindowOcclusionStateVisible` is set ([zed#63217](https://github.com/zed-industries/zed/issues/63217)), so a window covered by Evalight would otherwise never present. On the first `capture-preview` the host overrides `-[GPUIWindow occlusionState]` (not global `NSWindow`) so the display link keeps running, then ScreenCaptureKit-reads the window in-process. Ordinary apps keep GPUI's occlusion power-saving until Preview is used.
+
+`WindowOptions::inactive_frame_interval` from [zed#62628](https://github.com/zed-industries/zed/pull/62628) is not in crates.io `gpui` 0.2.2 and only throttles animation while unfocused. Inactive is not the same as occluded.
+
+Linux and Windows spawn a helper of the same binary (`clj-gpui --capture-preview --pid <host-pid> [--title …] [--wid …]`) and [xcap](https://crates.io/crates/xcap) 0.4.1. A second process is required so Windows `xcap::Window::all()` can see the GPUI window (it skips the current process to avoid `GetWindowText` deadlocks) and so `PrintWindow` is not issued while the UI thread is blocked. On Linux, xcap enumerates and captures through X11/XCB: X11 and XWayland windows work; native Wayland windows are not reliably listed and capture may return `nil`.
+
+macOS captures **in-process** with ScreenCaptureKit `SCContentFilter(desktopIndependentWindow:)`. A helper has a different PID and cannot snapshot a covered window. `CGWindowListCreateImage` is a fallback if ScreenCaptureKit is unavailable.
+
+No window, minimized, headless, native Wayland (this xcap path), or a missing macOS Screen Recording permission is an omitted `png` field (`nil` in Clojure). The helper must not print the image anywhere except its stdout. The UI-tree schema is unchanged from v6.
+
+v7 added this capture pair. A v6 host ignores `capture-preview`, so the version must match exactly.
 
 ## Host → Clojure ops
 
@@ -121,6 +141,23 @@ Result of `pick-directory`. `path` is set when the user chose a folder. `cancell
 ```
 
 Clojure invokes the `gpui.platform/pick-directory` callback. It does not automatically re-export the tree; a typical handler `swap!`s an `r/atom`.
+
+### `preview-captured`
+
+Result of `capture-preview`. `png` is a base64 PNG of the native window, omitted when capture failed.
+
+```json
+{"op":"preview-captured","id":5,"request-id":"cap-1","png":"iVBOR…"}
+```
+
+Clojure's `gpui.runtime/preview-png` returns that string, or `nil`. It never throws.
+
+From a running `clj -M:dev` nREPL:
+
+```clojure
+(resolve 'gpui.runtime/preview-png)
+(gpui.runtime/preview-png)
+```
 
 ## Node schema (version 5)
 

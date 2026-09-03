@@ -3,6 +3,7 @@ mod catalog;
 mod extra;
 mod mapping;
 mod overlay;
+mod preview;
 mod protocol;
 mod renderer;
 mod rows;
@@ -10,6 +11,11 @@ mod rows;
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    if let Some(request) = preview::parse_capture_args(std::env::args()) {
+        preview::run_helper(request);
+        return Ok(());
+    }
+
     let protocol_test = std::env::args().any(|a| a == "--protocol-test");
     if protocol_test {
         return bridge::protocol_test();

@@ -2,6 +2,7 @@ use crate::catalog;
 use crate::extra;
 use crate::mapping;
 use crate::overlay;
+use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
@@ -309,6 +310,7 @@ pub struct RootView {
     tree_seq: Option<u64>,
     applied_title: String,
     applied_window_size: Option<(i32, i32)>,
+    native_window_id: Option<u32>,
 }
 
 impl RootView {
@@ -381,6 +383,9 @@ impl RootView {
                         HostEvent::OpenPath { path } => {
                             cx.open_with_system(Path::new(&path));
                         }
+                        HostEvent::CapturePreview { request_id } => {
+                            view.capture_preview(request_id, cx);
+                        }
                     }
                     cx.notify();
                 });
@@ -437,6 +442,7 @@ impl RootView {
             tree_seq: None,
             applied_title: String::new(),
             applied_window_size: None,
+            native_window_id: preview::native_window_id(window),
         }
     }
 
@@ -563,6 +569,41 @@ impl RootView {
             let _ = cmd_tx.send(cmd);
         })
         .detach();
+    }
+
+    fn preview_title(&self) -> String {
+        self.tree
+            .as_ref()
+            .and_then(|node| node.title.clone())
+            .filter(|title| !title.is_empty())
+            .or_else(|| (!self.applied_title.is_empty()).then(|| self.applied_title.clone()))
+            .unwrap_or_else(|| "clj-gpui".into())
+    }
+
+    fn capture_preview(&self, request_id: String, cx: &mut Context<Self>) {
+        if self.tree.is_none() {
+            let _ = self.cmd_tx.send(Cmd::PreviewCaptured {
+                request_id,
+                png: None,
+            });
+            return;
+        }
+        // GPUI 0.2.2 stops the macOS display link while occluded (zed#63217).
+        // Enable that override only now, on the first capture-preview, so
+        // ordinary apps keep GPUI's occlusion power-saving until Preview is
+        // used. Dirty this view so the next tick presents (unfocused windows
+        // otherwise skip present), then capture off the UI thread.
+        preview::restart_occluded_display_link();
+        cx.notify();
+        let title = self.preview_title();
+        let window_id = self.native_window_id;
+        let cmd_tx = self.cmd_tx.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let png = preview::capture_host_window(&title, window_id);
+                let _ = cmd_tx.send(Cmd::PreviewCaptured { request_id, png });
+            })
+            .detach();
     }
 
     fn click(&self, callback_id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -3043,6 +3084,7 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_theme(window, cx);
         self.apply_chrome(window);
+        self.native_window_id = preview::native_window_id(window);
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_lists.clear();

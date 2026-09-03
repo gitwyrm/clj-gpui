@@ -253,6 +253,18 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 });
                             }
                         }
+                        "capture-preview" => {
+                            let request_id = value
+                                .get("request-id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            if !request_id.is_empty() {
+                                let _ = event_tx.send_blocking(HostEvent::CapturePreview {
+                                    request_id,
+                                });
+                            }
+                        }
                         "response" | "" => {
                             if let Some(id) = value.get("id").and_then(Value::as_u64) {
                                 if let Some(tx) = pending.lock().unwrap().remove(&id) {
@@ -308,8 +320,24 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
                             }
                         }
+                        Cmd::PreviewCaptured { request_id, png } => {
+                            let mut request = json!({
+                                "op": "preview-captured",
+                                "request-id": request_id,
+                            });
+                            if let Some(png) = png {
+                                request["png"] = json!(png);
+                            }
+                            if let Err(err) = rpc(&writer, &pending, &next_id, request) {
+                                let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
+                            }
+                        }
                         other => match other {
-                            Cmd::Shutdown | Cmd::DirectoryPicked { .. } => unreachable!(),
+                            Cmd::Shutdown
+                            | Cmd::DirectoryPicked { .. }
+                            | Cmd::PreviewCaptured { .. } => {
+                                unreachable!()
+                            }
                             Cmd::Render => {
                                 let result =
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
@@ -374,7 +402,8 @@ pub fn protocol_test() -> Result<()> {
             Ok(
                 HostEvent::PickDirectory { .. }
                 | HostEvent::RevealPath { .. }
-                | HostEvent::OpenPath { .. },
+                | HostEvent::OpenPath { .. }
+                | HostEvent::CapturePreview { .. },
             ) => continue,
             Ok(HostEvent::Error(err)) => bail!("Clojure error: {err}"),
             Err(err) => bail!("bridge closed: {err}"),

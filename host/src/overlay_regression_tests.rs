@@ -102,7 +102,7 @@ impl Fixture {
             writeln!(
                 server,
                 "{}",
-                json!({"op": "ready", "protocol-version": 6,
+                json!({"op": "ready", "protocol-version": 7,
                 "nrepl": 0, "app": "overlay-regression"})
             )
             .unwrap();

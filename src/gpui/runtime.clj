@@ -111,6 +111,47 @@
   (reset! conn m)
   m)
 
+(defonce ^:private preview-pending* (atom {}))
+(defonce ^:private preview-counter* (atom 0))
+
+(def ^:private preview-timeout-ms
+  "Host capture plus the JSON round-trip. Evalight waits 8s for the nREPL value."
+  6000)
+
+(defn deliver-preview!
+  "Runtime hook: the host finished a `capture-preview` request."
+  [{:keys [request-id png]}]
+  (when-let [p (get @preview-pending* request-id)]
+    (swap! preview-pending* dissoc request-id)
+    (deliver p (when (and (string? png) (>= (count png) 32))
+                 png)))
+  true)
+
+(defn- preview-png*
+  [timeout-ms]
+  (try
+    (if-not @conn
+      nil
+      (let [id (str "cap-" (swap! preview-counter* inc))
+            p (promise)]
+        (swap! preview-pending* assoc id p)
+        (send! {:op "capture-preview" :request-id id})
+        (let [v (deref p timeout-ms ::timeout)]
+          (swap! preview-pending* dissoc id)
+          (when (string? v)
+            v))))
+    (catch Exception _
+      nil)))
+
+(defn preview-png
+  "Return a base64 PNG of the current native window, or nil.
+
+  Evalight (local mode) evals this over nREPL and shows the image in
+  the Preview pane. The OS window is still the real program. Return
+  nil when no window exists yet. Never throw."
+  []
+  (preview-png* preview-timeout-ms))
+
 (defn- register-callback!
   [f]
   (let [id (str "cb-" (swap! callback-counter inc))]
@@ -466,6 +507,9 @@
                                             (binding [*out* *err*]
                                               (println "[clj-gpui] directory-picked failed:"
                                                        (.getMessage e)))))
+                                        {:ok true})
+                   "preview-captured" (do
+                                        (deliver-preview! msg)
                                         {:ok true})
                    "reload" (try
                               (reset! callback-hold 0)
