@@ -2,7 +2,7 @@
 //! its callback registry on every render, just like runtime/export-tree.
 use super::*;
 use crate::overlay::{CallbackQueue, DialogClose, QueuedAction};
-use crate::protocol::{send_callbacks_seq, CallbackCall};
+use crate::protocol::{CallbackCall, send_callbacks_seq};
 use std::net::{Shutdown, TcpListener};
 
 #[derive(Default)]
@@ -102,7 +102,7 @@ impl Fixture {
             writeln!(
                 server,
                 "{}",
-                json!({"op": "ready", "protocol-version": 8,
+                json!({"op": "ready", "protocol-version": 9,
                 "nrepl": 0, "app": "overlay-regression"})
             )
             .unwrap();
@@ -191,12 +191,14 @@ fn dialog_then_popover_waits_for_generation_and_suppresses_native_echoes() {
 
     let (tree_b, seq) = fixture.tree();
     assert_eq!(seq, Some(1));
-    assert!(!fixture
-        .peer
-        .lock()
-        .unwrap()
-        .registry
-        .contains_key(&old_popover_id));
+    assert!(
+        !fixture
+            .peer
+            .lock()
+            .unwrap()
+            .registry
+            .contains_key(&old_popover_id)
+    );
     queue.tree_installed(seq);
     let open = fixture.send(&mut queue, &tree_b, 2);
     assert_ne!(open[0].id, old_popover_id);
@@ -461,12 +463,14 @@ fn retained_static_overlay_buttons_use_replacement_registry() {
     fixture.host.cmd_tx.send(Cmd::Render).unwrap();
     let (mut tree, seq) = fixture.tree();
     queue.tree_installed(seq);
-    assert!(!fixture
-        .peer
-        .lock()
-        .unwrap()
-        .registry
-        .contains_key(&old_dialog));
+    assert!(
+        !fixture
+            .peer
+            .lock()
+            .unwrap()
+            .registry
+            .contains_key(&old_dialog)
+    );
 
     for (index, (key, role)) in retained.into_iter().enumerate() {
         queue.push(QueuedAction::ButtonClick { key: key.into() });

@@ -2,7 +2,7 @@
 
 clj-gpui 0.1.0 is pinned to **[GPUI Kit 0.6.0](https://crates.io/crates/gpui-kit/0.6.0)** (`gpui-kit` facade → `gpui-pre` 0.3.x + `gpui-component` 0.6 + `gpui-kit-assets`). This document is the inventory of that exact crate, not later git `main`.
 
-0.5.1 names (`ui/text-field`, `ui/divider`, `ui/table`) were dropped. Data tables are `ui/data-table`. `ui/table` is reserved for Kit's declarative `Table` (not wrapped yet).
+0.5.1 names (`ui/text-field`, `ui/divider`) were dropped. Data tables are `ui/data-table`. `ui/table` is Kit's declarative `Table`.
 
 Classification:
 
@@ -56,10 +56,13 @@ Classification:
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse |
 | `input::OtpInput` | `ui/otp-input` | ✅ | C | Host-held `OtpState`. `:on-change` only when every cell is filled (crate complete-only). `:count` default 6, clamped 1–12. `:masked` |
 | `input::Editor` / `EditorState` | `ui/editor` | ✅ | C | Kit `Editor` highlighter. `:language` (default `text`). **No LSP**. `tree-sitter-languages` enabled; no Clojure grammar |
-| `select` searchable sections / custom item render | — | ⚠️ | C | Basic string select is B; groups/custom rows are not |
+| `select` searchable sections / custom item render | — | ⚠️ | C | Basic string select is B; groups/custom rows are not. Use `ui/combobox` for a searchable multi-select |
 | `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
 | `table::DataTable` | `ui/data-table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate`. `column()` returns owned `Column` |
-| `table::Table` (declarative) | `ui/table` | ❌ | C | Reserved name. Not wrapped in this release |
+| `table::Table` (declarative) | `ui/table` plus `ui/table-header`, `ui/table-body`, `ui/table-footer`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, `ui/table-caption` | ✅ | C | Not virtualized. Kit primitives on the wire so per-cell `col_span` / align / widget children stay accessible. `{:columns :rows :footer :caption}` is Clojure shorthand that expands into those primitives; column `:span` is header-only. `:accessibility-label` is Kit `Table::accessibility_label` |
+| `combobox::Combobox` | `ui/combobox` | ✅ | C | Host `ComboboxState<SearchableVec>`. Search on by default. `:multiple true` value is a vector. Same-action `Change`+`Confirm` is one callback batch. Native `Change` caches selection so a Clojure echo does not `set_selected_values` (clears query). Item-collection change rebuilds selection so renamed/removed options do not stick |
+| `rating::Rating` | `ui/rating` | ✅ | C | Integer `0..=:max` (default 5). Host `.max` then `.value` (Kit clamps `.value` to the current max). `:on-change` is the new integer. Optional `:color` hex |
+| `stepper::Stepper` | `ui/stepper` | ✅ | C | `value` is selected item id, not index. `:orientation :vertical`. Optional item `:icon` / `:disabled` |
 | `tree::Tree` | `ui/tree` | ✅ | C | Nested `{id, label, items}`; `:expanded` is initial. Click sends original id. Expand state is host-local until item identity changes |
 | `dialog::Dialog` | `ui/dialog` | ✅ | C | Controlled `:open?`; overlay via `WindowExt`. `:variant` `:confirm`. Overlay click dismisses unless `:overlay-closable false` |
 | `dialog::AlertDialog` | `ui/alert-dialog` | ✅ | C | Same controlled overlay as dialog; not backdrop-dismissible |
@@ -85,16 +88,17 @@ Classification:
 | `TitleBar` | `ui/window` | ❌ | D | Window chrome is already Clojure-owned |
 | `WindowBorder` | — | ❌ | D | Linux decoration helper |
 | `Inspector` | — | ❌ | D | Debug-only |
+| `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |
 | `History` | — | ❌ | E | Undo stack, not UI |
 | `webview` | — | ❌ | D | Explicitly out of scope |
 | `animation` helpers | — | ❌ | E | Not a control |
 | `IndexPath` / `Rope` / geometry | — | ❌ | E | Host types |
 
-0.6 also has `Combobox`, `Rating`, `Stepper`, chat `Message`/`Bubble`, and `NavStack`. Those are follow-ups (Phase 5), not this inventory's remaining C work. `gpui-fps` is postponed. `gpui-shell` / `gpui-wry` are out of scope.
+Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints on `:chrome :dev`. `gpui-shell` / `gpui-wry` are out of scope.
 
 ## Category C — remaining
 
-Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, declarative `ui/table`, Combobox / Rating / Stepper, and `gpui-fps` are still deferred. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget.
+Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, Pagination / ProgressCircle / Shimmer / HoverCard, extra chart kinds, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 
@@ -104,7 +108,9 @@ The crate holds **one** sheet. Last open `sheet` in tree order wins. Same live-c
 
 ### Delegate collections (list, table, tree, virtual-list)
 
-Clojure sends `{id, label}` (list), `{id, cells}` (table), nested `{id, label, items}` (tree), or `{id, label, height?}` (virtual-list, vertical unless `:orientation :horizontal`). Rust owns `ListDelegate` / `TableDelegate` / `TreeState` / `VirtualListView`. Selection callbacks send original Clojure ids. Table column defs travel in `options`, not the description-list `columns` u32. After rows/columns change the host calls `TableState::refresh`. Programmatic table `:selected` uses `set_selected_row` / `clear_selection` with a suppress flag so `SelectRow` does not bounce back as `:on-change`. Tree `:selected` is controlled: the host keeps cloned `TreeItem`s (shared expand `Rc`) and maps ids onto the current visible flattened index. Nested ids apply only while ancestors are expanded. Tree expand/collapse is host-local until the item identity changes (`set_items` would reset it). List `:on-change` is selection; `:on-confirm` is activation (click / Enter). Arrows emit Select only; click and Enter emit Confirm only in 0.5.1, so the host fires `:on-change` then `:on-confirm` on Confirm as one batch against the same callback generation, then one tree. Table left click always emits `SelectRow`; `click_count == 2` then emits `DoubleClickedRow` from that same `on_row_left_click`. A count-1 click is only `:on-change` (end of the GPUI effect cycle). A count-2 click is `:on-change` then `:on-confirm` (or `:on-double-click`) as one batch so those two never cross callback generations. Searchable lists reapply the active query when Clojure replaces rows. `list` / `table` / `tree` / `virtual-list` use an outer layout wrapper (same idea as scroll / content-sized widgets): `:size` is square, omitted width fills, default ~200px height unless `:height` / `:size` / `:flex 1`, visual keys live on the wrapper.
+Clojure sends `{id, label}` (list), `{id, cells}` (data-table), nested `{id, label, items}` (tree), or `{id, label, height?}` (virtual-list, vertical unless `:orientation :horizontal`). Rust owns `ListDelegate` / `TableDelegate` / `TreeState` / `VirtualListView`. Selection callbacks send original Clojure ids. Table column defs travel in `options`, not the description-list `columns` u32. After rows/columns change the host calls `TableState::refresh`. Programmatic table `:selected` uses `set_selected_row` / `clear_selection` with a suppress flag so `SelectRow` does not bounce back as `:on-change`. Tree `:selected` is controlled: the host keeps cloned `TreeItem`s (shared expand `Rc`) and maps ids onto the current visible flattened index. Nested ids apply only while ancestors are expanded. Tree expand/collapse is host-local until the item identity changes (`set_items` would reset it). List `:on-change` is selection; `:on-confirm` is activation (click / Enter). Arrows emit Select only; click and Enter emit Confirm only in 0.5.1, so the host fires `:on-change` then `:on-confirm` on Confirm as one batch against the same callback generation, then one tree. Table left click always emits `SelectRow`; `click_count == 2` then emits `DoubleClickedRow` from that same `on_row_left_click`. A count-1 click is only `:on-change` (end of the GPUI effect cycle). A count-2 click is `:on-change` then `:on-confirm` (or `:on-double-click`) as one batch so those two never cross callback generations. Searchable lists reapply the active query when Clojure replaces rows. `list` / `data-table` / `tree` / `virtual-list` use an outer layout wrapper (same idea as scroll / content-sized widgets): `:size` is square, omitted width fills, default ~200px height unless `:height` / `:size` / `:flex 1`, visual keys live on the wrapper.
+
+Declarative `ui/table` is not this family: Kit `Table` / `TableHeader` / `TableBody` / `TableFooter` / `TableRow` / `TableHead` / `TableCell` / `TableCaption` are `RenderOnce` with no slot, no virtualization, and no selection. The host paints those primitives from nested children so per-cell `col_span`, alignment, and widget children stay accessible. `:accessibility-label` maps to Kit `Table::accessibility_label`. `{:columns :rows :footer :caption}` is Clojure-only shorthand. Layout/style keys use `apply_style` (not `viewport_sized`).
 
 ### Product widgets (number, OTP, color, date, editor, dock, sidebar, settings, charts, markdown)
 
@@ -112,15 +118,16 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 
 ## Path to near-complete coverage
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, AvatarGroup, declarative Table, Combobox / Rating / Stepper — not a new architecture.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, AvatarGroup, Pagination / ProgressCircle / Shimmer / HoverCard, extra chart kinds, and chat / NavStack — not a new architecture.
 
-## Callback payloads (protocol v8)
+## Callback payloads (protocol v9)
 
 | Widget | callback | payload |
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
 | `slider` | `:on-change` | number (Clojure value is applied as-is, then clamped; `step` is drag granularity) |
 | `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
+| `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
 | `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |
 | `alert` | `:on-close` | none (0-arg) |
 | `clipboard` | `:on-copied` | copied string |
@@ -133,6 +140,8 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 | `dialog` / `alert-dialog` / `popover` / `sheet` | `:on-open-change` | boolean |
 | `sheet` / `notification` | `:on-close` | none (0-arg) |
 | `number-input` | `:on-change` | number |
+| `rating` | `:on-change` | integer `0..=:max` |
+| `stepper` | `:on-change` | original Clojure item id |
 | `otp-input` | `:on-change` | string, only when every cell is filled |
 | `color-picker` | `:on-change` | hex string or `nil` |
 | `date-picker` | `:on-change` | ISO string, `[start end]`, or `nil` |

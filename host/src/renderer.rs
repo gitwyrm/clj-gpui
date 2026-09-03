@@ -22,6 +22,7 @@ use gpui_component::{
     checkbox::Checkbox,
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    combobox::{Combobox, ComboboxEvent, ComboboxState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
@@ -39,17 +40,23 @@ use gpui_component::{
     popover::Popover,
     progress::Progress,
     radio::{Radio, RadioGroup},
+    rating::Rating,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
+    searchable_list::SearchableListItem,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     separator::Separator,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     spinner::Spinner,
+    stepper::{Stepper, StepperItem},
     switch::Switch,
     tab::{Tab, TabBar},
-    table::{DataTable, TableEvent, TableState},
+    table::{
+        DataTable, Table, TableBody, TableCaption, TableCell, TableEvent, TableFooter, TableHead,
+        TableHeader, TableRow, TableState,
+    },
     tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
     tooltip::Tooltip,
@@ -141,6 +148,43 @@ struct SelectSlot {
     state: Entity<SelectState<SearchableVec<SelectOpt>>>,
     searchable: bool,
     on_change: Option<String>,
+}
+
+#[derive(Clone)]
+struct ComboOpt {
+    id: SharedString,
+    label: SharedString,
+    disabled: bool,
+}
+
+impl SearchableListItem for ComboOpt {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+struct ComboboxSlot {
+    state: Entity<ComboboxState<SearchableVec<ComboOpt>>>,
+    searchable: bool,
+    multiple: bool,
+    fingerprint: u64,
+    /// Last native or controlled selection. Updated from
+    /// `ComboboxEvent::Change` / `Confirm` so a Clojure echo of those
+    /// ids does not call `set_selected_values` (which clears the query).
+    selected: Vec<SharedString>,
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+    coalesce: protocol::ComboboxActivationCoalesce,
 }
 
 struct ListSlot {
@@ -290,6 +334,7 @@ pub struct RootView {
     /// dropping the entity on unmount remounts at size 0 (100% fill).
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
+    comboboxes: HashMap<String, ComboboxSlot>,
     lists: HashMap<String, ListSlot>,
     tables: HashMap<String, TableSlot>,
     trees: HashMap<String, TreeSlot>,
@@ -315,6 +360,7 @@ pub struct RootView {
     note_waiting: HashSet<String>,
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
+    used_comboboxes: HashSet<String>,
     used_lists: HashSet<String>,
     used_tables: HashSet<String>,
     used_trees: HashSet<String>,
@@ -429,6 +475,7 @@ impl RootView {
             inputs: HashMap::new(),
             sliders: HashMap::new(),
             selects: HashMap::new(),
+            comboboxes: HashMap::new(),
             lists: HashMap::new(),
             tables: HashMap::new(),
             trees: HashMap::new(),
@@ -454,6 +501,7 @@ impl RootView {
             note_waiting: HashSet::new(),
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
+            used_comboboxes: HashSet::new(),
             used_lists: HashSet::new(),
             used_tables: HashSet::new(),
             used_trees: HashSet::new(),
@@ -1212,6 +1260,8 @@ impl RootView {
             "toggle" => self.render_toggle(node, &key, cx),
             "radio-group" => self.render_radio_group(node, &key, cx),
             "slider" => self.render_slider(node, &key, window, cx),
+            "rating" => self.render_rating(node, &key, cx),
+            "stepper" => self.render_stepper(node, &key, cx),
             "progress" => self.render_progress(node, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
@@ -1224,6 +1274,7 @@ impl RootView {
             "badge" => self.render_badge(node, path, window, cx),
             "tabs" => self.render_tabs(node, &key, cx),
             "select" => self.render_select(node, &key, window, cx),
+            "combobox" => self.render_combobox(node, &key, window, cx),
             "icon" => self.render_icon(node, cx),
             "clipboard" => self.render_clipboard(node, &key, cx),
             "breadcrumb" => self.render_breadcrumb(node, &key, cx),
@@ -1236,6 +1287,28 @@ impl RootView {
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
+            "table" => self.render_table(node, path, window, cx),
+            "table-header" => self
+                .paint_table_header(node, path, window, cx)
+                .into_any_element(),
+            "table-body" => self
+                .paint_table_body(node, path, window, cx)
+                .into_any_element(),
+            "table-footer" => self
+                .paint_table_footer(node, path, window, cx)
+                .into_any_element(),
+            "table-row" => self
+                .paint_table_row_node(node, path, window, cx)
+                .into_any_element(),
+            "table-head" => self
+                .paint_table_head(node, path, window, cx)
+                .into_any_element(),
+            "table-cell" => self
+                .paint_table_cell(node, path, window, cx)
+                .into_any_element(),
+            "table-caption" => self
+                .paint_table_caption(node, path, window, cx)
+                .into_any_element(),
             "tree" => self.render_tree(node, &key, window, cx),
             "sheet" => div().into_any_element(),
             "notification" => div().into_any_element(),
@@ -1610,6 +1683,365 @@ impl RootView {
         }
         select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
         apply_style(select, node, cx).into_any_element()
+    }
+
+    fn render_combobox(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.combobox_slot(key, node, window, cx);
+        let mut combo = Combobox::new(&state);
+        if let Some(placeholder) = node.placeholder.clone() {
+            combo = combo.placeholder(placeholder);
+        }
+        if node.disabled {
+            combo = combo.disabled(true);
+        }
+        combo = combo.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        apply_style(combo, node, cx).into_any_element()
+    }
+
+    fn combobox_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ComboboxState<SearchableVec<ComboOpt>>> {
+        self.used_comboboxes.insert(key.to_string());
+        let items = combo_opts(node);
+        let fingerprint = extra::combobox_fingerprint(node.collection());
+        let selected: Vec<SharedString> = node
+            .string_values()
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        if let Some(slot) = self.comboboxes.get_mut(key) {
+            if slot.searchable == node.searchable && slot.multiple == node.multiple {
+                slot.on_change = node.on_change.clone();
+                slot.on_confirm = node.on_confirm.clone();
+                let sync = extra::combobox_slot_sync(
+                    slot.fingerprint,
+                    fingerprint,
+                    &slot.selected,
+                    &selected,
+                );
+                if sync.set_items {
+                    slot.fingerprint = fingerprint;
+                }
+                if sync.set_selected {
+                    slot.selected = selected.clone();
+                }
+                let state = slot.state.clone();
+                if sync.set_items || sync.set_selected {
+                    state.update(cx, |state, cx| {
+                        if sync.set_items {
+                            state.set_items(SearchableVec::new(items.clone()), window, cx);
+                        }
+                        if sync.set_selected {
+                            // Rebuilds Kit's cloned selection (labels / dropped
+                            // ids). Also clears the search query.
+                            state.set_selected_values(&selected, window, cx);
+                        }
+                    });
+                }
+                return state;
+            }
+        }
+        let searchable = node.searchable;
+        let multiple = node.multiple;
+        let state = cx.new(|cx| {
+            ComboboxState::new(SearchableVec::new(items), Vec::new(), window, cx)
+                .searchable(searchable)
+                .multiple(multiple)
+        });
+        state.update(cx, |state, cx| {
+            state.set_selected_values(&selected, window, cx);
+        });
+        let key_owned = key.to_string();
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _, event: &ComboboxEvent<SearchableVec<ComboOpt>>, window, cx| match event {
+                ComboboxEvent::Change(values) => {
+                    emit_combobox_change(this, &key_owned, values, window, cx);
+                }
+                ComboboxEvent::Confirm(values) => {
+                    emit_combobox_confirm(this, &key_owned, values);
+                }
+            },
+        )
+        .detach();
+        self.comboboxes.insert(
+            key.to_string(),
+            ComboboxSlot {
+                state: state.clone(),
+                searchable,
+                multiple,
+                fingerprint,
+                selected,
+                on_change: node.on_change.clone(),
+                on_confirm: node.on_confirm.clone(),
+                coalesce: protocol::ComboboxActivationCoalesce::default(),
+            },
+        );
+        state
+    }
+
+    fn flush_pending_combobox_change(&mut self, key: &str) {
+        let Some(slot) = self.comboboxes.get_mut(key) else {
+            return;
+        };
+        let Some(payload) = slot.coalesce.take_pending_change() else {
+            return;
+        };
+        let Some(id) = slot.on_change.clone() else {
+            return;
+        };
+        protocol::send_callbacks(
+            &self.cmd_tx,
+            protocol::combobox_activation_calls(Some(id), None, payload),
+        );
+    }
+
+    fn render_table(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let size = mapping::parse_scale(node.control_size.as_deref());
+        let mut table = Table::new().with_size(size);
+        if let Some(label) = extra::table_accessibility_label(node) {
+            table = table.accessibility_label(label);
+        }
+        if table_has_primitive_children(node) {
+            table = self.paint_table_sections(table, node, path, window, cx);
+        } else {
+            table = paint_table_from_items(table, node);
+        }
+        apply_style(table, node, cx).into_any_element()
+    }
+
+    fn paint_table_sections(
+        &mut self,
+        mut table: Table,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Table {
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            match child.kind.as_str() {
+                "table-header" => {
+                    table = table.child(self.paint_table_header(child, &child_path, window, cx));
+                }
+                "table-body" => {
+                    table = table.child(self.paint_table_body(child, &child_path, window, cx));
+                }
+                "table-footer" => {
+                    table = table.child(self.paint_table_footer(child, &child_path, window, cx));
+                }
+                "table-caption" => {
+                    table = table.child(self.paint_table_caption(child, &child_path, window, cx));
+                }
+                _ => {}
+            }
+        }
+        table
+    }
+
+    fn paint_table_header(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableHeader {
+        let mut header = apply_style(TableHeader::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            header = header.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        header
+    }
+
+    fn paint_table_body(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableBody {
+        let mut body = apply_style(TableBody::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            body = body.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        body
+    }
+
+    fn paint_table_footer(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableFooter {
+        let mut footer = apply_style(TableFooter::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            footer = footer.child(self.paint_table_row_node(child, &child_path, window, cx));
+        }
+        footer
+    }
+
+    fn paint_table_row_node(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableRow {
+        let mut row = apply_style(TableRow::new(), node, cx);
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = format!("{path}-{index}");
+            match child.kind.as_str() {
+                "table-head" => {
+                    row = row.child(self.paint_table_head(child, &child_path, window, cx));
+                }
+                "table-cell" => {
+                    row = row.child(self.paint_table_cell(child, &child_path, window, cx));
+                }
+                _ => {
+                    let mut cell = TableCell::new();
+                    cell = cell.child(self.render_node(child, &child_path, window, cx));
+                    row = row.child(cell);
+                }
+            }
+        }
+        row
+    }
+
+    fn paint_table_head(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableHead {
+        let mut el = style_table_head_node(TableHead::new(), node);
+        el = apply_style(el, node, cx);
+        self.fill_table_cell_children(el, node, path, window, cx)
+    }
+
+    fn paint_table_cell(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableCell {
+        let mut el = style_table_cell_node(TableCell::new(), node);
+        el = apply_style(el, node, cx);
+        self.fill_table_cell_children(el, node, path, window, cx)
+    }
+
+    fn paint_table_caption(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TableCaption {
+        let mut caption = apply_style(TableCaption::new(), node, cx);
+        caption = self.fill_table_cell_children(caption, node, path, window, cx);
+        caption
+    }
+
+    fn fill_table_cell_children<E>(
+        &mut self,
+        mut el: E,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> E
+    where
+        E: ParentElement,
+    {
+        if node.children.is_empty() {
+            if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+                el = el.child(text);
+            }
+        } else {
+            for child in self.render_children(node, path, window, cx) {
+                el = el.child(child);
+            }
+        }
+        el
+    }
+
+    fn render_rating(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let (max, value) = extra::rating_max_then_value(node);
+        let mut rating = Rating::new(eid(key))
+            .max(max)
+            .value(value)
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled);
+        if let Some(color) = node.color.as_deref().and_then(extra::parse_hex_color) {
+            rating = rating.color(color);
+        }
+        if let Some(id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            rating = rating.on_click(move |value, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: id.clone(),
+                    value: Some(json!(*value)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(rating, node, cx).into_any_element()
+    }
+
+    fn render_stepper(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let selected = extra::stepper_selected_index(items, node.string_value().as_deref());
+        let mut stepper = Stepper::new(eid(key))
+            .selected_index(selected)
+            .layout(mapping::parse_axis(node.orientation.as_deref()))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled);
+        for item in items {
+            let mut step = StepperItem::new().child(item.label_or_id());
+            if item.disabled {
+                step = step.disabled(true);
+            }
+            if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                step = step.icon(icon);
+            }
+            stepper = stepper.item(step);
+        }
+        if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            stepper = stepper.on_click(move |ix, _, _| {
+                if let Some(id) = ids.get(*ix) {
+                    let _ = cmd_tx.send(Cmd::Callback {
+                        id: callback_id.clone(),
+                        value: Some(json!(id)),
+                        seq: None,
+                    });
+                }
+            });
+        }
+        apply_style(stepper, node, cx).into_any_element()
     }
 
     fn render_icon(&self, node: &Node, cx: &App) -> AnyElement {
@@ -3318,6 +3750,7 @@ impl Render for RootView {
         self.native_window_id = preview::native_window_id(window);
         self.used_inputs.clear();
         self.used_selects.clear();
+        self.used_comboboxes.clear();
         self.used_lists.clear();
         self.used_tables.clear();
         self.used_trees.clear();
@@ -3355,6 +3788,9 @@ impl Render for RootView {
         // stay for the window lifetime (see docs/gpui-component.md).
         let used_selects = std::mem::take(&mut self.used_selects);
         self.selects.retain(|key, _| used_selects.contains(key));
+        let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
+        self.comboboxes
+            .retain(|key, _| used_comboboxes.contains(key));
         let used_lists = std::mem::take(&mut self.used_lists);
         self.lists.retain(|key, _| used_lists.contains(key));
         let used_tables = std::mem::take(&mut self.used_tables);
@@ -3406,6 +3842,7 @@ impl Render for RootView {
                         .text_color(cx.theme().muted_foreground)
                         .child(status),
                 )
+                .child(gpui_fps::fps_monitor(window, cx))
             })
             // gpui-component 0.5.1 Root::render does not paint this layer.
             .children(dialog_layer)
@@ -3530,6 +3967,144 @@ fn select_opts(node: &Node) -> Vec<SelectOpt> {
             label: SharedString::from(item.label_or_id()),
         })
         .collect()
+}
+
+fn combo_opts(node: &Node) -> Vec<ComboOpt> {
+    node.collection()
+        .iter()
+        .map(|item| ComboOpt {
+            id: SharedString::from(item.id_or_label()),
+            label: SharedString::from(item.label_or_id()),
+            disabled: item.disabled,
+        })
+        .collect()
+}
+
+fn table_has_primitive_children(node: &Node) -> bool {
+    node.children.iter().any(|child| {
+        matches!(
+            child.kind.as_str(),
+            "table-header" | "table-body" | "table-footer" | "table-caption"
+        )
+    })
+}
+
+fn style_table_head_node(el: TableHead, node: &Node) -> TableHead {
+    let el = match extra::table_align_node(node) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if node.span > 1 {
+        el.col_span(node.span as usize)
+    } else {
+        el
+    };
+    match node.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn style_table_cell_node(el: TableCell, node: &Node) -> TableCell {
+    let el = match extra::table_align_node(node) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if node.span > 1 {
+        el.col_span(node.span as usize)
+    } else {
+        el
+    };
+    match node.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn style_table_head(el: TableHead, col: &Item) -> TableHead {
+    let el = match extra::table_align(col) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if col.span > 1 {
+        el.col_span(col.span as usize)
+    } else {
+        el
+    };
+    match col.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn style_table_cell(el: TableCell, col: &Item) -> TableCell {
+    let el = match extra::table_align(col) {
+        extra::TableAlign::End => el.text_right(),
+        extra::TableAlign::Center => el.text_center(),
+        extra::TableAlign::Start => el,
+    };
+    let el = if col.span > 1 {
+        el.col_span(col.span as usize)
+    } else {
+        el
+    };
+    match col.width {
+        Some(width) => el.w(px(width)),
+        None => el,
+    }
+}
+
+fn paint_table_row(row: &Item, columns: &[Item]) -> TableRow {
+    let mut table_row = TableRow::new();
+    if columns.is_empty() {
+        let cells = if row.cells.is_empty() {
+            vec![row.label_or_id()]
+        } else {
+            row.cells.clone()
+        };
+        for text in cells {
+            table_row = table_row.child(TableCell::new().child(text));
+        }
+        return table_row;
+    }
+    for (ix, col) in columns.iter().enumerate() {
+        let text = row.cells.get(ix).cloned().unwrap_or_default();
+        table_row = table_row.child(style_table_cell(TableCell::new().child(text), col));
+    }
+    for text in row.cells.iter().skip(columns.len()) {
+        table_row = table_row.child(TableCell::new().child(text.clone()));
+    }
+    table_row
+}
+
+fn paint_table_from_items(mut table: Table, node: &Node) -> Table {
+    let columns = node.options.as_slice();
+    let (body, footer) = extra::split_table_footer(&node.items);
+    if !columns.is_empty() {
+        let mut header_row = TableRow::new();
+        for col in columns {
+            header_row = header_row.child(style_table_head(
+                TableHead::new().child(col.label_or_id()),
+                col,
+            ));
+        }
+        table = table.child(TableHeader::new().child(header_row));
+    }
+    let mut body_el = TableBody::new();
+    for row in body {
+        body_el = body_el.child(paint_table_row(row, columns));
+    }
+    table = table.child(body_el);
+    if let Some(foot) = footer {
+        table = table.child(TableFooter::new().child(paint_table_row(foot, columns)));
+    }
+    if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
+        table = table.child(TableCaption::new().child(caption));
+    }
+    table
 }
 
 fn select_selected_index(
@@ -3720,6 +4295,46 @@ fn emit_list_activation(this: &RootView, key: &str, ix: IndexPath, cx: &App) {
         &this.cmd_tx,
         protocol::list_activation_calls(slot.on_change.clone(), slot.on_confirm.clone(), row_id),
     );
+}
+
+fn emit_combobox_change(
+    this: &mut RootView,
+    key: &str,
+    values: &[SharedString],
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    let Some(slot) = this.comboboxes.get_mut(key) else {
+        return;
+    };
+    // Match a later Clojure echo of these ids so set_selected_values
+    // is a no-op and does not clear a still-open search query.
+    slot.selected = values.to_vec();
+    let payload = extra::combobox_payload(slot.multiple, values);
+    if !slot.coalesce.on_change(payload) {
+        return;
+    }
+    let key = key.to_string();
+    cx.defer_in(window, move |this, _, _cx| {
+        this.flush_pending_combobox_change(&key);
+    });
+}
+
+fn emit_combobox_confirm(this: &mut RootView, key: &str, values: &[SharedString]) {
+    let Some(slot) = this.comboboxes.get_mut(key) else {
+        return;
+    };
+    slot.selected = values.to_vec();
+    let pending = slot.coalesce.on_confirm();
+    let on_change = slot.on_change.clone();
+    let on_confirm = slot.on_confirm.clone();
+    let confirm_payload = extra::combobox_payload(slot.multiple, values);
+    let calls = if let Some(payload) = pending {
+        protocol::combobox_activation_calls(on_change, on_confirm, payload)
+    } else {
+        protocol::combobox_activation_calls(None, on_confirm, confirm_payload)
+    };
+    protocol::send_callbacks(&this.cmd_tx, calls);
 }
 
 fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: bool, cx: &App) {

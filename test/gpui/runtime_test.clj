@@ -304,6 +304,12 @@
        (filter #(= "data-table" (:type %)))
        first))
 
+(defn- exported-combobox
+  [tree]
+  (->> (tree-seq :children :children tree)
+       (filter #(= "combobox" (:type %)))
+       first))
+
 (deftest table-double-click-batch-keeps-generation-when-tree-would-shift
   (runtime/reset-callbacks!)
   (let [confirm-fired (atom 0)
@@ -344,6 +350,50 @@
       (is (not= id-confirm x-id)
           "after a render, confirm's old id is not reused by X")
       (is (not= id-confirm (:on-confirm new-table)))
+      (is (= {:ok false :error (str "unknown callback " id-confirm)}
+             (runtime/invoke-callback! id-confirm)))
+      (is (zero? @x-fired) "stale confirm id must not invoke X")
+      (is (= 1 @confirm-fired) "stale confirm id no longer invokes confirm"))))
+
+(deftest combobox-change-confirm-batch-keeps-generation-when-tree-would-shift
+  (runtime/reset-callbacks!)
+  (let [confirm-fired (atom 0)
+        x-fired (atom 0)
+        seen (atom [])
+        !shift (atom false)
+        tree (fn []
+               (ui/vstack
+                (when @!shift (ui/button "pad" (fn [])))
+                (when @!shift (ui/button "X" #(swap! x-fired inc)))
+                (ui/combobox :clj
+                             {:options [{:id :clj :label "Clojure"}
+                                        {:id :rs :label "Rust"}]
+                              :on-change (fn [id]
+                                           (reset! !shift true)
+                                           (swap! seen conj [:change id]))
+                              :on-confirm (fn [id]
+                                            (swap! confirm-fired inc)
+                                            (swap! seen conj [:confirm id]))})))
+        gen1 (runtime/export-tree tree)
+        combo (exported-combobox gen1)
+        id-change (:on-change combo)
+        id-confirm (:on-confirm combo)]
+    (is (string? id-change))
+    (is (string? id-confirm))
+    (is (:ok (runtime/invoke-callback-batch!
+              [{:id id-change :value "clj"}
+               {:id id-confirm :value "clj"}])))
+    (is (= [[:change :clj] [:confirm :clj]] @seen))
+    (is (= 1 @confirm-fired) "confirm ran against the pre-export registry")
+    (is (zero? @x-fired) "X must not run during the same-generation batch")
+    (let [gen2 (runtime/export-tree tree)
+          new-combo (exported-combobox gen2)
+          x-id (get-in gen2 [:children 1 :on-click])]
+      (is (= "pad" (get-in gen2 [:children 0 :text])))
+      (is (= "X" (get-in gen2 [:children 1 :text])))
+      (is (not= id-confirm x-id)
+          "after a render, confirm's old id is not reused by X")
+      (is (not= id-confirm (:on-confirm new-combo)))
       (is (= {:ok false :error (str "unknown callback " id-confirm)}
              (runtime/invoke-callback! id-confirm)))
       (is (zero? @x-fired) "stale confirm id must not invoke X")

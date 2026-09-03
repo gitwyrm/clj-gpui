@@ -1,6 +1,6 @@
 # GPUI Kit 0.6 migration plan
 
-Status: **implemented** on `cursor/gpui-kit-0.6-d648` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13)). Phase 3 held locally (`./scripts/ci.sh`: 116 cargo tests, 104 Clojure tests / 639 assertions, cljfmt, protocol 8 protocol-test). GitHub Actions is the remaining gate.
+Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps` on `:chrome :dev`, protocol 9) is the follow-up PR.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
@@ -412,7 +412,7 @@ If a Kit default changes visible behavior (alert dialogs ignoring backdrop click
 
 ### Phase 5 — remaining Kit widgets (separate PR, after the migration)
 
-Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module.
+Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module. This is the follow-up PR (protocol 9); extra chart kinds stay deferred.
 
 ## 9. Testing plan (when we implement)
 

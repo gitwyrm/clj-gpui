@@ -44,6 +44,10 @@
            :alert-dialog? false
            :field-kind :number
            :field-val 4
+           :combo :clj
+           :combo-multi [:clj]
+           :stars 3
+           :step :pay
            :vlist-sel :r0
            :nav :home
            :sidebar-collapsed false
@@ -311,6 +315,32 @@
               {:selected (when (not= tree-sel :gone) tree-sel)
                :height 160
                :on-change (set-key :tree-sel)})
+     (ui/table {:columns [{:label "Invoice" :width 90}
+                          {:label "Status"}
+                          {:label "Amount" :align :end}]
+                :rows [["INV001" "Paid" "$250.00"]
+                       ["INV002" "Pending" "$150.00"]
+                       ["INV003" "Unpaid" "$350.00"]]
+                :footer ["Total" "" "$750.00"]
+                :caption "Declarative Kit Table shorthand (not virtualized)."
+                :accessibility-label "Recent invoices"})
+     (ui/table
+      {:accessibility-label "Staff"}
+      (ui/table-header
+       (ui/table-row
+        (ui/table-head "Person")
+        (ui/table-head {:align :end} "Role")))
+      (ui/table-body
+       (ui/table-row
+        (ui/table-cell
+         (ui/hstack {:gap 8 :align :center}
+                    (ui/avatar "Ada Lovelace")
+                    (ui/label "Ada")))
+        (ui/table-cell {:align :end} (ui/tag "Math"))))
+      (ui/table-footer
+       (ui/table-row
+        (ui/table-cell {:span 2 :align :end} "Footer cell spanning both columns")))
+      (ui/table-caption "Kit Table primitives (per-cell span, widget children)."))
      (ui/label (str "Virtual " (pr-str vlist-sel)))
      (ui/virtual-list (mapv (fn [i]
                               {:id (keyword (str "r" i))
@@ -321,13 +351,41 @@
                        :height 160
                        :on-change (set-key :vlist-sel)}))))
 
-(defn- forms-panel [{:keys [qty otp color date src notes field-kind field-val]}]
+(defn- forms-panel [{:keys [qty otp color date src notes field-kind field-val combo combo-multi stars step]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "qty " qty " · otp " (pr-str otp) " · " (pr-str color) " · " date
-                  " · field " (pr-str field-kind) " " (pr-str field-val)))
+                  " · field " (pr-str field-kind) " " (pr-str field-val)
+                  " · combo " (pr-str combo)
+                  " · multi " (pr-str combo-multi)
+                  " · stars " stars
+                  " · step " (pr-str step)))
    (ui/number-input qty {:id "qty" :min 0 :max 20 :step 1 :on-change (set-key :qty)})
    (ui/otp-input otp {:id "otp" :count 6 :on-change (set-key :otp)})
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/combobox combo
+                 {:id "combo"
+                  :options [{:id :clj :label "Clojure"}
+                            {:id :rs :label "Rust"}
+                            {:id :go :label "Go"}]
+                  :placeholder "Language"
+                  :flex 1
+                  :on-change (set-key :combo)})
+    (ui/combobox combo-multi
+                 {:id "combo-multi"
+                  :options [{:id :clj :label "Clojure"}
+                            {:id :rs :label "Rust"}
+                            {:id :go :label "Go"}]
+                  :multiple true
+                  :placeholder "Languages"
+                  :flex 1
+                  :on-change (set-key :combo-multi)}))
+   (ui/rating stars {:id "stars" :max 5 :on-change (set-key :stars)})
+   (ui/stepper step {:items [{:id :cart :label "Cart"}
+                             {:id :pay :label "Pay"}
+                             {:id :done :label "Done"}]
+                     :on-change (set-key :step)})
    (ui/hstack
     {:gap 8 :align :center}
     (ui/color-picker color {:on-change (set-key :color)})

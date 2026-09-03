@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  8)
+  9)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -152,6 +152,14 @@
                    (str ns "/" (name x))
                    (name x))
     :else (str x)))
+
+(defn- wire-selected
+  "Single selected id, or a vector of ids for `:multiple` widgets."
+  [value]
+  (cond
+    (nil? value) nil
+    (and (sequential? value) (not (string? value))) (mapv wire-id value)
+    :else (wire-id value)))
 
 (defn option-identity
   "Original Clojure identity for an option, before `wire-id`."
@@ -382,7 +390,8 @@
   "Native window. Return this from `app`. Only one makes sense.
 
   `:title` is the OS window title (default `clj-gpui`).
-  `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
+  `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps`
+  HUD; `:chrome :app` hides host chrome.
   `:width` / `:height` are the native window size in pixels
   (`:window-width` / `:window-height` are accepted as aliases).
   Those size keys are not layout: children fill the window.
@@ -781,6 +790,51 @@
                     :options (option-items raw)}
                    opts))))
 
+(defn combobox
+  "Searchable dropdown. Kit `Combobox`. `value` is the selected option
+  id, or a vector of ids when `:multiple true`. `:on-change` receives
+  that id (or vector). `:on-confirm` fires when the menu closes.
+  Search is on by default.
+
+  A single-select pick can emit Kit `Change` then `Confirm` for one
+  user action. The host sends `:on-change` then `:on-confirm` as one
+  batch against the same callback generation, then fetches one tree.
+  Confirm without Change (dismiss) is `:on-confirm` only.
+
+  Controlled selection is pushed to Kit when the ids change *or* the
+  option collection changes (`set_items` does not rebuild Kit's cloned
+  selection, so a renamed or removed selected option would otherwise
+  stick). Kit `set_selected_values` clears the search query, so an
+  unrelated atom rerender with the same options and ids must not wipe
+  in-progress typing. A native `Change` updates the host cache first:
+  Clojure echoing those same ids is a no-op; a different Clojure value
+  still overrides native state.
+
+  (ui/combobox selected
+    {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
+     :placeholder \"Language\"
+     :on-change set-lang!})
+  (ui/combobox picked
+    {:options langs :multiple true :on-change set-picked!})"
+  ([value]
+   {:type :combobox :searchable true :value (wire-selected value) :options []})
+  ([value opts]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:options opts) (:items opts))
+         searchable (if (contains? opts :searchable)
+                      (boolean (:searchable opts))
+                      true)
+         opts (with-id-callbacks
+                (-> opts
+                    (dissoc :options :items)
+                    (assoc :searchable searchable))
+                raw
+                [:on-change :on-confirm])]
+     (merge-widget {:type :combobox
+                    :value (wire-selected value)
+                    :options (option-items raw)}
+                   opts))))
+
 (defn icon
   "Bundled GPUI Kit icon. `name` is a kebab keyword such as `:check`.
 
@@ -932,11 +986,16 @@
 (defn- table-column [x]
   (let [n (option-item x)]
     (cond-> n
-      (and (map? x) (some? (:width x))) (assoc :width (:width x)))))
+      (and (map? x) (some? (:width x))) (assoc :width (:width x))
+      (and (map? x) (some? (:span x))) (assoc :span (:span x))
+      (and (map? x) (some? (:align x)))
+      (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x)))))))
 
-(defn- table-row [x]
+(defn- data-table-row [x]
   (cond
     (nil? x) nil
+    (and (sequential? x) (not (string? x)))
+    (data-table-row {:cells (mapv str x)})
     (map? x)
     (let [cells (mapv str (or (:cells x) []))
           id (or (:id x) (:value x) (first cells) (:label x))
@@ -1134,7 +1193,7 @@
   then `:on-confirm` as one batch against one callback generation, then
   one tree fetch. Programmatic `:selected` does not emit `:on-change`.
 
-  `ui/table` is reserved for a later declarative Kit Table constructor.
+  `ui/table` is Kit's declarative (non-virtualized) Table.
 
   (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
                   :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
@@ -1156,8 +1215,225 @@
     (merge-widget {:type :data-table
                    :value (wire-id selected)
                    :options (into [] (keep table-column) columns)
-                   :items (into [] (keep table-row) rows)}
+                   :items (into [] (keep data-table-row) rows)}
                   opts)))
+
+(defn- table-type? [x expected]
+  (and (ui-node? x) (= (name (:type x)) expected)))
+
+(defn- table-align-name [x]
+  (when (some? x)
+    (if (keyword? x) (name x) (str x))))
+
+(defn- table-section-opts
+  "Wire opts for table sections/cells. `:span` 0/1 is omitted (Kit default)."
+  [opts]
+  (let [opts (apply-control-size (or opts {}))
+        align (:align opts)
+        span (:span opts)
+        a11y (:accessibility-label opts)]
+    (cond-> opts
+      (some? align) (assoc :align (table-align-name align))
+      (or (nil? span) (not (number? span)) (<= span 1)) (dissoc :span)
+      (some? a11y) (assoc :accessibility-label
+                          (if (keyword? a11y) (name a11y) (str a11y))))))
+
+(defn table-caption
+  "Visible caption below a `ui/table`. Children may be text or widgets.
+
+  (ui/table-caption \"Recent invoices\")"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-caption
+           :children (flatten-children children))))
+
+(defn table-head
+  "Header cell. `:span` is Kit `col_span` for this cell only. `:align`
+  is `:start` / `:center` / `:end`. Children may be any clj-gpui nodes.
+
+  (ui/table-head {:span 2 :align :end} \"Amount\")"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-head
+           :children (flatten-children children))))
+
+(defn table-cell
+  "Body or footer cell. Same `:span` / `:align` / `:width` as `table-head`.
+  Children may be any clj-gpui nodes (avatar, button, stack, badge, …).
+
+  (ui/table-cell {:span 2 :align :end} \"Total\")
+  (ui/table-cell (ui/badge 1 (ui/label \"Ada\")))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-cell
+           :children (flatten-children children))))
+
+(defn table-row
+  "A row of `table-head` and/or `table-cell` children.
+
+  (ui/table-row (ui/table-head \"Name\") (ui/table-head \"Lang\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-row
+           :children (flatten-children children))))
+
+(defn table-header
+  "Header section wrapping `table-row`s.
+
+  (ui/table-header (ui/table-row (ui/table-head \"Name\")))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-header
+           :children (flatten-children children))))
+
+(defn table-body
+  "Body section wrapping `table-row`s."
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-body
+           :children (flatten-children children))))
+
+(defn table-footer
+  "Footer section wrapping `table-row`s. A footer cell may span columns
+  independently of the body."
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (table-section-opts opts)
+           :type :table-footer
+           :children (flatten-children children))))
+
+(defn- table-head-from-col [col]
+  (cond
+    (nil? col) nil
+    (table-type? col "table-head") col
+    (ui-node? col) (table-head col)
+    (map? col)
+    (table-head (select-keys col [:span :align :width :id])
+                (str (or (:label col) (:text col) (:id col) "")))
+    :else (table-head (str col))))
+
+(defn- wrap-table-cell [cell align width]
+  (let [inherited (cond-> {}
+                    (some? align) (assoc :align align)
+                    (some? width) (assoc :width width))]
+    (cond
+      (nil? cell) (table-cell inherited "")
+      (table-type? cell "table-cell") cell
+      (ui-node? cell) (table-cell inherited cell)
+      (map? cell)
+      (let [content (if (contains? cell :content)
+                      (:content cell)
+                      (or (:text cell) (:label cell) ""))
+            opts (-> cell
+                     (dissoc :content :text :label :cells)
+                     (cond-> (nil? (:align cell)) (merge (select-keys inherited [:align]))
+                             (nil? (:width cell)) (merge (select-keys inherited [:width]))))]
+        (table-cell opts content))
+      :else (table-cell inherited cell))))
+
+(defn- cells-of-row [row]
+  (cond
+    (nil? row) []
+    (and (sequential? row) (not (string? row))) (vec row)
+    (map? row) (vec (or (:cells row) []))
+    :else [row]))
+
+(defn- table-row-from-data [row aligns widths]
+  (if (table-type? row "table-row")
+    row
+    (apply table-row
+           (map-indexed
+            (fn [i cell]
+              (wrap-table-cell cell (get aligns i) (get widths i)))
+            (cells-of-row row)))))
+
+(defn- expand-table-shorthand [opts]
+  (let [cols (or (:columns opts) (:options opts) [])
+        rows (or (:rows opts) (:items opts) [])
+        footer (:footer opts)
+        caption (or (:caption opts) (:text opts))
+        rest-opts (dissoc opts :columns :rows :items :options :footer :caption :text)
+        aligns (mapv #(when (map? %) (table-align-name (:align %))) cols)
+        widths (mapv #(when (map? %) (:width %)) cols)
+        header (when (seq cols)
+                 (table-header (apply table-row (keep table-head-from-col cols))))
+        body (when (seq rows)
+               (apply table-body (map #(table-row-from-data % aligns widths) rows)))
+        foot (when (some? footer)
+               (table-footer (table-row-from-data footer aligns widths)))
+        cap (when (some? caption)
+              (if (table-type? caption "table-caption")
+                caption
+                (table-caption caption)))
+        children (cond-> []
+                   header (conj header)
+                   body (conj body)
+                   foot (conj foot)
+                   cap (conj cap))]
+    (assoc (table-section-opts rest-opts)
+           :type :table
+           :children children)))
+
+(defn- table-shorthand? [opts children]
+  (and (empty? children)
+       (or (contains? opts :columns)
+           (contains? opts :rows)
+           (contains? opts :footer)
+           (contains? opts :caption)
+           (contains? opts :options)
+           (contains? opts :items)
+           (contains? opts :text))))
+
+(defn table
+  "Declarative Kit Table. Not virtualized — use `ui/data-table` for
+  large row sets.
+
+  Convenience APIs may simplify Kit, but they must not hide it.
+  The Kit primitives are always available:
+
+  (ui/table
+    (ui/table-header
+      (ui/table-row
+        (ui/table-head \"Name\")
+        (ui/table-head {:align :end} \"Amount\")))
+    (ui/table-body
+      (ui/table-row
+        (ui/table-cell (ui/avatar \"Ada\") (ui/label \"Ada\"))
+        (ui/table-cell {:align :end} \"$250\")))
+    (ui/table-footer
+      (ui/table-row
+        (ui/table-cell {:span 2 :align :end} \"Total $250\")))
+    (ui/table-caption \"Recent invoices\"))
+
+  `table-head` and `table-cell` accept any clj-gpui children, not only
+  strings. `:span` / `:align` / `:width` belong on the individual cell.
+  `:accessibility-label` is Kit `Table::accessibility_label` (the name a
+  screen reader announces). A visible `:caption` is not used as that name.
+
+  `{:columns … :rows … :footer … :caption …}` remains as shorthand and
+  expands into those primitives. Column `:span` applies to the header
+  cell only, not every body cell. Column `:align` / `:width` copy onto
+  plain string cells. A footer cell may span independently:
+
+  (ui/table {:columns [{:label \"Name\"} {:label \"Amount\" :align :end}]
+             :rows [[\"Ada\" \"$250\"] [\"Rich\" \"$150\"]]
+             :footer [\"Total\" \"$400\"]
+             :caption \"Recent invoices\"
+             :accessibility-label \"Recent invoices\"})"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (if (table-shorthand? opts children)
+      (expand-table-shorthand opts)
+      (assoc (table-section-opts (dissoc opts :columns :rows :items :options
+                                         :footer :caption))
+             :type :table
+             :children (flatten-children children)))))
 
 (defn tree
   "Tree of nested `{id, label, items}` rows. `:expanded true` is the initial
@@ -1258,6 +1534,44 @@
                   :text (str (or value 0))
                   :on-change on-change}
                  opts)))
+
+(defn rating
+  "Star rating. `value` is 0..=`:max` (default 5). `:on-change` receives
+  the new integer. Optional `:color` is a hex fill.
+
+  Kit clamps `.value()` to the current max (default 5), so the host
+  applies `:max` before `:value`. `(ui/rating 8 {:max 10})` is 8, not 5.
+
+  (ui/rating 3 {:max 5 :on-change set!})"
+  ([value]
+   {:type :rating :value (or value 0)})
+  ([value on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :rating :value (or value 0)} on-change-or-opts)
+     {:type :rating :value (or value 0) :on-change on-change-or-opts}))
+  ([value on-change opts]
+   (merge-widget {:type :rating :value (or value 0) :on-change on-change}
+                 opts)))
+
+(defn stepper
+  "Step progress. `value` is the selected item id. `:on-change` receives
+  that original id. `:orientation :vertical` stacks the steps.
+
+  (ui/stepper :pay
+    {:items [{:id :cart :label \"Cart\"}
+             {:id :pay :label \"Pay\"}
+             {:id :done :label \"Done\"}]
+     :on-change set-step!})"
+  ([value]
+   {:type :stepper :value (wire-id value) :items []})
+  ([value opts]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:items opts) (:options opts) [])
+         opts (with-id-callbacks (dissoc opts :items :options) raw [:on-change])]
+     (merge-widget {:type :stepper
+                    :value (wire-id value)
+                    :items (option-items raw)}
+                   opts))))
 
 (defn otp-input
   "Fixed-length digit cells. `:on-change` fires when every cell is

@@ -3,7 +3,7 @@ use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub const PROTOCOL_VERSION: u64 = 8;
+pub const PROTOCOL_VERSION: u64 = 9;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -125,6 +125,23 @@ pub fn table_activation_calls(
     list_activation_calls(on_change, on_confirm, row_id)
 }
 
+/// Combobox pick / popover close: `:on-change` then `:on-confirm`, same
+/// payload (one id, a JSON array when `:multiple`, or `null`).
+pub fn combobox_activation_calls(
+    on_change: Option<String>,
+    on_confirm: Option<String>,
+    payload: Value,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let Some(id) = on_change {
+        calls.push(CallbackCall::with_value(id, payload.clone()));
+    }
+    if let Some(id) = on_confirm {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    calls
+}
+
 /// Coalesce gpui-component 0.5.1 table `SelectRow` + optional
 /// `DoubleClickedRow` from one `on_row_left_click`.
 ///
@@ -179,6 +196,49 @@ impl TableClickCoalesce {
     pub fn take_pending_select(&mut self) -> Option<usize> {
         self.flush_scheduled = false;
         self.pending_row.take()
+    }
+}
+
+/// Coalesce Kit `ComboboxEvent::Change` + optional `ComboboxEvent::Confirm`
+/// from one user action.
+///
+/// Single-select pick: Kit emits Change then Confirm from the same
+/// `toggle` (`should_close = changed && !multiple`). `Context::emit`
+/// only queues `Effect::Emit`; subscribers run later in `flush_effects`
+/// FIFO. Record Change and schedule `Effect::Defer` (`cx.defer_in`) to
+/// flush a lone `:on-change`. Defer is pushed behind those already-queued
+/// emits, so a same-action Confirm runs first, consumes the pending
+/// payload, and sends one `:on-change` + `:on-confirm` batch. Confirm
+/// without Change (dismiss / close) has no pending payload. Multiple
+/// mode Change (popover stays open) has no same-tick Confirm; the
+/// deferred flush sends `:on-change` alone.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ComboboxActivationCoalesce {
+    pending: Option<Value>,
+    flush_scheduled: bool,
+}
+
+impl ComboboxActivationCoalesce {
+    /// Returns whether the caller should schedule a deferred change-only
+    /// flush. `false` when a flush is already pending.
+    pub fn on_change(&mut self, payload: Value) -> bool {
+        self.pending = Some(payload);
+        if self.flush_scheduled {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    /// Consumes a pending Change so the deferred flush is a no-op. The
+    /// returned payload (when present) is `:on-change` in the Confirm batch.
+    pub fn on_confirm(&mut self) -> Option<Value> {
+        self.pending.take()
+    }
+
+    pub fn take_pending_change(&mut self) -> Option<Value> {
+        self.flush_scheduled = false;
+        self.pending.take()
     }
 }
 
@@ -300,6 +360,8 @@ pub struct Item {
     #[serde(default, rename = "on-click")]
     pub on_click: Option<String>,
     /// `description-list` item column span. `0` / omitted is 1.
+    /// Declarative `table` shorthand columns may still send this; the
+    /// Clojure expander copies it onto the header cell only.
     #[serde(default)]
     pub span: u32,
     /// Nested items for menus and trees.
@@ -314,6 +376,9 @@ pub struct Item {
     /// Table column width in pixels; tree/menu unused.
     #[serde(default)]
     pub width: Option<f32>,
+    /// Table column / cell text alignment (`start` / `center` / `end`).
+    #[serde(default)]
+    pub align: Option<String>,
     /// Menu item check mark; tree unused.
     #[serde(default)]
     pub checked: Option<bool>,
@@ -456,7 +521,8 @@ pub struct Node {
     /// Also used as the title for `alert` and `group-box`.
     #[serde(default)]
     pub title: Option<String>,
-    /// `window` (or any root): `"dev"` (default, nREPL footer) or `"app"` (no host chrome).
+    /// `window` (or any root): `"dev"` (default, nREPL footer + fps HUD)
+    /// or `"app"` (no host chrome).
     #[serde(default)]
     pub chrome: Option<String>,
     #[serde(default, rename = "window-width")]
@@ -569,6 +635,13 @@ pub struct Node {
     /// Sheet footer node.
     #[serde(default)]
     pub footer: Option<Box<Node>>,
+    /// `table-head` / `table-cell` Kit `col_span`. `0` / omitted is 1.
+    #[serde(default)]
+    pub span: u32,
+    /// Kit `Table::accessibility_label`. Caption is visible text and is
+    /// not used as the accessible name.
+    #[serde(default, rename = "accessibility-label")]
+    pub accessibility_label: Option<String>,
 }
 
 impl Node {
@@ -938,6 +1011,41 @@ mod tests {
             table_activation_calls(None, Some("cb-13".into()), "ada").len(),
             1
         );
+
+        let combo =
+            combobox_activation_calls(Some("cb-12".into()), Some("cb-13".into()), json!("clj"));
+        assert_eq!(combo[0].id, "cb-12");
+        assert_eq!(combo[1].id, "cb-13");
+        assert_eq!(combo[0].value, Some(json!("clj")));
+        assert_eq!(combo[1].value, Some(json!("clj")));
+        assert!(combobox_activation_calls(None, None, json!("clj")).is_empty());
+        assert_eq!(
+            combobox_activation_calls(Some("cb-12".into()), None, json!(["clj", "rs"])).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn combobox_activation_coalesce_batches_confirm_after_change() {
+        let mut c = ComboboxActivationCoalesce::default();
+        assert!(c.on_change(json!("clj")));
+        assert!(
+            !c.on_change(json!("clj")),
+            "second Change must not stack another defer"
+        );
+        let pending = c.on_confirm();
+        assert_eq!(pending, Some(json!("clj")));
+        assert!(
+            c.take_pending_change().is_none(),
+            "Confirm consumes Change so the deferred flush is a no-op"
+        );
+
+        let mut change_only = ComboboxActivationCoalesce::default();
+        assert!(change_only.on_change(json!("rs")));
+        assert_eq!(change_only.take_pending_change(), Some(json!("rs")));
+
+        let mut confirm_only = ComboboxActivationCoalesce::default();
+        assert!(confirm_only.on_confirm().is_none());
     }
 
     #[test]
@@ -1077,7 +1185,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -1135,6 +1243,39 @@ mod tests {
         assert_eq!(omitted.columns, None);
         assert_eq!(omitted.orientation, None);
         assert_eq!(omitted.collection()[0].span, 0);
+    }
+
+    #[test]
+    fn decodes_table_cell_span_on_the_node() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "table-cell",
+            "span": 2,
+            "align": "end",
+            "children": [{"type": "label", "text": "Total"}]
+        }))
+        .unwrap();
+        assert_eq!(node.span, 2);
+        assert_eq!(node.align.as_deref(), Some("end"));
+        assert_eq!(node.children[0].text.as_deref(), Some("Total"));
+        let omitted: Node = serde_json::from_value(json!({
+            "type": "table-head",
+            "children": [{"type": "label", "text": "Name"}]
+        }))
+        .unwrap();
+        assert_eq!(omitted.span, 0);
+    }
+
+    #[test]
+    fn decodes_table_accessibility_label() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "table",
+            "accessibility-label": "Recent invoices",
+            "children": [{"type": "table-caption", "children": [{"type": "label", "text": "Invoices"}]}]
+        }))
+        .unwrap();
+        assert_eq!(node.accessibility_label.as_deref(), Some("Recent invoices"));
+        let omitted: Node = serde_json::from_value(json!({"type": "table"})).unwrap();
+        assert_eq!(omitted.accessibility_label, None);
     }
 
     #[test]
@@ -1225,7 +1366,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -1287,5 +1428,19 @@ mod tests {
         .unwrap();
         assert!(date.range);
         assert_eq!(date.string_value().as_deref(), Some("2026-09-02"));
+
+        let table: Node = serde_json::from_value(json!({
+            "type": "table",
+            "text": "Invoices",
+            "options": [{"label": "Amount", "align": "end", "width": 80.0}],
+            "items": [
+                {"cells": ["Ada", "$250"]},
+                {"cells": ["Total"], "variant": "footer"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(table.text.as_deref(), Some("Invoices"));
+        assert_eq!(table.options[0].align.as_deref(), Some("end"));
+        assert_eq!(table.items[1].variant.as_deref(), Some("footer"));
     }
 }
