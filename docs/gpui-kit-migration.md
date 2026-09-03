@@ -4,7 +4,7 @@ Status: **plan only**. No host or Clojure code has been changed yet.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
-This document is the course of action for moving clj-gpui off **gpui-component 0.5.1 + crates.io `gpui` 0.2.2** onto **GPUI Kit 0.6**. Naming follows Kit (no 0.5.1 aliases); remaining open questions are in [§11](#11-open-questions-for-discussion).
+This document is the course of action for moving clj-gpui off **gpui-component 0.5.1 + crates.io `gpui` 0.2.2** onto **GPUI Kit 0.6**. Decisions are locked in [§11](#11-decisions).
 
 ## Recommendation (read this first)
 
@@ -16,7 +16,7 @@ That is the right course of action because:
 2. **There is no compatibility audience.** clj-gpui is two days old, unpublished, and has no users. Keeping `ui/divider` / `ui/table` / `ui/text-field` would only freeze a 0.5.1 vocabulary we invented before Kit renamed the types. Matching Kit now means `gpui.ui` stays a thin naming layer over gpui-kit.com instead of a translation table we have to document forever.
 3. **The three text controls should exist together.** 0.6 split `Input` / `Textarea` / `Editor`. Shipping `ui/input` and `ui/editor` while omitting `ui/textarea` would recreate the old "multiline lives on the wrong type" trap.
 
-Do **not** adopt `gpui-shell` (JavaScript host). Clojure is already our scriptable layer. Do **not** adopt `gpui-wry` (WebView); that remains out of scope. `gpui-fps` is optional later for `:chrome :dev`, not part of the compile.
+Do **not** adopt `gpui-shell` (JavaScript host). Clojure is already our scriptable layer. Do **not** adopt `gpui-wry` (WebView); that remains out of scope. **`gpui-fps` is wanted** for `:chrome :dev`, but it is postponed past this migration.
 
 ```text
 today                              after
@@ -35,7 +35,7 @@ host gpui 0.2.2 + component 0.5.1  host gpui-kit 0.6
 
 `ui/table` is reserved for Kit's new declarative `Table`. It is not an alias for DataTable.
 
-Decision still needed before implementation: dependency shape in [§3](#3-dependency-shape) and the remaining items in [§11](#11-open-questions-for-discussion). The naming policy in [§4](#4-naming-policy-adopt-kit-06) is settled.
+Implementation is **one migration PR** covering crate bump, edition 2024, Kit names, `tree-sitter-languages`, and parity for today's widgets. Declarative `ui/table`, Combobox / Rating / Stepper, and `gpui-fps` are follow-ups. Full lock list: [§11](#11-decisions).
 
 ## 1. What changed upstream
 
@@ -48,11 +48,12 @@ The Longbridge project is no longer "a component crate on top of Zed's `gpui` cr
 | Unstyled | `gpui-base` 0.6.0 | Behavior, state, overlays, dock layout algebra, input engine, motion, virtual lists. Independent of the styled theme. |
 | Styled | `gpui-component` 0.6.0 | The widget library we wrap today. Still the right painting layer for clj-gpui. Builds on `gpui-base`. |
 | Assets | `gpui-kit-assets` 0.6.0 | Replaces `gpui-component-assets`. Rust path `gpui_kit_assets`. Lucide SVGs; `IconName` is generated from this pack. |
-| Out of scope | `gpui-shell`, `gpui-wry`, `gpui-fps` | JS runtime, Wry WebView, FPS HUD. |
+| Out of scope for this migration | `gpui-shell`, `gpui-wry` | JS runtime, Wry WebView. |
+| Postponed | `gpui-fps` | FPS / resource HUD. Wanted on `:chrome :dev`; add after the host is on 0.6. |
 
 Documentation moved from `longbridge.github.io/gpui-component` to [gpui-kit.com](https://gpui-kit.com). The GitHub repo is `longbridge/gpui-kit` (the old `gpui-component` repo is the 0.5 line).
 
-Kit itself uses **Rust edition 2024**. That is a dependency concern, not a requirement that our `host/` crate switch editions. Edition 2024 needs rustc **1.85+**. This environment has rustc **1.98.1**; `rust-toolchain.toml` already tracks `stable`.
+Kit uses **Rust edition 2024**. The host will too. Edition 2021 on `host/Cargo.toml` was a mistake for a new project; the migration sets `edition = "2024"`. That needs rustc **1.85+**. This environment has rustc **1.98.1**; `rust-toolchain.toml` already tracks `stable`. README should require 1.85+ (recent stable).
 
 Do not confuse this with **GPUI Box** (`gpui-box` / `gpui-box-kit` on crates.io). That is a different independent GPUI distribution. We want Longbridge **GPUI Kit**.
 
@@ -66,7 +67,7 @@ gpui-component = "0.5.1"
 gpui-component-assets = "0.5.1"
 ```
 
-Host edition is 2021. Clojure protocol version is **7**. Coverage inventory is [docs/gpui-component.md](gpui-component.md), which is explicitly "0.5.1, not later git main."
+Host edition is **2021** today (wrong for a new crate; migration moves it to **2024**). Clojure protocol version is **7**. Coverage inventory is [docs/gpui-component.md](gpui-component.md), which is explicitly "0.5.1, not later git main."
 
 The host files that import GPUI / gpui-component:
 
@@ -86,11 +87,14 @@ Clojure constructors in `src/gpui/ui.clj` still use 0.5.1 names (`text-field`, `
 
 ## 3. Dependency shape
 
-### 3.1 Recommended: one facade crate, aliases in Rust
+### 3.1 Facade crate, aliases in Rust
 
 ```toml
+[package]
+edition = "2024"
+
 [dependencies]
-gpui-kit = { version = "0.6.0", features = ["tree-sitter"] }
+gpui-kit = { version = "0.6.0", features = ["tree-sitter-languages"] }
 # plus existing anyhow, serde, xcap, macos objc2, …
 ```
 
@@ -118,27 +122,17 @@ Why this, not listing `gpui-pre` + `gpui-component` + `gpui-kit-assets` ourselve
 - `gpui_kit::init(cx)` is `gpui_component::init`, which also initializes `gpui-base`. Calling both is wrong.
 - Default `assets` feature is the icon pack. Without it, `IconName` / spinner / alert / select chevron break the same way they would if we dropped `gpui-component-assets` today.
 
-Keep the host crate on **edition 2021** until something forces 2024. Do not set `edition = "2024"` just because Kit did.
+Set the host crate to **edition 2024** in the same PR. That matches Kit and is the right default for a new project. Watch for edition 2024 keyword changes (`gen`, `unsafe` in `extern` blocks) in our own Rust; Kit already compiles on 2024 so the dependency side is fine.
 
-Pin **`0.6.0`** for the first compiling PR (this release is hours old; `gpui-pre` already moved 0.3.1 → 0.3.3 the same day). Relax to `"0.6"` once a lockfile has proven the range.
+Pin **`0.6.0`** for the migration PR (this release is hours old; `gpui-pre` already moved 0.3.1 → 0.3.3 the same day). Relax to `"0.6"` once a lockfile has proven the range.
 
-### 3.2 Tree-sitter features (decision)
+### 3.2 Tree-sitter: all shipped languages
 
-0.6 **does not** enable Tree-sitter on the default feature set. Highlighting is per-language:
+0.6 **does not** enable Tree-sitter on the default feature set. We enable **`tree-sitter-languages`**, Kit's full grammar bundle.
 
-`tree-sitter`, `tree-sitter-languages`, or `tree-sitter-rust` / `-javascript` / `-python` / …
+Syntax highlighting is a normal need for apps built on clj-gpui, including the author's. First-build time is accepted: the product plan is to ship **precompiled host binaries**, so application authors are not waiting on tree-sitter + GPUI/GPU in `cargo build`.
 
-Our widgets gallery uses `(ui/editor src {:language "clojure" …})`. Kit has **no** `tree-sitter-clojure` feature (search on `v0.6.0` is empty). Today that language name is already a best-effort highlighter, not a real Clojure grammar. 0.6 does not make that worse.
-
-Options:
-
-| Option | When to use |
-|---|---|
-| **A. `tree-sitter` only** (JSON grammar + engine) | Smallest compile. `ui/editor` is a text box with little highlighting. |
-| **B. A short list** (`rust`, `javascript`, `python`, `html`, `css`, `markdown`, `yaml`, `toml`, `bash`) | Matches "highlighter widget, not LSP" without dragging every grammar. |
-| **C. `tree-sitter-languages`** | Closest to "whatever 0.5.1 defaulted to," slowest host builds. |
-
-**Recommend B** for the migration PR, documented in `ui/editor` as the shipped set. Adding a grammar is a Cargo feature, not a protocol change.
+Kit still has **no** `tree-sitter-clojure` grammar (search on `v0.6.0` is empty). `(ui/editor … {:language "clojure"})` stays a best-effort / plain-text highlighter, same as today. Document the languages the feature actually enables (rust, javascript, python, html, …) in `ui/editor`. Adding Clojure would be upstream in gpui-kit, not a clj-gpui protocol change.
 
 ### 3.3 Rejected dependency shapes
 
@@ -353,29 +347,27 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | `SelectableText`, window `TextSelection` | maybe | Cross-element copy. Preview/Evalight might care. |
 | Motion / spring | no widget | Only if we expose animation as a node. |
 | Accessibility IDs / labels | optional attrs | Good later; not a blocker. |
-| `gpui-fps` | `:chrome :dev` HUD | Debug only. |
+| `gpui-fps` | `:chrome :dev` HUD | **Wanted, postponed.** Not in the migration PR. |
 | Dock persistence, LSP editor | still out of scope | Same as 0.5.1 coverage doc. |
 
 Update [docs/gpui-component.md](gpui-component.md) **after** the host compiles: retitle to GPUI Kit 0.6 coverage, add the new rows as class C. Keep the 0.5.1 file in git history; do not maintain two inventories.
 
 ## 8. Implementation phases
 
-Each phase is a discussion checkpoint. Phase 0 is this document. Naming (§4) is decided. Implementation should not start until we pick the remaining options in §3 and §11.
+Work happens **in one migration PR** (this branch, after the plan lands, or a successor branch — not a spike PR plus a second PR). The numbered phases below are commit order inside that PR, not separate reviews. Land when Phase 3 is honestly done, with Phase 4 docs in the same PR. Phase 5 is a later PR.
 
-### Phase 0 — this plan (done when the PR merges)
+### Phase 0 — this plan
 
-- Branch + this file + no code.
+- This file. No host code.
 
-### Phase 1 — dependency spike (short, throwaway-ok)
+### Phase 1 — dependencies and edition (first commits of the migration PR)
 
-Goal: `cd host && cargo check` with empty or stubbed modules **or** the real tree and a list of errors.
+1. `host/Cargo.toml`: `gpui-kit = { version = "0.6.0", features = ["tree-sitter-languages"] }`, `edition = "2024"`.
+2. `cargo generate-lockfile` / `cargo check`.
+3. Confirm rustc, Vulkan/Linux deps, and that `gpui-pre` resolved to a version Kit accepts (0.3.1 pin vs 0.3.3). If 0.3.3 breaks vs Kit's 0.3.1 pin, use `[patch]` or `=0.3.1`.
+4. Fix edition-2024 fallout in our Rust if the compiler reports it.
 
-1. Change `host/Cargo.toml` as in §3.1.
-2. `cargo generate-lockfile` / `cargo check` and paste the first error wave into the PR.
-3. Confirm rustc, Vulkan/Linux deps, and that `gpui-pre` resolved to a version Kit accepts (0.3.1 pin vs 0.3.3).
-4. Stop and report if `gpui-pre` 0.3.3 is a breaking GPUI API vs Kit's 0.3.1 pin — `[patch]` or `=0.3.1` may be required.
-
-This phase is allowed to be an ugly compile dump. It answers "how large is GPUI 0.3, really?" before rewriting dock.
+Push these commits on the migration PR; do not open a second PR for the spike.
 
 ### Phase 2 — mechanical compile + name remap
 
@@ -418,9 +410,9 @@ If a Kit default changes visible behavior (alert dialogs ignoring backdrop click
 - `host/themes/README.md` provenance.
 - LICENSE note: palettes still Apache-2.0, now from gpui-kit.
 
-### Phase 5 — remaining Kit widgets (separate PR)
+### Phase 5 — remaining Kit widgets (separate PR, after the migration)
 
-Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. Each gets gallery coverage. Not a dump of every 0.6 module.
+Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **`gpui-fps`** on `:chrome :dev` is in this bucket: wanted, not forgotten. Each widget gets gallery coverage. Not a dump of every 0.6 module.
 
 ## 9. Testing plan (when we implement)
 
@@ -435,42 +427,44 @@ Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. Ea
 | Counter / TodoMVC | existing examples | 3 |
 | Preview | `gpui.runtime/preview-png` after connect | 3 |
 
-There is no CI in this repo yet. Do not block the migration on adding it, but Phase 1–2 will be painful without at least `cargo test` locally.
+There is no CI in this repo yet. Do not block the migration on adding it. The one migration PR still needs `cargo test` and Clojure tests locally before it is ready for review.
 
 Browser verification does not apply (native GPUI, not a web app). Closest substitute is the widget gallery + protocol-test.
 
 ## 10. Risks
 
 - **`gpui-pre` moves independently of Kit.** 0.3.3 published the same day as 0.6.0. Lock the first compiling tree; do not float `*` on GPUI.
-- **Compile time.** `tree-sitter-languages` plus GPUI/GPU stack is a long first build. Feature set B in §3.2 is the mitigation.
+- **Compile time.** `tree-sitter-languages` plus GPUI/GPU is a long first build. Accepted: we will ship precompiled host binaries, so app authors are not on that path.
 - **Dock rewrite regresses chrome** if we forget `DockSkin` or `panel_handle` (blank tabs / `"clj-gpui-panel"` titles).
 - **Editor / textarea / input entity split** breaks slot reuse if an example reuses the same `:id` across kinds. Number-input sharing with `ui/input` is the real slot hazard.
 - **Preview / occlusion** still macOS-fragile; 0.3 may help or may rename `GPUIWindow`.
-- **`ui/table` unused until Phase 5** may look like a missing widget in the README. Call that out: data tables are `ui/data-table`.
-- **No Clojure tree-sitter** — `:language "clojure"` stays cosmetic.
-- **Edition / MSRV** — fine on current stable; anyone on rustc &lt; 1.85 cannot build the host. README should say "recent stable" more firmly (1.85+).
+- **`ui/table` unused until a follow-up PR** may look like a missing widget in the README. Call that out: data tables are `ui/data-table`.
+- **No Clojure tree-sitter** — `:language "clojure"` stays cosmetic even with `tree-sitter-languages`.
+- **Edition 2024** — rustc 1.85+; our own `host/src` may need small syntax fixes when switching from 2021.
 
-## 11. Open questions for discussion
+## 11. Decisions
 
-**Settled:** Clojure / wire / host names follow Kit 0.6 ([§4](#4-naming-policy-adopt-kit-06)). No 0.5.1 aliases. Protocol 8.
+Locked before implementation:
 
-Please answer the rest before Phase 1, or accept the defaults in **bold**:
+| # | Question | Decision |
+|---|---|---|
+| — | Clojure / wire / host names | Kit 0.6 names. No 0.5.1 aliases. Protocol **8**. ([§4](#4-naming-policy-adopt-kit-06)) |
+| 1 | Facade vs raw crates | **`gpui-kit` 0.6.0** with `gpui_kit as gpui` / `component as gpui_component` aliases. |
+| 2 | Tree-sitter | **`tree-sitter-languages`** (all Kit grammars). Highlighting matters for real apps. Compile cost is accepted because we will offer precompiled hosts. Still no Clojure grammar upstream. |
+| 3 | Palettes | **Follow Kit's 0.6 `themes/` list.** Drop Matrix / Adventure Time if Kit dropped them; add Aurora + Asciinema. |
+| 4 | Host edition | **`edition = "2024"`.** 2021 was a mistake on a new project. |
+| 5 | Declarative `Table` in the migration PR? | **No.** Reserve `ui/table`; ship data tables as `ui/data-table`. Wrap declarative `Table` in a follow-up. |
+| 6 | First widgets after the migration | **Declarative `ui/table`, then Combobox / Rating / Stepper.** |
+| 7 | `gpui-fps` | **Yes, later.** Wanted on `:chrome :dev`. Not in the migration PR. |
+| 8 | How many PRs | **One migration PR** for crate bump + names + edition + languages + parity. Not a spike PR plus a second PR. Remaining widgets / fps are after that. |
 
-1. **Facade vs raw crates?** Default: **`gpui-kit` 0.6.0 with module aliases** (§3.1).
-2. **Tree-sitter feature set?** Default: **short list (B)**, not all languages.
-3. **Dropped palettes?** Default: **follow Kit's 0.6 `themes/` list** (drop Matrix / Adventure Time if they did; add Aurora + Asciinema).
-4. **Host edition?** Default: **stay 2021**.
-5. **Wrap declarative `Table` as `ui/table` in the migration PR?** Default: **no** — reserve the name, implement in Phase 5. Data tables ship as `ui/data-table`.
-6. **Phase 5 first widgets after textarea/alert-dialog?** Default: **declarative `ui/table`, then Combobox / Rating / Stepper**.
-7. **`gpui-fps` in dev chrome?** Default: **no**, until someone wants it.
-8. **One migration PR vs spike PR + real PR?** Default: **spike can be the first commits on this branch**; land when Phase 3 is honestly done, not after Phase 5.
+## 12. What this plan PR will not do
 
-## 12. What this branch will not do
-
-- Implement the crate bump or the name remap (still plan-only).
+- Implement the crate bump or the name remap (this PR is still the plan).
 - Publish to Clojars or add CI.
 - Take a git dependency on Kit `main`.
 - Introduce `gpui-shell` or WebView.
 - Keep `ui/text-field`, `ui/divider`, or a DataTable-backed `ui/table` "for compatibility."
+- Add `gpui-fps` yet.
 
-When we decide to implement, start at Phase 1 and keep this file updated with the decisions from §11.
+When implementation starts, it is one PR: Phase 1 through Phase 4 on a single branch, ready for review only after Phase 3 holds.
