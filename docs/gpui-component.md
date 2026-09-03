@@ -52,7 +52,7 @@ Classification:
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |
 | `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
 | `slider::Slider` range / log scale | — | ❌ | C | Range thumbs and logarithmic scale need richer values |
-| `input::Textarea` | `ui/textarea` | ✅ | C | Host-held `TextareaState`. Same string callbacks as `ui/input`. `:rows` default 3 |
+| `input::Textarea` | `ui/textarea` | ✅ | C | Host-held `TextareaState`. Same string callbacks as `ui/input`. `:rows` default 3. `:on-submit` enables Kit `submit_on_enter` (Enter submits, Shift+Enter newline) |
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse |
 | `input::OtpInput` | `ui/otp-input` | ✅ | C | Host-held `OtpState`. `:on-change` only when every cell is filled (crate complete-only). `:count` default 6, clamped 1–12. `:masked` |
 | `input::Editor` / `EditorState` | `ui/editor` | ✅ | C | Kit `Editor` highlighter. `:language` (default `text`). **No LSP**. `tree-sitter-languages` enabled; no Clojure grammar |

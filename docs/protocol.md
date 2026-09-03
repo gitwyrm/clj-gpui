@@ -178,13 +178,13 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link`, `notification` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`); `data-table` double-click row (row id) |
 | `on-change` | string callback id | `input`/`textarea`/`editor` (string), `switch`/`toggle` (bool), `slider`/`number-input` (number), `select`/`radio-group`/`tabs`/`breadcrumb`/`accordion`/`list`/`data-table`/`tree`/`dropdown-menu`/`context-menu`/`virtual-list`/`sidebar` (wire id; Clojure restores the original id). Accordion `:multiple` sends a JSON array in original item order. `otp-input` string when full. `color-picker` hex or `null`. `date-picker` ISO string or `[start, end]`. `settings` `{"id","value"}`. `resizable` array of px sizes |
-| `on-submit` | string callback id | `input`, `textarea` (Enter; called with the field string) |
+| `on-submit` | string callback id | `input` (Enter). `textarea`: when set, Enter submits and Shift+Enter inserts a newline (Kit `submit_on_enter`); omitted, both keys insert a newline |
 | `on-blur` | string callback id | `input`, `textarea`, `otp-input`, `editor` (called with the current string) |
 | `on-escape` | string callback id | `input`, `textarea`, `editor` (0-arg) |
 | `on-close` | string callback id | `alert`, `dialog`, `alert-dialog`, `sheet`, `notification` (0-arg) |
 | `on-ok` / `on-cancel` | string callback id | `dialog`, `alert-dialog` (0-arg; crate then closes and fires `on-close`) |
 | `on-confirm` | string callback id | `list` (click / Enter; original Clojure row id). Arrows only fire `on-change`; click/Enter fire `on-change` then `on-confirm` as one batch. `data-table`: count-1 click is only `on-change` (end of the GPUI effect cycle). Count-2 `on_row_left_click` emits `SelectRow` then `DoubleClickedRow`, batched as `on-change` then `on-confirm` (or `on-double-click`) |
-| `on-open-change` | string callback id | `popover` (boolean); `dialog` / `sheet` (`false` on dismiss) |
+| `on-open-change` | string callback id | `popover` (boolean); `dialog` / `alert-dialog` / `sheet` (`false` on dismiss) |
 | `on-copied` | string callback id | `clipboard` (copied string) |
 | `focus` | bool | `input`, `textarea`: request keyboard focus |
 | `checked` | bool | `checkbox`, `switch`, `toggle` |
@@ -207,7 +207,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `placement` | string | `sheet`: `left` / `right` / `top` / `bottom` (default `right`) |
 | `autohide` | bool | `notification` (default true) |
 | `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; there is no Clojure grammar |
-| `rows` | number | `textarea` visible height (default 3); `editor` visible height (default 8) |
+| `rows` | number | `textarea` visible height (default 3) |
 | `masked` | bool | `otp-input` |
 | `collapsed` | bool | `sidebar` |
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center` |
@@ -218,7 +218,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `shape` | string | `checkbox`: `circle` for a round toggle |
 | `primary` | bool | `button` (alias for `variant: primary`) |
 | `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`), `notification` (`info`/`success`/`warning`/`error`), `chart` (`line`/`bar`/`area`/`pie`), settings field kind |
-| `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` / `dialog` / `sheet` / `notification` / `sidebar` titles |
+| `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` / `dialog` / `alert-dialog` / `sheet` / `notification` / `sidebar` titles |
 | `compact` | bool | `button` |
 | `strikethrough` | bool | text |
 | `shadow` | bool | layouts |

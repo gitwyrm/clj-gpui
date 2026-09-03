@@ -32,6 +32,10 @@ pub struct DialogSpec {
     pub node: Node,
 }
 
+fn is_dialog_kind(kind: &str) -> bool {
+    matches!(kind, "dialog" | "alert-dialog")
+}
+
 pub fn node_key(node: &Node, path: &str) -> String {
     node.id
         .as_deref()
@@ -43,7 +47,7 @@ pub fn node_key(node: &Node, path: &str) -> String {
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
     let mut out = Vec::new();
     walk_nodes(root, "root", &mut |node, path| {
-        if matches!(node.kind.as_str(), "dialog" | "alert-dialog") && node.open.unwrap_or(false) {
+        if is_dialog_kind(&node.kind) && node.open.unwrap_or(false) {
             out.push(DialogSpec {
                 key: node_key(node, path),
                 node: node.clone(),
@@ -161,7 +165,7 @@ impl QueuedAction {
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
                 Self::ButtonClick { .. } => node.kind == "button",
-                Self::DialogClose { .. } => node.kind == "dialog",
+                Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => node.kind == "popover",
                 Self::MenuSelect { .. } => {
                     node.kind == "dropdown-menu" || node.kind == "context-menu"
@@ -383,7 +387,7 @@ fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
         }
         let key = node_key(node, walk_path);
         match node.kind.as_str() {
-            "dialog" | "popover" | "sheet" => {
+            "dialog" | "alert-dialog" | "popover" | "sheet" => {
                 if let Some(rel) = static_rel(path, &format!("{key}/content")) {
                     found = node_at_static_rel(&node.children, rel).cloned();
                 } else if node.kind == "sheet" {
@@ -919,6 +923,62 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].key, "ok");
         assert!(notification_autohide(&notes[0].node));
+    }
+
+    #[test]
+    fn collect_open_dialogs_includes_alert_dialog() {
+        let tree = node(json!({
+            "type": "window",
+            "children": [
+                {"type": "alert-dialog", "id": "ask", "open": true, "title": "Alert"}
+            ]
+        }));
+        assert_eq!(
+            dialog_keys(&collect_open_dialogs(&tree)),
+            vec!["ask".to_string()]
+        );
+    }
+
+    #[test]
+    fn alert_dialog_close_and_body_button_resolve() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "alert-dialog", "id": "ask", "open": true,
+            "on-ok": "cb-ok", "on-cancel": "cb-cancel",
+            "on-close": "cb-close", "on-open-change": "cb-open",
+            "children": [
+                {"type": "label", "text": "Undo?"},
+                {"type": "button", "text": "Retry", "on-click": "cb-retry"}
+            ]
+        }]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: Some(true),
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-ok", "cb-close", "cb-open"]
+        );
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: Some(false),
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-cancel", "cb-close", "cb-open"]
+        );
+        queue.push(QueuedAction::DialogClose {
+            key: "ask".into(),
+            ok: None,
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-close", "cb-open"]);
+        queue.push(QueuedAction::ButtonClick {
+            key: "ask/content/1".into(),
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-retry"]);
     }
 
     #[test]

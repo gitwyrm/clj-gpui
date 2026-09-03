@@ -189,7 +189,8 @@
                      :on-ok #(swap! !state assoc :alert-dialog? false :menu :alert-ok)
                      :on-cancel #(swap! !state assoc :alert-dialog? false :menu :alert-cancel)
                      :on-close #(swap! !state assoc :alert-dialog? false)}
-                    (ui/label "Backdrop clicks do not dismiss this alert."))
+                    (ui/label "Backdrop clicks do not dismiss this alert.")
+                    (ui/button "Retry" #(swap! !state assoc :menu :alert-retry)))
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Open sheet" #(swap! !state assoc :sheet? true))

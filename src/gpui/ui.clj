@@ -517,7 +517,8 @@
   "Multi-line text input (`Textarea` / `TextareaState`).
 
   Same string callbacks as `input`. `:rows` is the visible height
-  (default 3). Prefer a stable `:id`.
+  (default 3). Prefer a stable `:id`. When `:on-submit` is set, Enter
+  submits and Shift+Enter inserts a newline.
 
   (ui/textarea notes {:id \"notes\" :rows 6 :on-change set!})"
   ([value]

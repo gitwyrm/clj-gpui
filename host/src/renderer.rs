@@ -391,6 +391,11 @@ impl RootView {
                                 slot.submitted = None;
                                 slot.change.clear();
                             }
+                            for slot in view.textareas.values_mut() {
+                                slot.wait_for_seq = None;
+                                slot.submitted = None;
+                                slot.change.clear();
+                            }
                             for slot in view.editors.values_mut() {
                                 slot.change.clear();
                             }
@@ -2848,6 +2853,7 @@ impl RootView {
         self.used_textareas.insert(key.to_string());
         let wanted = node.text.clone().unwrap_or_default();
         let rows = node.rows.unwrap_or(3).max(1) as usize;
+        let submit_on_enter = extra::textarea_submit_on_enter(node.on_submit.as_deref());
         if let Some(slot) = self.textareas.get_mut(key) {
             let id_changed = slot.on_change != node.on_change;
             slot.on_change = node.on_change.clone();
@@ -2856,17 +2862,28 @@ impl RootView {
             slot.on_escape = node.on_escape.clone();
             let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
+            let force = matches!(
+                (slot.wait_for_seq, self.tree_seq),
+                (Some(wait), Some(seq)) if wait == seq
+            );
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let current = state.read(cx).value().to_string();
-            if current != wanted && !focused {
+            if current != wanted && (force || (!focused && slot.wait_for_seq.is_none())) {
+                let wanted = wanted.clone();
                 state.update(cx, |input, cx| input.set_value(wanted, window, cx));
+            }
+            if force {
+                slot.wait_for_seq = None;
             }
             if let Some(placeholder) = node.placeholder.clone() {
                 state.update(cx, |input, cx| {
                     input.set_placeholder(placeholder, window, cx);
                 });
             }
-            state.update(cx, |input, cx| input.set_rows(rows, cx));
+            state.update(cx, |input, cx| {
+                input.set_rows(rows, cx);
+                input.set_submit_on_enter(submit_on_enter, cx);
+            });
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
                 state.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -2882,6 +2899,7 @@ impl RootView {
                 .placeholder(placeholder)
                 .default_value(wanted)
                 .rows(rows)
+                .submit_on_enter(submit_on_enter)
         });
         if want_focus {
             state.read(cx).focus_handle(cx).focus(window, cx);
@@ -2908,7 +2926,14 @@ impl RootView {
                     let Some(slot) = this.textareas.get_mut(&key_owned) else {
                         return;
                     };
+                    if slot.wait_for_seq.is_some() {
+                        return;
+                    }
                     let value = input.read(cx).value().to_string();
+                    if slot.submitted.as_ref() == Some(&value) {
+                        return;
+                    }
+                    slot.submitted = None;
                     if slot.change.on_change(value) {
                         Self::schedule_input_change_flush(
                             key_owned.clone(),
@@ -2932,14 +2957,25 @@ impl RootView {
                     secondary: false,
                     shift: false,
                 } => {
-                    let Some(slot) = this.textareas.get_mut(&key_owned) else {
-                        return;
-                    };
-                    if let Some(id) = slot.on_submit.clone() {
+                    let (on_submit, value, seq) = {
+                        let Some(slot) = this.textareas.get_mut(&key_owned) else {
+                            return;
+                        };
+                        let Some(id) = slot.on_submit.clone() else {
+                            return;
+                        };
+                        this.next_submit_seq = this.next_submit_seq.saturating_add(1);
+                        let seq = this.next_submit_seq;
                         let value = input.read(cx).value().to_string();
+                        slot.wait_for_seq = Some(seq);
                         slot.submitted = Some(value.clone());
-                        this.emit_value(id, json!(value));
-                    }
+                        (id, value, seq)
+                    };
+                    let _ = this.cmd_tx.send(Cmd::Callback {
+                        id: on_submit,
+                        value: Some(json!(value)),
+                        seq: Some(seq),
+                    });
                 }
                 _ => {}
             },

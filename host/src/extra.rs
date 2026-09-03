@@ -94,6 +94,13 @@ pub fn input_change_payload(as_number: bool, text: &str) -> Option<Value> {
     }
 }
 
+/// Kit `TextareaState` defaults `submit_on_enter` to false: Enter inserts a
+/// newline and still emits `PressEnter`. Enable it when Clojure provides
+/// `:on-submit` so Enter submits and Shift+Enter inserts a newline.
+pub fn textarea_submit_on_enter(on_submit: Option<&str>) -> bool {
+    on_submit.is_some()
+}
+
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
     match value {
         Some(Value::String(s)) => {
@@ -716,6 +723,12 @@ mod tests {
         assert_eq!(format_iso_date(d), "2026-09-02");
         assert!(parse_iso_date("2026/09/02").is_some());
         assert!(parse_iso_date("nope").is_none());
+    }
+
+    #[test]
+    fn textarea_submit_on_enter_follows_on_submit() {
+        assert!(!textarea_submit_on_enter(None));
+        assert!(textarea_submit_on_enter(Some("cb-submit")));
     }
 
     #[test]
