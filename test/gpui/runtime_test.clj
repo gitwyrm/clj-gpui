@@ -301,7 +301,7 @@
 (defn- exported-table
   [tree]
   (->> (tree-seq :children :children tree)
-       (filter #(= "table" (:type %)))
+       (filter #(= "data-table" (:type %)))
        first))
 
 (deftest table-double-click-batch-keeps-generation-when-tree-would-shift

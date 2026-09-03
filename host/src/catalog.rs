@@ -9,10 +9,10 @@
 //! 3. bundled gpui-component JSON
 //! 4. ThemeRegistry (Default Light / Default Dark)
 
-use gpui_kit as gpui;
-use gpui_kit::component as gpui_component;
 use gpui::App;
 use gpui_component::theme::{Theme, ThemeConfig, ThemeMode, ThemeRegistry, ThemeSet};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -392,7 +392,7 @@ mod tests {
             "bundled themes: {names:?}"
         );
         assert!(names.iter().any(|name| name == "Ayu Light"));
-        assert_eq!(names.len(), 35);
+        assert_eq!(names.len(), 36);
     }
 
     #[test]

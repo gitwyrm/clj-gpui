@@ -7,13 +7,12 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use chrono::NaiveDate;
-use gpui_kit as gpui;
-use gpui_kit::component as gpui_component;
 use gpui::{
-    div, prelude::*, px, size, App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    App, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px, size,
 };
 use gpui_component::{
+    ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
     calendar::Date,
     chart::{AreaChart, BarChart, LineChart, PieChart},
     dock::{Panel as StyledPanel, PanelControl, PanelEvent},
@@ -21,10 +20,11 @@ use gpui_component::{
     input::InputState,
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     text::TextView,
-    v_flex, v_virtual_list, ActiveTheme as _, Colorize as _, Placement, Side,
-    VirtualListScrollHandle,
+    v_flex, v_virtual_list,
 };
-use serde_json::{json, Value};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -144,11 +144,7 @@ pub fn chart_points(node: &Node) -> Vec<(String, f64)> {
         .filter_map(|item| {
             let y = item.number_value()? as f64;
             let x = item.label_or_id();
-            if x.is_empty() {
-                None
-            } else {
-                Some((x, y))
-            }
+            if x.is_empty() { None } else { Some((x, y)) }
         })
         .collect()
 }
@@ -199,9 +195,9 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let fill = cx.theme().chart_2;
     let chart: gpui::AnyElement = match kind.as_str() {
         "bar" => BarChart::new(points)
-            .x(|p| p.0.clone())
-            .y(|p| p.1)
-            .fill(move |_| stroke)
+            .band(|p| p.0.clone())
+            .value(|p| p.1)
+            .fill(move |_, _, _, _| stroke)
             .into_any_element(),
         "area" => AreaChart::new(points)
             .x(|p| p.0.clone())
@@ -425,7 +421,7 @@ pub fn paint_panel_body(
     node: &Node,
     path: &str,
     emit: crate::overlay::ActionEmitter,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
     match node.kind.as_str() {
@@ -667,11 +663,7 @@ pub fn parse_sidebar_side(node: &Node) -> Side {
 
 pub fn otp_length(node: &Node) -> usize {
     let n = node.count.unwrap_or(0) as usize;
-    if n == 0 {
-        6
-    } else {
-        n.clamp(1, 12)
-    }
+    if n == 0 { 6 } else { n.clamp(1, 12) }
 }
 
 pub fn editor_language(node: &Node) -> String {
@@ -757,7 +749,9 @@ mod tests {
         let tokens: Vec<_> = (0..7).map(pie_slice_token).collect();
         assert_eq!(
             tokens,
-            vec!["chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"]
+            vec![
+                "chart_1", "chart_2", "chart_3", "chart_4", "chart_5", "warning", "danger"
+            ]
         );
         for i in 0..7 {
             for j in (i + 1)..7 {

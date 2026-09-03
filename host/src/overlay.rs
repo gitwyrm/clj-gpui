@@ -7,18 +7,19 @@
 
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
-use gpui_kit as gpui;
-use gpui_kit::component as gpui_component;
 use gpui::{
-    div, px, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
+    App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
+    Disableable as _,
     button::{Button, ButtonVariants as _},
-    dialog::{AlertDialog, Dialog},
+    dialog::{AlertDialog, DialogButtonProps},
     h_flex,
     menu::{PopupMenu, PopupMenuItem},
-    v_flex, Disableable as _,
+    v_flex,
 };
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -495,7 +496,7 @@ pub fn configure_dialog(
     }
     match node.variant.as_deref().map(crate::catalog::normalize) {
         Some(name) if name == "confirm" => {
-            dialog = dialog.confirm();
+            dialog = dialog.button_props(DialogButtonProps::default().show_cancel(true));
             if let Some(closable) = node.overlay_closable {
                 dialog = dialog.overlay_closable(closable);
             }
@@ -568,7 +569,7 @@ pub fn acknowledge_dialog_tree(dialog_keys: &mut Vec<String>, tree: &Node) {
     dialog_keys.retain(|key| open.iter().any(|spec| &spec.key == key));
 }
 
-//! Binding Kit 0.6 Dialog callbacks. The crate itself sequences them:
+/// Binding Kit 0.6 Dialog callbacks. The crate itself sequences them:
 ///
 /// * OK: `on_ok` (false keeps the dialog open), then `on_close`
 /// * Cancel, Escape, close button, overlay click: `on_cancel`, then `on_close`

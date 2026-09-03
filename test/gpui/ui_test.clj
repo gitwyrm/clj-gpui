@@ -6,6 +6,16 @@
             [gpui.runtime :as runtime]
             [gpui.ui :as ui]))
 
+(deftest kit-06-names-are-not-aliased
+  (is (nil? (ns-resolve 'gpui.ui 'text-field)))
+  (is (nil? (ns-resolve 'gpui.ui 'divider)))
+  (is (nil? (ns-resolve 'gpui.ui 'table)))
+  (is (some? (ns-resolve 'gpui.ui 'input)))
+  (is (some? (ns-resolve 'gpui.ui 'separator)))
+  (is (some? (ns-resolve 'gpui.ui 'data-table)))
+  (is (some? (ns-resolve 'gpui.ui 'textarea)))
+  (is (some? (ns-resolve 'gpui.ui 'alert-dialog))))
+
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
@@ -528,7 +538,7 @@
                          :flex 1})
           ctx (ui/context-menu [{:id :copy :label "Copy"}] {:flex 1} tbl)]
       (is (= 1 (:flex ctx)))
-      (is (= :data-table (get-in ctx [:children 0 :type]))))
+      (is (= :data-table (get-in ctx [:children 0 :type])))
       (is (= 1 (get-in ctx [:children 0 :flex])))))
   (testing "list selected alias and searchable"
     (let [n (ui/list [{:id :alpha :label "Alpha"} :beta]
@@ -544,12 +554,12 @@
                                  {:id :lang :label "Lang"}]
                        :rows [{:id :ada :cells ["Ada" "Clojure"]}]
                        :selected :ada})]
-      (is (= :data-table (:type n))))
+      (is (= :data-table (:type n)))
       (is (= "ada" (:value n)))
       (is (nil? (:columns n)))
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
-      (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
+      (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells]))))))
   (testing "tree nested items and expanded"
     (let [n (ui/tree [{:id :src :label "src" :expanded true
                        :items [{:id :lib :label "lib.rs"}]}]

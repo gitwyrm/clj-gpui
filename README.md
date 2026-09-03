@@ -4,7 +4,7 @@
 
 A library for writing **native GPUI applications in real Clojure**.
 
-This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [gpui-component](https://crates.io/crates/gpui-component) widgets.
+This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
 There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (host tests, Clojure tests, cljfmt, windowless protocol-test).
 
@@ -12,11 +12,11 @@ There is no Clojars release yet. Depend on this repo with `:local/root` or a git
 
 Requirements:
 
-* A recent stable Rust toolchain (`cargo` on `PATH`)
+* Rust 1.85+ (`edition = "2024"`; a recent stable `cargo` on `PATH`)
 * Java 21+ and the [Clojure CLI](https://clojure.org/guides/install_clojure)
 * Linux or macOS (GPUI's current platforms)
 * A working display. On Linux, GPUI needs Vulkan. Software rendering via Mesa lavapipe is enough for a first window.
-* Linux host builds also need `libdbus-1-dev` (window capture for `gpui.runtime/preview-png`).
+* Linux host builds also need `libdbus-1-dev` (window capture for `gpui.runtime/preview-png`) and `libfontconfig1-dev` (gpui-pre 0.3 font lookup).
 * If `cc` is clang, install `libstdc++-N-dev` for the GCC install clang selects (`cc -v` prints it; Ubuntu 24.04 clang 18 often wants 14). Otherwise rust-lld fails with `unable to find library -lstdc++`.
 
 From a checkout of this repository:
@@ -54,7 +54,7 @@ Or from the repo root:
 ./scripts/run.sh
 ```
 
-On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. Later runs rebuild when a host source file (`host/src/**/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the binary. GPUI and its GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`. Set `CLJ_GPUI_BIN` to skip Cargo entirely.
+On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. Later runs rebuild when a host source file (`host/src/**/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the binary. GPUI Kit, Tree-sitter grammars (`tree-sitter-languages`), and the GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`. Set `CLJ_GPUI_BIN` to skip Cargo entirely.
 
 ![clj-gpui native window](docs/screenshot.png)
 
@@ -128,14 +128,14 @@ Prefer `[gpui.ui :as ui]` and `[gpui.ratom :as r]`. `gpui.core` re-exports `gpui
        {:gap 8}
        (ui/button "−" #(swap! !state update :count dec))
        (ui/button "+" #(swap! !state update :count inc) {:primary true}))
-      (ui/text-field
+      (ui/input
        draft
        {:id "note"
-        :placeholder "A native text field"
+        :placeholder "A native text input"
         :on-change #(swap! !state assoc :draft %)})))))
 ```
 
-That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders and number-inputs pass a number. Select, radio-group, tabs, breadcrumb, accordion, list, table, tree, virtual-list, sidebar, and menus pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Text fields and the highlighter editor pass the current string to `:on-change` / `:on-submit`. OTP `:on-change` fires only when every cell is filled. Color-picker passes a hex string. Date-picker passes an ISO date or `[start end]`. Settings pass `{:id … :value …}`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts, dialogs, sheets, and notifications is 0-arg. Popover / dialog / sheet `:on-open-change` receives a boolean.
+That data is rendered as a native GPUI window: no browser, no webview, no Electron, no HTML, no CSS, no React. Buttons and checkboxes use 0-argument handlers. Switches and toggles pass a boolean. Sliders and number-inputs pass a number. Select, radio-group, tabs, breadcrumb, accordion, list, data-table, tree, virtual-list, sidebar, and menus pass the **original Clojure option id** (keywords stay keywords; strings stay strings). Inputs, textareas, and the highlighter editor pass the current string to `:on-change` / `:on-submit`. OTP `:on-change` fires only when every cell is filled. Color-picker passes a hex string. Date-picker passes an ISO date or `[start end]`. Settings pass `{:id … :value …}`. `:on-double-click` is 0-arg. `:on-blur` gets the field string; `:on-escape` is 0-arg. `:on-close` on alerts, dialogs, sheets, and notifications is 0-arg. Popover / dialog / sheet `:on-open-change` receives a boolean.
 
 ## Architecture
 
@@ -150,7 +150,7 @@ That data is rendered as a native GPUI window: no browser, no webview, no Electr
                        │ host connects as client
 ┌──────────────────────┴───────────────────────┐
 │              Rust process                    │
-│  GPUI window / gpui-component widgets        │
+│  GPUI window / GPUI Kit widgets              │
 │  renderer.rs  ← UI tree as JSON maps         │
 │  bridge.rs    ← TCP client + RPC             │
 └──────────────────────────────────────────────┘
@@ -173,7 +173,7 @@ The UI boundary is ordinary persistent Clojure maps. Functions cannot go on the 
 
 `(r/atom ...)` returns a real `clojure.core/Atom`. The only extra behavior is an `add-watch` (`:gpui.ratom/watch`) that sends `request-render`. The host fetches a fresh tree and paints the whole window.
 
-The host also fetches a tree after every callback (text-field submit sequencing, and handlers that do not touch an atom). During that callback Clojure does not send a second `request-render` from the watch, so a typical `swap!` click is one paint.
+The host also fetches a tree after every callback (input submit sequencing, and handlers that do not touch an atom). During that callback Clojure does not send a second `request-render` from the watch, so a typical `swap!` click is one paint.
 
 `ui/watch!` attaches the same watch to an existing atom.
 
@@ -200,7 +200,7 @@ The native host is ordinary Rust: `cargo fmt` in `host/` if you touch it.
 deps.edn                      ; git-dep library entry
 .cljfmt.edn                   ; cljfmt paths and community indentation
 src/gpui/ui.clj               ; public widgets
-src/gpui/theme.clj            ; register custom gpui-component ThemeSets
+src/gpui/theme.clj            ; register custom GPUI Kit ThemeSets
 src/gpui/ratom.clj            ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
@@ -209,8 +209,8 @@ src/gpui/dev.clj              ; development launcher (nREPL, watcher, Cargo)
 src/gpui/prod.clj             ; production launcher (no nREPL/watcher/Cargo)
 src/gpui/platform.clj         ; folder picker, reveal/open path
 src/gpui/package.clj          ; `clj -X:build package`
-host/                         ; native GPUI + gpui-component host
-host/themes/                  ; bundled gpui-component palettes (Tokyo Night, Ayu, …)
+host/                         ; native GPUI Kit host
+host/themes/                  ; bundled GPUI Kit palettes (Tokyo Night, Ayu, …)
 examples/counter/             ; plain counter
 examples/widgets/             ; gallery of newly supported widgets
 examples/todomvc/             ; classic TodoMVC layout
@@ -218,10 +218,12 @@ examples/themes/              ; custom ThemeSet (Catppuccin Violet)
 template/                     ; copyable app skeleton
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
-docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
+docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 ```
 
 ## Clojure UI API
+
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. `ui/table` is reserved for Kit's declarative Table (not wrapped yet). Data tables are `ui/data-table`. `ui/textarea` and `ui/alert-dialog` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -237,7 +239,8 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/scroll {:flex 1} ...)          ; leftover height in a column
 (ui/scroll {:height 220} ...)      ; fixed viewport
 (ui/scroll {:width 300} ...)       ; constrain viewport width
-(ui/text-field value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
+(ui/input value {:placeholder "…" :on-change f :on-submit g :on-blur save :on-escape cancel :focus true})
+(ui/textarea notes {:id "notes" :rows 4 :on-change f})
 (ui/switch on? {:on-change #(swap! !state assoc :on %)})
 (ui/toggle bold? {:on-change set-bold! :text "Bold"})
 (ui/radio-group selected {:options [{:id :light :label "Light"} :dark]
@@ -251,8 +254,8 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/tabs tab {:items [{:id :general :label "General"}]
               :variant :underline
               :on-change set-tab!})
-(ui/divider)
-(ui/divider "or")
+(ui/separator)
+(ui/separator "or")
 (ui/tag "Beta" {:variant :info})
 (ui/alert "Saved" {:variant :success :title "Done" :on-close hide!})
 (ui/spinner {:size :small})
@@ -271,17 +274,19 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 (ui/description-list items {:orientation :horizontal :columns 2})
 (ui/dialog open? {:title "Delete?" :variant :confirm :on-ok delete! :on-close hide!}
   (ui/label "This cannot be undone."))
+(ui/alert-dialog open? {:title "Delete?" :variant :confirm :on-ok delete! :on-close hide!}
+  (ui/label "Backdrop clicks do not dismiss this."))
 (ui/popover open? {:trigger (ui/button "More") :on-open-change set-open!}
   (ui/label "Hint"))
 (ui/dropdown-menu [{:id :copy :label "Copy"} :- {:id :paste :label "Paste"}]
                   {:on-change handle!}
                   (ui/button "Edit"))
-(ui/context-menu items {:on-change handle!} (ui/table {:columns cols :rows rows :flex 1}))
+(ui/context-menu items {:on-change handle!} (ui/data-table {:columns cols :rows rows :flex 1}))
 (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
-(ui/table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
-           :rows [{:id :ada :cells ["Ada" "Clojure"]}]
-           :selected :ada
-           :on-change set-row!})
+(ui/data-table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
+                :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                :selected :ada
+                :on-change set-row!})
 (ui/tree [{:id :src :label "src" :expanded true
            :items [{:id :lib :label "lib.rs"}]}]
          {:on-change set-node!})
@@ -306,7 +311,7 @@ docs/gpui-component.md        ; coverage inventory vs gpui-component 0.5.1
 
 `:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` clears the selection. `:searchable true` filters select options by label.
 
-gpui-component 0.5.1 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
+GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer; `:chrome :app` hides it.
 
@@ -328,8 +333,8 @@ Labels, `vstack`, and `hstack` accept `:on-click` (0-arg), so a list row can be 
 
 `:theme` is a style on any node. Three kinds of value:
 
-* **Appearance** — `:system` (follow the OS, the default), `:light`, or `:dark`. Those pin gpui-component's Default Light / Default Dark.
-* **Named palettes** — a gpui-component theme the host ships: `"Tokyo Night"`, `:ayu-light`, `"Catppuccin Mocha"`. Names match case-insensitively; `-` and `_` are spaces. `ui/themes` is that shipped list plus appearance keywords. It does not include custom themes.
+* **Appearance** — `:system` (follow the OS, the default), `:light`, or `:dark`. Those pin GPUI Kit's Default Light / Default Dark.
+* **Named palettes** — a GPUI Kit theme the host ships: `"Tokyo Night"`, `:ayu-light`, `"Catppuccin Mocha"`. Names match case-insensitively; `-` and `_` are spaces. `ui/themes` is that shipped list plus appearance keywords. It does not include custom themes.
 * **Custom ThemeSets** — ordinary Clojure maps registered with `gpui.theme/register!`, then referenced by name. A **family** name (`"Catppuccin Violet"`) picks the light or dark member from OS appearance. A **variant** name (`"Catppuccin Violet Dark"`) pins that config.
 
 ```clojure
@@ -347,7 +352,7 @@ Labels, `vstack`, and `hstack` accept `:on-click` (0-arg), so a list row can be 
   (ui/vstack {:theme "Ayu Light" :flex 1 :padding 16} (ui/label "Canvas"))))
 ```
 
-Define a custom palette as JVM Clojure data (gpui-component color tokens such as `:primary.background`). `theme-set` validates `:name`, `:mode`, and hex `:colors`; other ThemeConfig keys (`:highlight`, `:font.family`, `:radius`, `:shadow`) are kept and sent with gpui-component's JSON names. Register once from a theme namespace (not from `app` on every render). Names match the host: `"My Theme"`, `"my-theme"`, and `:my_theme` are the same set.
+Define a custom palette as JVM Clojure data (GPUI Kit color tokens such as `:primary.background`). `theme-set` validates `:name`, `:mode`, and hex `:colors`; other ThemeConfig keys (`:highlight`, `:font.family`, `:radius`, `:shadow`) are kept and sent with Kit's JSON names. Register once from a theme namespace (not from `app` on every render). Names match the host: `"My Theme"`, `"my-theme"`, and `:my_theme` are the same set.
 
 ```clojure
 (ns my.themes
@@ -370,7 +375,7 @@ Define a custom palette as JVM Clojure data (gpui-component color tokens such as
 
 See `examples/themes/catppuccin-violet` for a full pair ported from [utility_belt_gpui](https://github.com/gitwyrm/utility_belt_gpui) `src/theme.rs` (MIT OR Apache-2.0). That crate is not a runtime dependency.
 
-JSON still works: put extra theme-set files (same schema as [gpui-component themes](https://longbridge.github.io/gpui-component/docs/theme)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Clojure-registered sets override JSON. Hex `:bg` / `:color` still win on that node when you set them.
+JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](https://gpui-kit.com)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Clojure-registered sets override JSON. Hex `:bg` / `:color` still win on that node when you set them.
 
 `when` returning `nil`, `map`, and nested vectors are flattened by `ui/flatten-children`.
 
@@ -386,14 +391,14 @@ JSON still works: put extra theme-set files (same schema as [gpui-component them
 | `CLJ_GPUI_APP` | Root var if not passed to `gpui.dev` |
 | `CLJ_GPUI_SRC` | Directory the watcher scans, default `src` |
 | `CLJ_GPUI_NREPL_PORT` | Preferred nREPL port, default `7888` |
-| `CLJ_GPUI_THEMES` | Extra gpui-component theme-set JSON directory (overrides bundled names) |
+| `CLJ_GPUI_THEMES` | Extra GPUI Kit theme-set JSON directory (overrides bundled names) |
 | `VK_ICD_FILENAMES` | Linux software Vulkan ICD (lavapipe) |
 
 ## Known limitations
 
 * **Two processes, JSON copies.** Fine for this slice. A future JNI path can keep the same Clojure API.
 * **Whole-window rerender.** No incremental DOM-style diffing.
-* **gpui-component Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
+* **GPUI Kit Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
 * **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
 * **`preview-png` is an OS window shot**, not GPU readback. Linux/Windows spawn `clj-gpui --capture-preview --pid <host-pid>` and [xcap](https://crates.io/crates/xcap) 0.4.1. That Linux path is X11/XCB: X11 and XWayland windows capture; native Wayland windows are not reliably enumerated and may return `nil`. macOS captures in-process with ScreenCaptureKit, and only then disables GPUI's occluded display-link pause ([zed#63217](https://github.com/zed-industries/zed/issues/63217)). Missing macOS Screen Recording permission returns `nil`. Xvfb/X11 is the deterministic Linux CI path.
@@ -466,4 +471,4 @@ xcrun stapler staple MyApp.app
 
 ## License
 
-MIT, unless a later commit says otherwise. GPUI is Apache-2.0. Bundled palettes under `host/themes/` come from gpui-component (Apache-2.0). The Catppuccin Violet example is adapted from utility_belt_gpui (MIT OR Apache-2.0).
+MIT, unless a later commit says otherwise. GPUI is Apache-2.0. Bundled palettes under `host/themes/` come from GPUI Kit (Apache-2.0). The Catppuccin Violet example is adapted from utility_belt_gpui (MIT OR Apache-2.0).

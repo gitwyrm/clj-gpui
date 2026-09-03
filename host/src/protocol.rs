@@ -1,7 +1,7 @@
-use gpui_kit::component as gpui_component;
 use gpui_component::theme::ThemeSet;
+use gpui_kit::component as gpui_component;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub const PROTOCOL_VERSION: u64 = 8;
 
@@ -686,7 +686,7 @@ pub enum Cmd {
     Callback {
         id: String,
         value: Option<Value>,
-        /// Set on text-field submit so the following tree can force-sync that field.
+        /// Set on input submit so the following tree can force-sync that field.
         seq: Option<u64>,
     },
     /// Several callbacks from one native action. The worker invokes them

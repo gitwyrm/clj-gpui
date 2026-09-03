@@ -5,14 +5,14 @@ use crate::overlay;
 use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
-use gpui_kit as gpui;
-use gpui_kit::component as gpui_component;
 use gpui::{
-    canvas, div, prelude::*, px, rgb, size, AnyElement, App, Axis, Bounds, ClickEvent, Context,
-    DismissEvent, Element, ElementId, Entity, Focusable, GlobalElementId, InspectorElementId,
-    Keystroke, LayoutId, PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window,
+    AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
+    Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId, PathPromptOptions, Pixels,
+    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root, Sizable as _,
+    WindowExt as _,
     accordion::Accordion,
     alert::Alert,
     avatar::Avatar,
@@ -24,12 +24,12 @@ use gpui_component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
-    dock::{panel_handle, DockArea, DockLayout, DockPlacement, DockSkin},
+    dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     input::{
         Editor, EditorState, Input, InputEvent, InputState, NumberInput, NumberInputEvent,
-        OtpInput, OtpState, StepAction, Textarea, TextareaState,
+        OtpEvent, OtpInput, OtpState, StepAction, Textarea, TextareaState,
     },
     kbd::Kbd,
     link::Link,
@@ -39,7 +39,7 @@ use gpui_component::{
     popover::Popover,
     progress::Progress,
     radio::{Radio, RadioGroup},
-    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
+    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     separator::Separator,
@@ -53,11 +53,12 @@ use gpui_component::{
     tag::Tag,
     theme::{Theme, ThemeConfig, ThemeMode},
     tooltip::Tooltip,
-    tree::{tree, TreeItem, TreeState},
-    v_flex, ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root, Sizable as _,
-    WindowExt as _,
+    tree::{TreeItem, TreeState, tree},
+    v_flex,
 };
-use serde_json::{json, Value};
+use gpui_kit as gpui;
+use gpui_kit::component as gpui_component;
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -522,18 +523,31 @@ impl RootView {
     }
 
     fn handle_escape(&self, window: &mut Window, cx: &mut Context<Self>) {
-        for slot in self.inputs.values().chain(self.editors.values()) {
-            let Some(id) = slot.on_escape.clone() else {
-                continue;
-            };
-            if slot.state.read(cx).focus_handle(cx).is_focused(window) {
-                let _ = self.cmd_tx.send(Cmd::Callback {
-                    id,
-                    value: None,
-                    seq: None,
-                });
-                break;
-            }
+        let focused = self
+            .inputs
+            .values()
+            .filter_map(|slot| {
+                slot.on_escape
+                    .clone()
+                    .map(|id| (id, slot.state.read(cx).focus_handle(cx)))
+            })
+            .chain(self.editors.values().filter_map(|slot| {
+                slot.on_escape
+                    .clone()
+                    .map(|id| (id, slot.state.read(cx).focus_handle(cx)))
+            }))
+            .chain(self.textareas.values().filter_map(|slot| {
+                slot.on_escape
+                    .clone()
+                    .map(|id| (id, slot.state.read(cx).focus_handle(cx)))
+            }))
+            .find(|(_, handle)| handle.is_focused(window));
+        if let Some((id, _)) = focused {
+            let _ = self.cmd_tx.send(Cmd::Callback {
+                id,
+                value: None,
+                seq: None,
+            });
         }
     }
 
@@ -787,7 +801,7 @@ impl RootView {
                 });
             }
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
-                state.read(cx).focus_handle(cx).focus(window);
+                state.read(cx).focus_handle(cx).focus(window, cx);
             }
             if refresh {
                 Self::schedule_input_change_flush(key.to_string(), TextFlush::Input, window, cx);
@@ -840,7 +854,12 @@ impl RootView {
                     }
                     slot.submitted = None;
                     if slot.change.on_change(value) {
-                        Self::schedule_input_change_flush(key_owned.clone(), TextFlush::Input, window, cx);
+                        Self::schedule_input_change_flush(
+                            key_owned.clone(),
+                            TextFlush::Input,
+                            window,
+                            cx,
+                        );
                     }
                 }
                 InputEvent::PressEnter { .. } => {
@@ -916,7 +935,7 @@ impl RootView {
         .detach();
 
         if want_focus {
-            state.read(cx).focus_handle(cx).focus(window);
+            state.read(cx).focus_handle(cx).focus(window, cx);
         }
 
         state
@@ -968,7 +987,9 @@ impl RootView {
         });
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
-            let SliderEvent::Change(changed) = event;
+            let SliderEvent::Change(changed) = event else {
+                return;
+            };
             let number = match changed {
                 SliderValue::Single(v) => *v,
                 SliderValue::Range(_, end) => *end,
@@ -1399,7 +1420,12 @@ impl RootView {
 
     fn render_progress(&self, node: &Node, cx: &App) -> AnyElement {
         let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
-        apply_style(Progress::new().value(value), node, cx).into_any_element()
+        apply_style(
+            Progress::new(node.id.clone().unwrap_or_else(|| "progress".into())).value(value),
+            node,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_separator(&self, node: &Node, cx: &App) -> AnyElement {
@@ -2541,24 +2567,21 @@ impl RootView {
                 .masked(masked)
         });
         let key_owned = key.to_string();
-        cx.subscribe(
-            &state,
-            move |this, otp, event: &InputEvent, cx| match event {
-                InputEvent::Change => {
-                    if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_change.clone()) {
-                        let value = otp.read(cx).value().to_string();
-                        this.emit_value(id, json!(value));
-                    }
+        cx.subscribe(&state, move |this, otp, event: &OtpEvent, cx| match event {
+            OtpEvent::Complete => {
+                if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_change.clone()) {
+                    let value = otp.read(cx).value().to_string();
+                    this.emit_value(id, json!(value));
                 }
-                InputEvent::Blur => {
-                    if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_blur.clone()) {
-                        let value = otp.read(cx).value().to_string();
-                        this.emit_value(id, json!(value));
-                    }
+            }
+            OtpEvent::Blur => {
+                if let Some(id) = this.otps.get(&key_owned).and_then(|s| s.on_blur.clone()) {
+                    let value = otp.read(cx).value().to_string();
+                    this.emit_value(id, json!(value));
                 }
-                _ => {}
-            },
-        )
+            }
+            _ => {}
+        })
         .detach();
         self.otps.insert(
             key.to_string(),
@@ -2794,7 +2817,12 @@ impl RootView {
                     };
                     let value = input.read(cx).value().to_string();
                     if slot.change.on_change(value) {
-                        Self::schedule_input_change_flush(key_owned.clone(), TextFlush::Editor, window, cx);
+                        Self::schedule_input_change_flush(
+                            key_owned.clone(),
+                            TextFlush::Editor,
+                            window,
+                            cx,
+                        );
                     }
                 }
                 InputEvent::Blur => {
@@ -2840,7 +2868,7 @@ impl RootView {
             }
             state.update(cx, |input, cx| input.set_rows(rows, cx));
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
-                state.read(cx).focus_handle(cx).focus(window);
+                state.read(cx).focus_handle(cx).focus(window, cx);
             }
             if refresh {
                 Self::schedule_input_change_flush(key.to_string(), TextFlush::Textarea, window, cx);
@@ -2856,7 +2884,7 @@ impl RootView {
                 .rows(rows)
         });
         if want_focus {
-            state.read(cx).focus_handle(cx).focus(window);
+            state.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.textareas.insert(
             key.to_string(),
@@ -2891,13 +2919,19 @@ impl RootView {
                     }
                 }
                 InputEvent::Blur => {
-                    if let Some(id) = this.textareas.get(&key_owned).and_then(|s| s.on_blur.clone())
+                    if let Some(id) = this
+                        .textareas
+                        .get(&key_owned)
+                        .and_then(|s| s.on_blur.clone())
                     {
                         let value = input.read(cx).value().to_string();
                         this.emit_value(id, json!(value));
                     }
                 }
-                InputEvent::PressEnter { secondary: false, shift: false } => {
+                InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                } => {
                     let Some(slot) = this.textareas.get_mut(&key_owned) else {
                         return;
                     };
@@ -2935,7 +2969,7 @@ impl RootView {
         viewport_sized(entity, node, 200.0, cx)
     }
 
-    fn render_sidebar(&self, node: &Node, _key: &str, cx: &App) -> AnyElement {
+    fn render_sidebar(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let collapsed = node.collapsed;
         let selected = node.string_value();
         let cmd_tx = self.cmd_tx.clone();
@@ -2970,10 +3004,7 @@ impl RootView {
                 }
             })
             .collect();
-        let mut sidebar = match extra::parse_sidebar_side(node) {
-            gpui_component::Side::Right => Sidebar::right(),
-            _ => Sidebar::left(),
-        };
+        let mut sidebar = Sidebar::new(key.to_string()).side(extra::parse_sidebar_side(node));
         sidebar = sidebar
             .collapsed(collapsed)
             .child(SidebarMenu::new().children(items));
@@ -3303,8 +3334,7 @@ impl Render for RootView {
         let used_editors = std::mem::take(&mut self.used_editors);
         self.editors.retain(|key, _| used_editors.contains(key));
         let used_textareas = std::mem::take(&mut self.used_textareas);
-        self.textareas
-            .retain(|key, _| used_textareas.contains(key));
+        self.textareas.retain(|key, _| used_textareas.contains(key));
         let used_vlists = std::mem::take(&mut self.used_vlists);
         self.vlists.retain(|key, _| used_vlists.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
@@ -3393,12 +3423,13 @@ fn slider_value_changed(current: f32, wanted: f32) -> bool {
 fn accordion_callback_value(ids: &[String], open_ixs: &[usize], multiple: bool) -> Value {
     if multiple {
         let open: HashSet<usize> = open_ixs.iter().copied().collect();
-        json!(ids
-            .iter()
-            .enumerate()
-            .filter(|(ix, _)| open.contains(ix))
-            .map(|(_, id)| id.clone())
-            .collect::<Vec<_>>())
+        json!(
+            ids.iter()
+                .enumerate()
+                .filter(|(ix, _)| open.contains(ix))
+                .map(|(_, id)| id.clone())
+                .collect::<Vec<_>>()
+        )
     } else {
         open_ixs
             .first()
@@ -3574,10 +3605,7 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
 /// List/Table/Tree owns virtualization (`size_full` inside the wrapper).
 /// `:size` is a square. Omitted width fills the parent. Default height
 /// applies only when height, size, and flex-fill are all omitted.
-fn dock_tabs(
-    panels: Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>,
-    cx: &App,
-) -> DockLayout {
+fn dock_tabs(panels: Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>, cx: &App) -> DockLayout {
     let mut layout = DockLayout::tabs();
     for panel in panels {
         layout = layout.panel_view(panel, cx);
@@ -4077,14 +4105,14 @@ pub fn open_window(
     event_rx: async_channel::Receiver<HostEvent>,
     cx: &mut App,
 ) {
-    use gpui::{size, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
+    use gpui::{Bounds, TitlebarOptions, WindowBounds, WindowOptions, size};
 
     // GPUI's macOS default is to keep the NSApplication running after the
     // last window closes. The close-button path also goes through an
     // async try_borrow_mut; if App is already borrowed, on_window_closed
     // never fires. Hook should-close too, and always quit this
     // single-window host — don't wait for windows().is_empty().
-    cx.on_window_closed(|cx| {
+    cx.on_window_closed(|cx, _window_id| {
         quit_host(cx);
     })
     .detach();
@@ -4115,7 +4143,7 @@ pub fn open_window(
 
 #[cfg(test)]
 mod zenity_tests {
-    use super::{zenity_from_output, ZenityPick};
+    use super::{ZenityPick, zenity_from_output};
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
@@ -4155,7 +4183,7 @@ mod zenity_tests {
 
 #[cfg(test)]
 mod scroll_viewport_tests {
-    use super::{scroll_viewport, Node, ScrollExtent};
+    use super::{Node, ScrollExtent, scroll_viewport};
 
     fn node_with(width: Option<f32>, height: Option<f32>, size: Option<f32>) -> Node {
         Node {
@@ -4205,11 +4233,11 @@ mod scroll_viewport_tests {
 #[cfg(test)]
 mod select_control_tests {
     use super::{
-        outer_layout, select_opts, select_search_matches, select_selected_index,
-        sidebar_header_title, Node, SelectOpt,
+        Node, SelectOpt, outer_layout, select_opts, select_search_matches, select_selected_index,
+        sidebar_header_title,
     };
     use crate::protocol::Item;
-    use gpui::SharedString;
+    use gpui_kit::SharedString;
 
     fn select_node(value: Option<serde_json::Value>, ids: &[&str]) -> Node {
         Node {
@@ -4434,7 +4462,7 @@ mod accordion_control_tests {
 
 #[cfg(test)]
 mod widget_wrap_tests {
-    use super::{content_wrap, context_menu_wrap, outer_layout, viewport_wrap, Node};
+    use super::{Node, content_wrap, context_menu_wrap, outer_layout, viewport_wrap};
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {

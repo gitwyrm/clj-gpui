@@ -1,6 +1,6 @@
 # GPUI Kit 0.6 migration plan
 
-Status: **plan only**. No host or Clojure code has been changed yet.
+Status: **implementing** on `cursor/gpui-kit-0.6-d648` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13)). The host crate, protocol 8 names, palettes, and Clojure constructors have moved. Phase 3 (compile/test/CI) is in progress.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
