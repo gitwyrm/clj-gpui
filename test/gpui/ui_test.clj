@@ -468,7 +468,7 @@
                   (ui/vstack
                    (ui/label "n" {:on-double-click (fn [])})
                    (ui/input "hi" {:on-blur (fn [_])
-                                        :on-escape (fn [])})))]
+                                   :on-escape (fn [])})))]
     (is (string? (get-in exported [:children 0 :on-double-click])))
     (is (fn? (runtime/lookup-callback (get-in exported [:children 0 :on-double-click]))))
     (is (string? (get-in exported [:children 1 :on-blur])))
@@ -479,7 +479,7 @@
   (let [got (atom nil)
         exported (runtime/export-tree
                   (ui/input "" {:on-change #(reset! got %)
-                                     :on-submit #(reset! got (str "go:" %))}))
+                                :on-submit #(reset! got (str "go:" %))}))
         change-id (:on-change exported)
         submit-id (:on-submit exported)]
     (is (string? change-id))
@@ -534,8 +534,8 @@
       (is (= :label (get-in ctx [:children 0 :type])))))
   (testing "context-menu wraps a flex data-table"
     (let [tbl (ui/data-table {:columns [{:id :n :label "N"}]
-                         :rows [{:id :a :cells ["A"]}]
-                         :flex 1})
+                              :rows [{:id :a :cells ["A"]}]
+                              :flex 1})
           ctx (ui/context-menu [{:id :copy :label "Copy"}] {:flex 1} tbl)]
       (is (= 1 (:flex ctx)))
       (is (= :data-table (get-in ctx [:children 0 :type])))
@@ -551,15 +551,15 @@
       (is (= ["alpha" "beta"] (mapv :id (:items n))))))
   (testing "data-table columns live in :options not :columns"
     (let [n (ui/data-table {:columns [{:id :name :label "Name" :width 120}
-                                 {:id :lang :label "Lang"}]
-                       :rows [{:id :ada :cells ["Ada" "Clojure"]}]
-                       :selected :ada})]
+                                      {:id :lang :label "Lang"}]
+                            :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                            :selected :ada})]
       (is (= :data-table (:type n)))
       (is (= "ada" (:value n)))
       (is (nil? (:columns n)))
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
-      (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells]))))))
+      (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
   (testing "tree nested items and expanded"
     (let [n (ui/tree [{:id :src :label "src" :expanded true
                        :items [{:id :lib :label "lib.rs"}]}]
@@ -655,8 +655,8 @@
                             {:on-change #(reset! got %)
                              :on-confirm #(reset! got [:confirm %])})
                    (ui/data-table {:columns [{:id :name :label "Name"}]
-                              :rows [{:id :ada :cells ["Ada"]}]
-                              :on-change #(reset! got %)})
+                                   :rows [{:id :ada :cells ["Ada"]}]
+                                   :on-change #(reset! got %)})
                    (ui/tree [{:id :src :label "src"
                               :items [{:id :lib :label "lib.rs"}]}]
                             {:on-change #(reset! got %)})))

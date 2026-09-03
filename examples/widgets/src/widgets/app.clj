@@ -292,15 +292,15 @@
        {:id :delete :label "Delete"}]
       {:on-change (set-key :menu)}
       (ui/data-table {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
-                           {:id :lang :label "Lang" :width 100}]
-                 :rows table-rows
-                 :selected (when (not= table-sel :gone) table-sel)
-                 :height 160
-                 :on-change (fn [id]
-                              (swap! !state #(-> %
-                                                 (assoc :table-sel id)
-                                                 (update :table-shift (fnil inc 0)))))
-                 :on-confirm (set-key :table-confirm)}))
+                                {:id :lang :label "Lang" :width 100}]
+                      :rows table-rows
+                      :selected (when (not= table-sel :gone) table-sel)
+                      :height 160
+                      :on-change (fn [id]
+                                   (swap! !state #(-> %
+                                                      (assoc :table-sel id)
+                                                      (update :table-shift (fnil inc 0)))))
+                      :on-confirm (set-key :table-confirm)}))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "Tree lib" #(swap! !state assoc :tree-sel :lib))
