@@ -418,7 +418,7 @@ Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **
 
 | Layer | Command / action | Phase |
 |---|---|---|
-| Host unit | `cargo test --manifest-path host/Cargo.toml` | 2–3 |
+| Host unit | `cargo test --locked --manifest-path host/Cargo.toml` | 2–3 |
 | Clojure unit | `clojure -M:test` | 3 |
 | Format | `clojure -M:cljfmt check` | 3 |
 | Bridge without window | `clojure -M:protocol-test` | 3 |
@@ -427,7 +427,9 @@ Declarative `ui/table`, then Combobox / Rating / Stepper / extra chart kinds. **
 | Counter / TodoMVC | existing examples | 3 |
 | Preview | `gpui.runtime/preview-png` after connect | 3 |
 
-There is no CI in this repo yet. Do not block the migration on adding it. The one migration PR still needs `cargo test` and Clojure tests locally before it is ready for review.
+Do not add GitHub Actions in the migration PR. Run the host and Clojure commands above on the implementation branch before review. The Cloud Agent environment for this repo is meant to have the Linux pieces those commands need (`libdbus-1-dev`, Mesa lavapipe, `libstdc++` for clang's selected GCC, Clojure CLI).
+
+Baseline on the current 0.5.1 host (2026-09-03, this agent): `cargo test --locked --manifest-path host/Cargo.toml` — 116 passed; `clojure -M:test` — 103 tests / 626 assertions; `clojure -M:cljfmt check`; `clojure -M:protocol-test` with a debug `host/target/debug/clj-gpui`. A first `cargo test` after a cold crates.io fetch is on the order of two minutes of compile once D-Bus and libstdc++ are installed; the linker fails with `unable to find library -lstdc++` if `cc` is clang and the GCC install it selects has no `libstdc++-N-dev`.
 
 Browser verification does not apply (native GPUI, not a web app). Closest substitute is the widget gallery + protocol-test.
 

@@ -17,6 +17,7 @@ Requirements:
 * Linux or macOS (GPUI's current platforms)
 * A working display. On Linux, GPUI needs Vulkan. Software rendering via Mesa lavapipe is enough for a first window.
 * Linux host builds also need `libdbus-1-dev` (window capture for `gpui.runtime/preview-png`).
+* If `cc` is clang, install `libstdc++-N-dev` for the GCC install clang selects (`cc -v` prints it; Ubuntu 24.04 clang 18 often wants 14). Otherwise rust-lld fails with `unable to find library -lstdc++`.
 
 From a checkout of this repository:
 
