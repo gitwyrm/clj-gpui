@@ -23,6 +23,7 @@
 ;; Process-lifetime monotonic. Never reset: a stale cb-N must stay unknown.
 (defonce ^:private callback-counter (atom 0))
 (defonce ^:private render-scheduled? (atom false))
+(defonce ^:private render-epoch (atom 0))
 (defonce ^:private callback-depth (atom 0))
 (defonce ^:private callback-hold (atom 0))
 (defonce ^:private app-var* (atom nil))
@@ -92,15 +93,17 @@
   ;; 0 and hold 0.
   (when (and (not (host-callback-active?))
              (compare-and-set! render-scheduled? false true))
-    (future
-      (try
-        (Thread/sleep 16)
-        (reset! render-scheduled? false)
-        (send! {:op "request-render"})
-        (catch Exception e
+    (let [epoch @render-epoch]
+      (future
+        (try
+          (Thread/sleep 16)
           (reset! render-scheduled? false)
-          (binding [*out* *err*]
-            (println "[clj-gpui] request-render failed:" (.getMessage e))))))))
+          (when (= epoch @render-epoch)
+            (send! {:op "request-render"}))
+          (catch Exception e
+            (reset! render-scheduled? false)
+            (binding [*out* *err*]
+              (println "[clj-gpui] request-render failed:" (.getMessage e)))))))))
 
 (defn install-render-hook!
   []
@@ -108,6 +111,8 @@
 
 (defn bind-connection!
   [m]
+  (swap! render-epoch inc)
+  (reset! render-scheduled? false)
   (reset! conn m)
   m)
 
