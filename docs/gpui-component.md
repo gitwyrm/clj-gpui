@@ -14,6 +14,14 @@ Classification:
 | **D** | Not appropriate as a `gpui.ui` widget (window/process internals, forbidden surfaces) |
 | **E** | Helper / trait / layout primitive rather than a user-facing control |
 
+Coverage-table **status** is not Kit public-API parity by itself:
+
+| Mark | Meaning |
+|---|---|
+| ✅ | The clj-gpui API in this row is wrapped and usable. Remaining Kit surface, if any, is on a dedicated ⚠️ row or named as out of scope (LSP, `gpui-shell`). |
+| ⚠️ | Wrapped, but public Kit APIs listed in this row's notes are still remaining. Do not treat as full public-API parity. |
+| ❌ | Not wrapped, or not a `gpui.ui` widget |
+
 `ui/window`, `ui/spacer`, and `ui/hstack` / `ui/vstack` are clj-gpui layout, not 1:1 crate types (`Root`, `h_flex`, `v_flex`).
 
 ## Coverage table
@@ -63,7 +71,7 @@ Classification:
 | `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
 | `table::DataTable` | `ui/data-table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate`. `column()` returns owned `Column` |
 | `table::Table` (declarative) | `ui/table` plus `ui/table-header`, `ui/table-body`, `ui/table-footer`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, `ui/table-caption` | ✅ | C | Not virtualized. Kit primitives on the wire so per-cell `col_span` / align / widget children stay accessible. `{:columns :rows :footer :caption}` is Clojure shorthand that expands into those primitives; column `:span` is header-only. `:accessibility-label` is Kit `Table::accessibility_label` |
-| `combobox::Combobox` | `ui/combobox` | ✅ | C | Host `ComboboxState<SearchableVec>`. Search on by default. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`SearchableGroup`; leaf values stay `SharedString`). Group titles are not selectable and are not in the callback id map. `:multiple true` value is a vector. Same-action `Change`+`Confirm` is one callback batch. Native `Change` caches selection so a Clojure echo does not `set_selected_values` (clears query). Flat collection change `set_items` plus `set_selected_values` so renamed/removed options do not stick. Grouped collection fingerprint changes rebuild the slot so query text and matched sections agree. Chrome: `:cleanable`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string), `:icon`, `:check-icon`, `:appearance`, `:focus-ring` (omit = Kit true), `Sizable` / `Styled`. Remaining: `render_trigger`, `footer`, empty as `IntoElement`, `ComboboxState::query` / `set_query` |
+| `combobox::Combobox` | `ui/combobox` | ⚠️ | C | Host `ComboboxState<SearchableVec>`. Search on by default. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`SearchableGroup`; leaf values stay `SharedString`). Group titles are not selectable and are not in the callback id map. `:multiple true` value is a vector. Same-action `Change`+`Confirm` is one callback batch. Native `Change` caches selection so a Clojure echo does not `set_selected_values` (clears query). Flat collection change `set_items` plus `set_selected_values` so renamed/removed options do not stick. Grouped collection fingerprint changes rebuild the slot so query text and matched sections agree. Chrome: `:cleanable`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string), `:icon`, `:check-icon`, `:appearance`, `:focus-ring` (omit = Kit true), `Sizable` / `Styled`. Remaining: `render_trigger`, `footer`, empty as `IntoElement`, `ComboboxState::query` / `set_query` |
 | `rating::Rating` | `ui/rating` | ✅ | C | Integer `0..=:max` (default 5). Host `.max` then `.value` (Kit clamps `.value` to the current max). `:on-change` is the new integer. Optional `:color` hex |
 | `stepper::Stepper` | `ui/stepper` | ✅ | C | `value` is selected item id, not index. `:orientation :vertical`. Optional item `:icon` / `:disabled` |
 | `pagination::Pagination` | `ui/pagination` | ✅ | C | 1-based `value` / `:total` (Kit defaults 1; Kit clamps to ≥1). `:on-change` is the new page number. `:compact` is prev/next only. `:visible-pages` omitted leaves Kit's 5 |
