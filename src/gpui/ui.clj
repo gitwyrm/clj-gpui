@@ -2644,7 +2644,7 @@
           [opts-or-child children]
           [{} (cons opts-or-child children)])
         opts (apply-control-size opts)
-        id (some-> (:id opts) wire-id)]
+        id (:id opts)]
     (cond-> (assoc (dissoc opts :id)
                    :type :nav-page
                    :children (flatten-children kids))
@@ -2657,28 +2657,44 @@
   An explicit trail that names an unknown page id is rejected (the
   native stack is left unchanged); only `[]` means clear.
   Clojure owns the trail; the host diffs and calls Kit `push` /
-  `pop` / `replace` / `clear`. Re-adding a popped id is a new `push`
-  and discards Kit's forward branch (`forward` / `forward_views` are
-  not wrapped). Repeated ids are separate history entries (a new
-  view entity per stack slot). `:transition` is seconds (Kit
-  `Transition` only); omitted is an immediate swap. `:motion
-  :immediate` forces Immediate even when a transition is set.
-  `:transition-style :slide` opts into the showcase slide `item`
-  renderer; omitted keeps Kit's default unchanged `NavPage`
-  renderer. `:overflow :hidden` or `:overflow-hidden true` clips;
-  omitted does not. Custom `item` rendering beyond `:slide`,
-  dedicated `pop_to_root`, and Kit `forward` are remaining.
-  Pages paint the overlay static subset (not list / data-table /
-  editor).
+  `pop` / `forward` / `pop_to_root` / `replace` / `clear`. Re-adding
+  a popped id that matches the nearest Kit `forward_views()` entry
+  restores that retained page (`forward`) instead of spawning a new
+  entity. Any other one-step grow is `push` and clears the forward
+  branch. Setting the trail to just the root from depth > 2 is one
+  `pop_to_root` transition (popped pages join forward, nearest first).
+  Restoring more than one forward page in one swap rebuilds.
+  `:on-forward-change` receives Kit `forward_views()` as a vector of
+  original page ids, nearest first (the id `forward` would restore).
+  Empty after first mount is not sent; a later Push/Rebuild that
+  clears forward still notifies `[]`. Catalog page ids should be
+  unique (duplicate templates share a lookup key; the last wins).
+  Repeated ids on the active trail are valid and create distinct
+  entities. `:transition` is seconds (Kit `Transition` only);
+  omitted is an immediate swap. `:motion :immediate` forces Immediate
+  even when a transition is set. `:transition-style :slide` opts
+  into the showcase slide `item` renderer; omitted keeps Kit's
+  default unchanged `NavPage` renderer. `:overflow :hidden` or
+  `:overflow-hidden true` clips; omitted does not. Custom `item`
+  rendering beyond `:slide` is remaining and must include the
+  complete `NavPage` context (index, phase, operation, eased
+  progress), not only a canned transition style. Pages paint the
+  overlay static subset (not list / data-table / editor).
 
   (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
-                 :transition-style :slide :overflow :hidden}
+                 :transition-style :slide :overflow :hidden
+                 :on-forward-change #(reset! !forward %)}
     (ui/nav-page {:id :home} (ui/label \"Home\"))
     (ui/nav-page {:id :detail} (ui/label \"Detail\")))"
   [& args]
   (let [[opts children] (leading-opts args)
         pages (flatten-children children)
         page-ids (into [] (keep :id) pages)
+        opts (with-id-callbacks opts pages [:on-forward-change])
+        pages (mapv (fn [page]
+                      (cond-> page
+                        (contains? page :id) (update :id wire-id)))
+                    pages)
         explicit? (or (contains? opts :stack) (contains? opts :value))
         raw (cond
               (contains? opts :stack) (:stack opts)

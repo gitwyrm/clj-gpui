@@ -302,9 +302,19 @@ struct NavStackSlot {
     /// Repeated catalog ids are distinct entities (Kit Presence identity is
     /// `("nav-stack", view.entity_id())`).
     entries: Vec<(String, Entity<extra::CljNavPage>)>,
+    /// Parallel to Kit `History::forward_entries`: last is nearest (the
+    /// entity `forward()` restores). Catalog id plus the retained
+    /// `CljNavPage` so `forward_views()` can be expressed back to Clojure
+    /// and restore cannot spawn a fresh Push.
+    forward: Vec<(String, Entity<extra::CljNavPage>)>,
     /// Last invalid controlled trail we warned about, so a sticky typo
     /// does not reprint `[host] nav-stack: ignoring …` every frame.
     last_invalid: Option<Vec<String>>,
+    /// Last duplicate catalog-id set we warned about.
+    last_dup_catalog: Option<Vec<String>>,
+    /// Last nearest-first forward id list sent on `:on-forward-change`.
+    /// `None` means never notified (empty after first mount is skipped).
+    last_forward_notified: Option<Vec<String>>,
     _observe: Subscription,
 }
 
@@ -4173,7 +4183,7 @@ impl RootView {
         &mut self,
         node: &Node,
         key: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.used_nav_stacks.insert(key.to_string());
@@ -4186,7 +4196,10 @@ impl RootView {
                 NavStackSlot {
                     state,
                     entries: Vec::new(),
+                    forward: Vec::new(),
                     last_invalid: None,
+                    last_dup_catalog: None,
+                    last_forward_notified: None,
                     _observe: observe,
                 },
             );
@@ -4196,7 +4209,16 @@ impl RootView {
         let catalog_by_id: HashMap<String, Node> = catalog.into_iter().collect();
         let motion = extra::nav_motion(node.duration, node.motion.as_deref());
         if let Some(slot) = self.nav_stacks.get_mut(key) {
-            for (id, entity) in &slot.entries {
+            let dups = extra::nav_duplicate_catalog_ids(catalog_ids.iter().map(String::as_str));
+            if dups.is_empty() {
+                slot.last_dup_catalog = None;
+            } else if slot.last_dup_catalog.as_ref() != Some(&dups) {
+                eprintln!(
+                    "[host] nav-stack: duplicate catalog page id(s) {dups:?}; lookup uses the last template"
+                );
+                slot.last_dup_catalog = Some(dups);
+            }
+            for (id, entity) in slot.entries.iter().chain(slot.forward.iter()) {
                 if let Some(page_node) = catalog_by_id.get(id) {
                     entity.update(cx, |page, cx| {
                         page.replace_live(page_node.clone(), cx);
@@ -4218,10 +4240,13 @@ impl RootView {
                     let resolved = desired.ids(&catalog_ids).expect("valid nav trail");
                     let current: Vec<String> =
                         slot.entries.iter().map(|(id, _)| id.clone()).collect();
-                    extra::nav_trail_sync(&current, &resolved)
+                    let forward: Vec<String> =
+                        slot.forward.iter().map(|(id, _)| id.clone()).collect();
+                    extra::nav_trail_sync(&current, &resolved, &forward)
                 }
             };
             apply_nav_trail_op(slot, op, motion, &catalog_by_id, key, &cmd_tx, cx);
+            notify_nav_forward_change(slot, node.on_forward_change.clone(), &cmd_tx, window, cx);
         }
         let slot = self.nav_stacks.get(key).expect("nav-stack slot");
         let mut nav = gpui::base::NavStack::new(&slot.state).w_full().h_full();
@@ -5214,12 +5239,34 @@ fn apply_nav_trail_op(
                 stack.push(page.clone(), motion, cx);
             });
             slot.entries.push((id, page));
+            slot.forward.clear();
         }
         extra::NavTrailOp::Pop => {
             slot.state.update(cx, |stack, cx| {
                 let _ = stack.pop(motion, cx);
             });
-            slot.entries.pop();
+            if let Some(entry) = slot.entries.pop() {
+                slot.forward.push(entry);
+            }
+        }
+        extra::NavTrailOp::Forward => {
+            let Some(entry) = slot.forward.pop() else {
+                return;
+            };
+            slot.state.update(cx, |stack, cx| {
+                let _ = stack.forward(motion, cx);
+            });
+            slot.entries.push(entry);
+        }
+        extra::NavTrailOp::PopToRoot => {
+            slot.state.update(cx, |stack, cx| {
+                let _ = stack.pop_to_root(motion, cx);
+            });
+            while slot.entries.len() > 1 {
+                if let Some(entry) = slot.entries.pop() {
+                    slot.forward.push(entry);
+                }
+            }
         }
         extra::NavTrailOp::Replace(id) => {
             let Some(template) = catalog.get(&id) else {
@@ -5263,8 +5310,44 @@ fn apply_nav_trail_op(
                 }
             });
             slot.entries = views;
+            slot.forward.clear();
         }
     }
+}
+
+/// Kit `forward_views()` → Clojure `:on-forward-change`. Deferred so the
+/// callback cannot re-enter `export-tree` (and reset ids) during
+/// `RootView::render`. Empty after first mount is skipped; later clears
+/// (Push / Rebuild) still notify `[]`.
+fn notify_nav_forward_change(
+    slot: &mut NavStackSlot,
+    on_forward_change: Option<String>,
+    cmd_tx: &mpsc::Sender<Cmd>,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    let nearest_first = extra::nav_forward_view_ids(&slot.forward);
+    if slot.last_forward_notified.as_ref() == Some(&nearest_first) {
+        return;
+    }
+    if slot.last_forward_notified.is_none() && nearest_first.is_empty() {
+        slot.last_forward_notified = Some(nearest_first);
+        return;
+    }
+    slot.last_forward_notified = Some(nearest_first.clone());
+    let Some(callback_id) = on_forward_change.filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let cmd_tx = cmd_tx.clone();
+    cx.defer_in(window, move |_, _, _| {
+        protocol::send_callbacks(
+            &cmd_tx,
+            vec![protocol::CallbackCall::with_value(
+                callback_id,
+                json!(nearest_first),
+            )],
+        );
+    });
 }
 
 fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {

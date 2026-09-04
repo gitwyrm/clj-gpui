@@ -789,6 +789,11 @@ pub struct Node {
     pub on_confirm: Option<String>,
     #[serde(default, rename = "on-open-change")]
     pub on_open_change: Option<String>,
+    /// NavStack: Kit `forward_views()` as a JSON array of page ids,
+    /// nearest first. Omitted does not notify. Empty after first mount is
+    /// not sent; later clears still notify `[]`.
+    #[serde(default, rename = "on-forward-change")]
+    pub on_forward_change: Option<String>,
     /// Dialog: click the dimmed overlay to dismiss. Default true.
     /// `confirm` dialogs follow Kit (not overlay-closable unless set).
     /// `alert-dialog` never dismisses on backdrop.
@@ -2178,6 +2183,7 @@ mod tests {
             "transition-style": "slide",
             "overflow": "hidden",
             "overflow-hidden": true,
+            "on-forward-change": "cb-forward",
             "height": 180,
             "children": [
                 {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
@@ -2195,6 +2201,7 @@ mod tests {
         assert_eq!(nav.transition_style.as_deref(), Some("slide"));
         assert_eq!(nav.overflow.as_deref(), Some("hidden"));
         assert!(nav.overflow_hidden);
+        assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");
         assert_eq!(nav.children[0].id.as_deref(), Some("home"));

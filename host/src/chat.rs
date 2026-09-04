@@ -150,6 +150,7 @@ fn strip_callback_ids(node: &Node) -> Node {
     n.on_cancel = None;
     n.on_confirm = None;
     n.on_open_change = None;
+    n.on_forward_change = None;
     n.children = n.children.iter().map(strip_callback_ids).collect();
     n.trigger = n.trigger.as_deref().map(strip_callback_ids).map(Box::new);
     n.footer = n.footer.as_deref().map(strip_callback_ids).map(Box::new);

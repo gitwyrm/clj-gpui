@@ -93,18 +93,25 @@ pub fn color_sync(wanted: Option<Hsla>, current: Option<Hsla>) -> ColorSync {
 /// How to sync Kit `NavStackState` with Clojure's controlled page-id trail.
 ///
 /// Clojure owns the trail. The host diffs and calls Kit `push` / `pop` /
-/// `replace` / `clear`. Re-adding a popped id is a new `Push` and discards
-/// Kit's forward branch (`forward` / `forward_views` are not wrapped).
+/// `forward` / `pop_to_root` / `replace` / `clear`. `forward` is Kit-internal
+/// order: last is nearest (the id `forward()` restores). Growing by one id
+/// that matches that nearest entry is `Forward` (restore the retained
+/// entity) rather than `Push` (spawn a new entity and clear forward).
+/// `Replace` does not inspect forward (Kit `replace` keeps it). `Push` and
+/// `Rebuild` clear it. Restoring more than one forward entry in one swap
+/// is still `Rebuild`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavTrailOp {
     Leave,
     Push(String),
     Pop,
+    Forward,
+    PopToRoot,
     Replace(String),
     Rebuild(Vec<String>),
 }
 
-pub fn nav_trail_sync(current: &[String], desired: &[String]) -> NavTrailOp {
+pub fn nav_trail_sync(current: &[String], desired: &[String], forward: &[String]) -> NavTrailOp {
     if current == desired {
         return NavTrailOp::Leave;
     }
@@ -115,10 +122,17 @@ pub fn nav_trail_sync(current: &[String], desired: &[String]) -> NavTrailOp {
         return NavTrailOp::Rebuild(desired.to_vec());
     }
     if desired.len() == current.len() + 1 && desired.starts_with(current) {
-        return NavTrailOp::Push(desired[desired.len() - 1].clone());
+        let new_id = &desired[desired.len() - 1];
+        if forward.last() == Some(new_id) {
+            return NavTrailOp::Forward;
+        }
+        return NavTrailOp::Push(new_id.clone());
     }
     if current.len() == desired.len() + 1 && current.starts_with(desired) {
         return NavTrailOp::Pop;
+    }
+    if current.len() > 2 && desired.len() == 1 && desired[0] == current[0] {
+        return NavTrailOp::PopToRoot;
     }
     if current.len() == desired.len() {
         let prefix = current.len() - 1;
@@ -127,6 +141,12 @@ pub fn nav_trail_sync(current: &[String], desired: &[String]) -> NavTrailOp {
         }
     }
     NavTrailOp::Rebuild(desired.to_vec())
+}
+
+/// Kit `forward_views()` order: nearest first (the id `forward()` restores).
+/// `forward` is Kit-internal order (last is nearest).
+pub fn nav_forward_view_ids<T>(forward: &[(String, T)]) -> Vec<String> {
+    forward.iter().rev().map(|(id, _)| id.clone()).collect()
 }
 
 /// Kit `Transition` seconds. `None` / non-finite / ≤0 means no animation.
@@ -162,6 +182,24 @@ pub fn nav_catalog(node: &Node) -> Vec<(String, Node)> {
         .iter()
         .filter_map(|child| nav_page_id(child).map(|id| (id, child.clone())))
         .collect()
+}
+
+/// Catalog ids that appear more than once, sorted. Repeated ids on the
+/// active trail are valid (distinct entities); duplicate *templates* share
+/// a HashMap key so lookup uses the last row.
+pub fn nav_duplicate_catalog_ids<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for id in ids {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    let mut dups: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    dups.sort();
+    dups
 }
 
 /// Controlled trail from Clojure `value`.
@@ -237,7 +275,9 @@ pub fn nav_page_path(stack_key: &str, index: usize, page_id: &str) -> String {
 
 /// Kit showcase slide: push/replace enter from the right, pop exits the
 /// same way, the covered page drifts. Installed only when
-/// `:transition-style :slide`.
+/// `:transition-style :slide`. A later custom `item` wrap must pass the
+/// complete `NavPage` context (`index`, `phase`, `operation`, eased
+/// `progress`), not only a canned transition style.
 pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
     use gpui::base::NavOperation;
     use gpui::base::motion::PresencePhase;
@@ -1886,7 +1926,9 @@ impl CljNavPage {
 
     /// Replace the live catalog template. Must `notify` so GPUI re-renders
     /// with the current export-tree callback ids (an unchanged trail can
-    /// still receive `cb-42` in place of the painted `cb-17`).
+    /// still receive `cb-42` in place of the painted `cb-17`). Forward-branch
+    /// pages get the same update so a later `forward()` cannot restore a
+    /// stale callback id.
     pub fn replace_live(&mut self, node: Node, cx: &mut Context<Self>) {
         *self.live.borrow_mut() = node;
         cx.notify();
@@ -3425,44 +3467,140 @@ mod tests {
     #[test]
     fn nav_trail_sync_cases() {
         use super::NavTrailOp::*;
-        assert_eq!(nav_trail_sync(&["a".into()], &["a".into()]), Leave);
+        let empty: [String; 0] = [];
+        assert_eq!(nav_trail_sync(&["a".into()], &["a".into()], &empty), Leave);
         assert_eq!(
-            nav_trail_sync(&["a".into()], &["a".into(), "b".into()]),
+            nav_trail_sync(&["a".into()], &["a".into(), "b".into()], &empty),
             Push("b".into())
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["a".into()]),
+            nav_trail_sync(&["a".into(), "b".into()], &["a".into()], &empty),
             Pop
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["a".into(), "c".into()]),
+            nav_trail_sync(&["a".into(), "b".into()], &["a".into(), "c".into()], &empty),
             Replace("c".into())
         );
         assert_eq!(
-            nav_trail_sync(&["a".into()], &["z".into()]),
+            nav_trail_sync(&["a".into()], &["z".into()], &empty),
             Replace("z".into())
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["z".into()]),
+            nav_trail_sync(&["a".into(), "b".into()], &["z".into()], &empty),
             Rebuild(vec!["z".into()])
         );
-        assert_eq!(nav_trail_sync(&["a".into()], &[]), Rebuild(vec![]));
+        assert_eq!(nav_trail_sync(&["a".into()], &[], &empty), Rebuild(vec![]));
         assert_eq!(
-            nav_trail_sync(&[], &["a".into()]),
+            nav_trail_sync(&[], &["a".into()], &empty),
             Rebuild(vec!["a".into()])
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into(), "c".into()], &["a".into()]),
-            Rebuild(vec!["a".into()])
+            nav_trail_sync(&["a".into(), "b".into(), "c".into()], &["a".into()], &empty),
+            PopToRoot
         );
         assert_eq!(
-            nav_trail_sync(&["home".into()], &["home".into(), "home".into()]),
+            nav_trail_sync(
+                &["a".into(), "b".into(), "c".into(), "d".into()],
+                &["a".into()],
+                &empty
+            ),
+            PopToRoot
+        );
+        assert_eq!(
+            nav_trail_sync(
+                &["a".into(), "b".into(), "c".into()],
+                &["a".into(), "b".into()],
+                &empty
+            ),
+            Pop
+        );
+        assert_eq!(
+            nav_trail_sync(&["home".into()], &["home".into(), "home".into()], &empty),
             Push("home".into())
         );
         assert_eq!(
-            nav_trail_sync(&["home".into(), "home".into()], &["home".into()]),
+            nav_trail_sync(&["home".into(), "home".into()], &["home".into()], &empty),
             Pop
         );
+    }
+
+    #[test]
+    fn nav_trail_sync_forward_vs_push() {
+        use super::NavTrailOp::*;
+        assert_eq!(
+            nav_trail_sync(&["a".into()], &["a".into(), "b".into()], &["b".into()]),
+            Forward
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into()], &["a".into(), "c".into()], &["b".into()]),
+            Push("c".into())
+        );
+        assert_eq!(
+            nav_trail_sync(
+                &["a".into()],
+                &["a".into(), "b".into()],
+                &["c".into(), "b".into()]
+            ),
+            Forward
+        );
+        assert_eq!(
+            nav_trail_sync(
+                &["a".into()],
+                &["a".into(), "c".into()],
+                &["c".into(), "b".into()]
+            ),
+            Push("c".into())
+        );
+        assert_eq!(
+            nav_trail_sync(
+                &["home".into()],
+                &["home".into(), "home".into()],
+                &["home".into()]
+            ),
+            Forward
+        );
+        assert_eq!(
+            nav_trail_sync(
+                &["h".into()],
+                &["h".into(), "d".into(), "s".into()],
+                &["s".into(), "d".into()]
+            ),
+            Rebuild(vec!["h".into(), "d".into(), "s".into()])
+        );
+    }
+
+    #[test]
+    fn nav_host_forward_branch_matches_kit_history() {
+        // Kit History: pop pushes onto forward (last = nearest);
+        // pop_to_root backs until the root; forward_views is reverse;
+        // push clears; replace keeps forward.
+        let mut entries = vec!["h".to_string(), "d".to_string(), "s".to_string()];
+        let mut forward: Vec<(String, ())> = Vec::new();
+        while entries.len() > 1 {
+            forward.push((entries.pop().unwrap(), ()));
+        }
+        assert_eq!(entries, vec!["h".to_string()]);
+        assert_eq!(
+            forward
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s", "d"]
+        );
+        assert_eq!(
+            nav_forward_view_ids(&forward),
+            vec!["d".to_string(), "s".to_string()]
+        );
+        entries.push(forward.pop().unwrap().0);
+        assert_eq!(entries, vec!["h".to_string(), "d".to_string()]);
+        assert_eq!(nav_forward_view_ids(&forward), vec!["s".to_string()]);
+        entries.push("x".to_string());
+        forward.clear();
+        assert!(nav_forward_view_ids(&forward).is_empty());
+        forward.push((entries.pop().unwrap(), ()));
+        *entries.last_mut().unwrap() = "y".to_string();
+        assert_eq!(entries, vec!["h".to_string(), "y".to_string()]);
+        assert_eq!(nav_forward_view_ids(&forward), vec!["x".to_string()]);
     }
 
     #[test]
@@ -3551,8 +3689,9 @@ mod tests {
         assert_eq!(nav_desired(&partial, &catalog).ids(&catalog), None);
         // Filtering the typo would yield [:home] and nav_trail_sync would Pop.
         let current = vec!["home".to_string(), "detail".to_string()];
+        let empty: [String; 0] = [];
         assert_eq!(
-            nav_trail_sync(&current, &["home".to_string()]),
+            nav_trail_sync(&current, &["home".to_string()], &empty),
             NavTrailOp::Pop
         );
 
@@ -3570,8 +3709,9 @@ mod tests {
         );
         assert_eq!(nav_desired(&all_unknown, &catalog).ids(&catalog), None);
         // Filtering an all-unknown trail would yield [] and clear the stack.
+        let empty: [String; 0] = [];
         assert_eq!(
-            nav_trail_sync(&current, &[]),
+            nav_trail_sync(&current, &[], &empty),
             NavTrailOp::Rebuild(Vec::new())
         );
     }
@@ -3654,5 +3794,15 @@ mod tests {
         };
         let ids: Vec<String> = nav_catalog(&node).into_iter().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["home".to_string(), "detail".to_string()]);
+        assert!(nav_duplicate_catalog_ids(ids.iter().map(String::as_str)).is_empty());
+    }
+
+    #[test]
+    fn nav_duplicate_catalog_ids_are_sorted_unique() {
+        assert_eq!(
+            nav_duplicate_catalog_ids(["home", "detail", "home", "settings", "detail"]),
+            vec!["detail".to_string(), "home".to_string()]
+        );
+        assert!(nav_duplicate_catalog_ids(["home", "detail"]).is_empty());
     }
 }
