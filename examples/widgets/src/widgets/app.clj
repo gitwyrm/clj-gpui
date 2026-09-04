@@ -354,6 +354,8 @@
    (ui/nav-stack {:id "gallery-nav"
                   :stack trail
                   :transition 0.22
+                  :transition-style :slide
+                  :overflow :hidden
                   :height 180
                   :border "#3b4261"}
                  (ui/nav-page {:id :home :padding 12 :gap 8}

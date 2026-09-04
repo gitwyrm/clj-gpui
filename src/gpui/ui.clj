@@ -2654,17 +2654,25 @@
   "Kit `NavStack`. `:stack` (or `:value`) is page ids root-first.
   Children are `ui/nav-page` templates, not the live trail. Omitted
   stack is the first page id. An empty `:stack []` clears the stack.
+  An explicit trail that names an unknown page id is rejected (the
+  native stack is left unchanged); only `[]` means clear.
   Clojure owns the trail; the host diffs and calls Kit `push` /
   `pop` / `replace` / `clear`. Re-adding a popped id is a new `push`
-  and discards Kit's forward branch (`forward` is not wrapped).
-  `:transition` is seconds (Kit `Transition`); omitted is an
-  immediate swap. `:motion :immediate` forces Immediate even when a
-  transition is set. The default item renderer slides when
-  `:transition` is set; a custom `item` renderer is not wrapped.
+  and discards Kit's forward branch (`forward` / `forward_views` are
+  not wrapped). Repeated ids are separate history entries (a new
+  view entity per stack slot). `:transition` is seconds (Kit
+  `Transition` only); omitted is an immediate swap. `:motion
+  :immediate` forces Immediate even when a transition is set.
+  `:transition-style :slide` opts into the showcase slide `item`
+  renderer; omitted keeps Kit's default unchanged `NavPage`
+  renderer. `:overflow :hidden` or `:overflow-hidden true` clips;
+  omitted does not. Custom `item` rendering beyond `:slide`,
+  dedicated `pop_to_root`, and Kit `forward` are remaining.
   Pages paint the overlay static subset (not list / data-table /
   editor).
 
-  (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22}
+  (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
+                 :transition-style :slide :overflow :hidden}
     (ui/nav-page {:id :home} (ui/label \"Home\"))
     (ui/nav-page {:id :detail} (ui/label \"Detail\")))"
   [& args]
@@ -2683,7 +2691,9 @@
                (contains? opts :transition)
                (-> (dissoc :transition)
                    (assoc :duration (:transition opts)))
-               (keyword? (:motion opts)) (update :motion name))]
+               (keyword? (:motion opts)) (update :motion name)
+               (keyword? (:transition-style opts)) (update :transition-style name)
+               (keyword? (:overflow opts)) (update :overflow name))]
     (cond-> (assoc opts
                    :type :nav-stack
                    :children pages)

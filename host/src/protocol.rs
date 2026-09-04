@@ -955,6 +955,18 @@ pub struct Node {
     /// Omitted / `animated` runs the transition when `duration` is set and > 0.
     #[serde(default)]
     pub motion: Option<String>,
+    /// NavStack: convenience `item` renderer. `slide` is the showcase slide.
+    /// Omitted keeps Kit's default unchanged `NavPage` renderer. Independent
+    /// of `duration` / `transition()`.
+    #[serde(default, rename = "transition-style")]
+    pub transition_style: Option<String>,
+    /// NavStack: CSS-like overflow. `hidden` clips (needed for a slide).
+    /// Omitted does not clip. Not AvatarGroup ellipsis.
+    #[serde(default)]
+    pub overflow: Option<String>,
+    /// NavStack: explicit clip opt-in. Omitted / false does not clip.
+    #[serde(default, rename = "overflow-hidden")]
+    pub overflow_hidden: bool,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
     #[serde(default)]
     pub spread: Option<f32>,
@@ -2163,6 +2175,9 @@ mod tests {
             "value": ["home", "detail"],
             "duration": 0.22,
             "motion": "immediate",
+            "transition-style": "slide",
+            "overflow": "hidden",
+            "overflow-hidden": true,
             "height": 180,
             "children": [
                 {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
@@ -2177,6 +2192,9 @@ mod tests {
         );
         assert_eq!(nav.duration, Some(0.22));
         assert_eq!(nav.motion.as_deref(), Some("immediate"));
+        assert_eq!(nav.transition_style.as_deref(), Some("slide"));
+        assert_eq!(nav.overflow.as_deref(), Some("hidden"));
+        assert!(nav.overflow_hidden);
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");
         assert_eq!(nav.children[0].id.as_deref(), Some("home"));

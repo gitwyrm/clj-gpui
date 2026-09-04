@@ -1193,7 +1193,9 @@
       (is (nil? (get-in n [:jump-button-renderer :label]))))))
 
 (deftest nav-stack-trail-and-page-catalog
-  (let [n (ui/nav-stack {:id "nav" :stack [:home :detail] :transition 0.22}
+  (let [n (ui/nav-stack {:id "nav" :stack [:home :detail] :transition 0.22
+                         :transition-style :slide :overflow :hidden
+                         :overflow-hidden true}
                         (ui/nav-page {:id :home} (ui/label "Home"))
                         (ui/nav-page {:id :detail :gap 8}
                                      (ui/button "Back" (fn []))))]
@@ -1202,6 +1204,9 @@
     (is (= ["home" "detail"] (:value n)))
     (is (= 0.22 (:duration n)))
     (is (nil? (:transition n)))
+    (is (= "slide" (:transition-style n)))
+    (is (= "hidden" (:overflow n)))
+    (is (true? (:overflow-hidden n)))
     (is (= :nav-page (get-in n [:children 0 :type])))
     (is (= "home" (get-in n [:children 0 :id])))
     (is (= :label (get-in n [:children 0 :children 0 :type])))
@@ -1210,11 +1215,18 @@
   (let [omitted (ui/nav-stack {:id "nav"}
                               (ui/nav-page {:id :home} "Home")
                               (ui/nav-page {:id :detail} "Detail"))]
-    (is (= "home" (:value omitted))))
+    (is (= "home" (:value omitted)))
+    (is (nil? (:transition-style omitted)))
+    (is (nil? (:overflow omitted))))
   (let [cleared (ui/nav-stack {:id "nav" :stack [] :motion :immediate}
                               (ui/nav-page {:id :home} "Home"))]
     (is (= [] (:value cleared)))
-    (is (= "immediate" (:motion cleared)))))
+    (is (= "immediate" (:motion cleared))))
+  (let [timed (ui/nav-stack {:id "nav" :stack [:home] :transition 0.22}
+                            (ui/nav-page {:id :home} "Home"))]
+    (is (= 0.22 (:duration timed)))
+    (is (nil? (:transition-style timed)))
+    (is (nil? (:overflow timed)))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

@@ -94,7 +94,7 @@ pub fn color_sync(wanted: Option<Hsla>, current: Option<Hsla>) -> ColorSync {
 ///
 /// Clojure owns the trail. The host diffs and calls Kit `push` / `pop` /
 /// `replace` / `clear`. Re-adding a popped id is a new `Push` and discards
-/// Kit's forward branch (`forward` is not wrapped).
+/// Kit's forward branch (`forward` / `forward_views` are not wrapped).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavTrailOp {
     Leave,
@@ -156,6 +156,7 @@ pub fn nav_page_id(node: &Node) -> Option<String> {
 }
 
 /// Catalog pages in tree order. Only `nav-page` children with an id.
+/// Duplicate catalog ids keep both rows; lookup uses the last template.
 pub fn nav_catalog(node: &Node) -> Vec<(String, Node)> {
     node.children
         .iter()
@@ -163,23 +164,85 @@ pub fn nav_catalog(node: &Node) -> Vec<(String, Node)> {
         .collect()
 }
 
-/// Controlled trail. Omitted / null is the first catalog id. `[]` clears.
-/// Unknown ids are dropped.
-pub fn nav_desired_ids(node: &Node, catalog_ids: &[String]) -> Vec<String> {
+/// Controlled trail from Clojure `value`.
+///
+/// Omitted / null is the first catalog page. Only explicit `[]` clears.
+/// An explicit trail that names an unknown page is invalid: the host must
+/// leave the native stack unchanged rather than dropping unknown ids
+/// (which would turn a typo into Pop or Clear).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavDesired {
+    Default,
+    Clear,
+    Trail(Vec<String>),
+    Invalid {
+        trail: Vec<String>,
+        unknown: Vec<String>,
+    },
+}
+
+pub fn nav_desired(node: &Node, catalog_ids: &[String]) -> NavDesired {
     let known = |id: &str| catalog_ids.iter().any(|c| c == id);
     match &node.value {
-        None | Some(Value::Null) => catalog_ids.iter().take(1).cloned().collect(),
-        Some(Value::Array(items)) if items.is_empty() => Vec::new(),
-        _ => node
-            .string_values()
-            .into_iter()
-            .filter(|id| known(id))
-            .collect(),
+        None | Some(Value::Null) => NavDesired::Default,
+        Some(Value::Array(items)) if items.is_empty() => NavDesired::Clear,
+        _ => {
+            let trail = node.string_values();
+            let unknown: Vec<String> = trail.iter().filter(|id| !known(id)).cloned().collect();
+            if unknown.is_empty() {
+                NavDesired::Trail(trail)
+            } else {
+                NavDesired::Invalid { trail, unknown }
+            }
+        }
     }
 }
 
+/// Resolved trail ids, or `None` when the controlled trail is invalid.
+///
+/// `None` means leave the native stack unchanged. Warns on invalid trails.
+pub fn nav_desired_ids(node: &Node, catalog_ids: &[String]) -> Option<Vec<String>> {
+    match nav_desired(node, catalog_ids) {
+        NavDesired::Default => Some(catalog_ids.iter().take(1).cloned().collect()),
+        NavDesired::Clear => Some(Vec::new()),
+        NavDesired::Trail(ids) => Some(ids),
+        NavDesired::Invalid { trail, unknown } => {
+            eprintln!(
+                "[host] nav-stack: ignoring controlled trail {trail:?}; unknown page id(s) {unknown:?}"
+            );
+            None
+        }
+    }
+}
+
+/// Kit `NavStack::item` convenience. `slide` is opt-in; omitted keeps Kit's
+/// default unchanged `NavPage` renderer. Independent of `transition()`.
+pub fn nav_uses_slide(style: Option<&str>) -> bool {
+    matches!(
+        style.map(crate::catalog::normalize).as_deref(),
+        Some("slide")
+    )
+}
+
+/// Kit clipping is application-owned. Opt in with `overflow: hidden` or
+/// `overflow-hidden: true`. Omitted does not clip.
+pub fn nav_clip(overflow: Option<&str>, overflow_hidden: bool) -> bool {
+    overflow_hidden
+        || matches!(
+            overflow.map(crate::catalog::normalize).as_deref(),
+            Some("hidden")
+        )
+}
+
+/// Path for one stack-entry `CljNavPage`. Index keeps repeated catalog ids
+/// on distinct element identities (`[:detail :detail]`).
+pub fn nav_page_path(stack_key: &str, index: usize, page_id: &str) -> String {
+    format!("{stack_key}/nav-page/{index}/{page_id}")
+}
+
 /// Kit showcase slide: push/replace enter from the right, pop exits the
-/// same way, the covered page drifts. Used when `:transition` is set.
+/// same way, the covered page drifts. Installed only when
+/// `:transition-style :slide`.
 pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
     use gpui::base::NavOperation;
     use gpui::base::motion::PresencePhase;
@@ -1825,6 +1888,14 @@ impl CljNavPage {
     pub fn new(live: Rc<RefCell<Node>>, path: String, cmd_tx: mpsc::Sender<Cmd>) -> Self {
         Self { live, path, cmd_tx }
     }
+
+    /// Replace the live catalog template. Must `notify` so GPUI re-renders
+    /// with the current export-tree callback ids (an unchanged trail can
+    /// still receive `cb-42` in place of the painted `cb-17`).
+    pub fn replace_live(&mut self, node: Node, cx: &mut Context<Self>) {
+        *self.live.borrow_mut() = node;
+        cx.notify();
+    }
 }
 
 impl Render for CljNavPage {
@@ -3389,6 +3460,14 @@ mod tests {
             nav_trail_sync(&["a".into(), "b".into(), "c".into()], &["a".into()]),
             Rebuild(vec!["a".into()])
         );
+        assert_eq!(
+            nav_trail_sync(&["home".into()], &["home".into(), "home".into()]),
+            Push("home".into())
+        );
+        assert_eq!(
+            nav_trail_sync(&["home".into(), "home".into()], &["home".into()]),
+            Pop
+        );
     }
 
     #[test]
@@ -3409,45 +3488,142 @@ mod tests {
     }
 
     #[test]
-    fn nav_desired_ids_omit_empty_and_unknown() {
+    fn nav_desired_omit_empty_unknown_and_repeats() {
         let catalog = vec!["home".to_string(), "detail".to_string()];
         let omitted = Node {
             kind: "nav-stack".into(),
             ..Node::default()
         };
+        assert_eq!(nav_desired(&omitted, &catalog), NavDesired::Default);
         assert_eq!(
             nav_desired_ids(&omitted, &catalog),
-            vec!["home".to_string()]
+            Some(vec!["home".to_string()])
         );
         let empty = Node {
             kind: "nav-stack".into(),
             value: Some(json!([])),
             ..Node::default()
         };
-        assert!(nav_desired_ids(&empty, &catalog).is_empty());
+        assert_eq!(nav_desired(&empty, &catalog), NavDesired::Clear);
+        assert_eq!(nav_desired_ids(&empty, &catalog), Some(Vec::new()));
         let trail = Node {
             kind: "nav-stack".into(),
             value: Some(json!(["home", "detail"])),
             ..Node::default()
         };
         assert_eq!(
-            nav_desired_ids(&trail, &catalog),
-            vec!["home".to_string(), "detail".to_string()]
+            nav_desired(&trail, &catalog),
+            NavDesired::Trail(vec!["home".to_string(), "detail".to_string()])
         );
-        let unknown = Node {
-            kind: "nav-stack".into(),
-            value: Some(json!(["nope"])),
-            ..Node::default()
-        };
-        assert!(nav_desired_ids(&unknown, &catalog).is_empty());
         let scalar = Node {
             kind: "nav-stack".into(),
             value: Some(json!("detail")),
             ..Node::default()
         };
         assert_eq!(
-            nav_desired_ids(&scalar, &catalog),
-            vec!["detail".to_string()]
+            nav_desired(&scalar, &catalog),
+            NavDesired::Trail(vec!["detail".to_string()])
+        );
+        let repeats = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!(["detail", "detail"])),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired(&repeats, &catalog),
+            NavDesired::Trail(vec!["detail".to_string(), "detail".to_string()])
+        );
+    }
+
+    #[test]
+    fn unknown_controlled_trail_is_rejected_not_filtered() {
+        let catalog = vec!["home".to_string(), "detail".to_string()];
+        let partial = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!(["home", "detial"])),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired(&partial, &catalog),
+            NavDesired::Invalid {
+                trail: vec!["home".to_string(), "detial".to_string()],
+                unknown: vec!["detial".to_string()],
+            }
+        );
+        assert_eq!(nav_desired_ids(&partial, &catalog), None);
+        // Filtering the typo would yield [:home] and nav_trail_sync would Pop.
+        let current = vec!["home".to_string(), "detail".to_string()];
+        assert_eq!(
+            nav_trail_sync(&current, &["home".to_string()]),
+            NavTrailOp::Pop
+        );
+
+        let all_unknown = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!(["nope"])),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired(&all_unknown, &catalog),
+            NavDesired::Invalid {
+                trail: vec!["nope".to_string()],
+                unknown: vec!["nope".to_string()],
+            }
+        );
+        assert_eq!(nav_desired_ids(&all_unknown, &catalog), None);
+        // Filtering an all-unknown trail would yield [] and clear the stack.
+        assert_eq!(
+            nav_trail_sync(&current, &[]),
+            NavTrailOp::Rebuild(Vec::new())
+        );
+    }
+
+    #[test]
+    fn nav_slide_and_clip_are_opt_in() {
+        assert!(!nav_uses_slide(None));
+        assert!(!nav_uses_slide(Some("")));
+        assert!(nav_uses_slide(Some("slide")));
+        assert!(nav_uses_slide(Some("Slide")));
+        assert!(!nav_clip(None, false));
+        assert!(nav_clip(Some("hidden"), false));
+        assert!(nav_clip(None, true));
+        assert!(!nav_clip(Some("visible"), false));
+    }
+
+    #[test]
+    fn nav_page_live_cell_tracks_regenerated_callback_ids() {
+        let live = Rc::new(RefCell::new(Node {
+            kind: "nav-page".into(),
+            id: Some("home".into()),
+            children: vec![Node {
+                kind: "button".into(),
+                id: Some("go".into()),
+                on_click: Some("cb-17".into()),
+                ..Node::default()
+            }],
+            ..Node::default()
+        }));
+        *live.borrow_mut() = Node {
+            kind: "nav-page".into(),
+            id: Some("home".into()),
+            children: vec![Node {
+                kind: "button".into(),
+                id: Some("go".into()),
+                on_click: Some("cb-42".into()),
+                ..Node::default()
+            }],
+            ..Node::default()
+        };
+        let painted = live.borrow().clone();
+        assert_eq!(painted.children[0].on_click.as_deref(), Some("cb-42"));
+        assert_ne!(painted.children[0].on_click.as_deref(), Some("cb-17"));
+        assert_eq!(
+            nav_page_path("gallery-nav", 0, "home"),
+            "gallery-nav/nav-page/0/home"
+        );
+        assert_ne!(
+            nav_page_path("nav", 0, "detail"),
+            nav_page_path("nav", 1, "detail")
         );
     }
 

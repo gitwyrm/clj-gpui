@@ -298,8 +298,10 @@ struct DockSlot {
 
 struct NavStackSlot {
     state: Entity<gpui::base::NavStackState>,
-    ids: Vec<String>,
-    pages: HashMap<String, Entity<extra::CljNavPage>>,
+    /// One `CljNavPage` entity per history entry, parallel to Kit's stack.
+    /// Repeated catalog ids are distinct entities (Kit Presence identity is
+    /// `("nav-stack", view.entity_id())`).
+    entries: Vec<(String, Entity<extra::CljNavPage>)>,
     _observe: Subscription,
 }
 
@@ -4180,53 +4182,45 @@ impl RootView {
                 key.to_string(),
                 NavStackSlot {
                     state,
-                    ids: Vec::new(),
-                    pages: HashMap::new(),
+                    entries: Vec::new(),
                     _observe: observe,
                 },
             );
         }
         let catalog = extra::nav_catalog(node);
         let catalog_ids: Vec<String> = catalog.iter().map(|(id, _)| id.clone()).collect();
-        let desired = extra::nav_desired_ids(node, &catalog_ids);
+        let catalog_by_id: HashMap<String, Node> = catalog.into_iter().collect();
         let motion = extra::nav_motion(node.duration, node.motion.as_deref());
         if let Some(slot) = self.nav_stacks.get_mut(key) {
-            for (id, page_node) in &catalog {
-                if let Some(entity) = slot.pages.get(id) {
-                    entity.update(cx, |page, _| {
-                        *page.live.borrow_mut() = page_node.clone();
+            for (id, entity) in &slot.entries {
+                if let Some(page_node) = catalog_by_id.get(id) {
+                    entity.update(cx, |page, cx| {
+                        page.replace_live(page_node.clone(), cx);
                     });
                 }
             }
-            for (id, page_node) in &catalog {
-                if slot.pages.contains_key(id) {
-                    continue;
+            let op = match extra::nav_desired_ids(node, &catalog_ids) {
+                Some(desired) => {
+                    let current: Vec<String> =
+                        slot.entries.iter().map(|(id, _)| id.clone()).collect();
+                    extra::nav_trail_sync(&current, &desired)
                 }
-                let live = Rc::new(RefCell::new(page_node.clone()));
-                let path = format!("{key}/nav-page/{id}");
-                let entity = cx.new(|_| extra::CljNavPage::new(live, path, cmd_tx.clone()));
-                slot.pages.insert(id.clone(), entity);
-            }
-            let keep: HashSet<String> = catalog_ids
-                .iter()
-                .cloned()
-                .chain(slot.ids.iter().cloned())
-                .collect();
-            slot.pages.retain(|id, _| keep.contains(id));
-            let op = extra::nav_trail_sync(&slot.ids, &desired);
-            apply_nav_trail_op(slot, op, motion, cx);
+                None => extra::NavTrailOp::Leave,
+            };
+            apply_nav_trail_op(slot, op, motion, &catalog_by_id, key, &cmd_tx, cx);
         }
         let slot = self.nav_stacks.get(key).expect("nav-stack slot");
-        let mut nav = gpui::base::NavStack::new(&slot.state)
-            .overflow_hidden()
-            .w_full()
-            .h_full();
+        let mut nav = gpui::base::NavStack::new(&slot.state).w_full().h_full();
+        if extra::nav_clip(node.overflow.as_deref(), node.overflow_hidden) {
+            nav = nav.overflow_hidden();
+        }
         if let Some(secs) = extra::nav_transition_secs(node.duration) {
-            nav = nav
-                .transition(gpui::base::motion::Transition::new(
-                    Duration::from_secs_f32(secs),
-                ))
-                .item(|page, _, _| extra::nav_stack_slide(page));
+            nav = nav.transition(gpui::base::motion::Transition::new(
+                Duration::from_secs_f32(secs),
+            ));
+        }
+        if extra::nav_uses_slide(node.transition_style.as_deref()) {
+            nav = nav.item(|page, _, _| extra::nav_stack_slide(page));
         }
         let nav = apply_kit_visual_style(nav, node, cx);
         viewport_box_sized(nav, node, 200.0)
@@ -5170,46 +5164,83 @@ fn dock_tabs(panels: Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>, cx: &
     layout
 }
 
+fn spawn_clj_nav_page(
+    template: &Node,
+    path: String,
+    cmd_tx: mpsc::Sender<Cmd>,
+    cx: &mut Context<RootView>,
+) -> Entity<extra::CljNavPage> {
+    let live = Rc::new(RefCell::new(template.clone()));
+    cx.new(|_| extra::CljNavPage::new(live, path, cmd_tx))
+}
+
 fn apply_nav_trail_op(
     slot: &mut NavStackSlot,
     op: extra::NavTrailOp,
     motion: gpui::base::NavMotion,
+    catalog: &HashMap<String, Node>,
+    key: &str,
+    cmd_tx: &mpsc::Sender<Cmd>,
     cx: &mut Context<RootView>,
 ) {
     match op {
         extra::NavTrailOp::Leave => {}
         extra::NavTrailOp::Push(id) => {
-            let Some(page) = slot.pages.get(&id).cloned() else {
+            let Some(template) = catalog.get(&id) else {
                 return;
             };
+            let index = slot.entries.len();
+            let page = spawn_clj_nav_page(
+                template,
+                extra::nav_page_path(key, index, &id),
+                cmd_tx.clone(),
+                cx,
+            );
             slot.state.update(cx, |stack, cx| {
-                stack.push(page, motion, cx);
+                stack.push(page.clone(), motion, cx);
             });
-            slot.ids.push(id);
+            slot.entries.push((id, page));
         }
         extra::NavTrailOp::Pop => {
             slot.state.update(cx, |stack, cx| {
                 let _ = stack.pop(motion, cx);
             });
-            slot.ids.pop();
+            slot.entries.pop();
         }
         extra::NavTrailOp::Replace(id) => {
-            let Some(page) = slot.pages.get(&id).cloned() else {
+            let Some(template) = catalog.get(&id) else {
                 return;
             };
+            let index = slot.entries.len().saturating_sub(1);
+            let page = spawn_clj_nav_page(
+                template,
+                extra::nav_page_path(key, index, &id),
+                cmd_tx.clone(),
+                cx,
+            );
             slot.state.update(cx, |stack, cx| {
-                let _ = stack.replace(page, motion, cx);
+                let _ = stack.replace(page.clone(), motion, cx);
             });
-            if let Some(last) = slot.ids.last_mut() {
-                *last = id;
+            if let Some(last) = slot.entries.last_mut() {
+                *last = (id, page);
             } else {
-                slot.ids.push(id);
+                slot.entries.push((id, page));
             }
         }
         extra::NavTrailOp::Rebuild(new_ids) => {
             let views: Vec<(String, Entity<extra::CljNavPage>)> = new_ids
                 .into_iter()
-                .filter_map(|id| slot.pages.get(&id).cloned().map(|page| (id, page)))
+                .enumerate()
+                .filter_map(|(index, id)| {
+                    let template = catalog.get(&id)?;
+                    let page = spawn_clj_nav_page(
+                        template,
+                        extra::nav_page_path(key, index, &id),
+                        cmd_tx.clone(),
+                        cx,
+                    );
+                    Some((id, page))
+                })
                 .collect();
             slot.state.update(cx, |stack, cx| {
                 stack.clear(cx);
@@ -5217,7 +5248,7 @@ fn apply_nav_trail_op(
                     stack.push(page.clone(), gpui::base::NavMotion::Immediate, cx);
                 }
             });
-            slot.ids = views.into_iter().map(|(id, _)| id).collect();
+            slot.entries = views;
         }
     }
 }
