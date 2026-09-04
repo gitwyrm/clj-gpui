@@ -31,7 +31,7 @@ Classification:
 | `switch::Switch` | `ui/switch` | ✅ | B | `:on-change` receives boolean |
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean |
 | `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives the original Clojure id |
-| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` receives a number or `[start end]` for range thumbs. Clojure is source of truth: a controlled value is applied even when it is off-step. Entity is kept across unmounts (crate bounds are private; dropping remounts at 100% fill). A layout canvas re-renders when the track size changes so fill and thumb stay aligned. Dynamic unique ids retain slots until the window closes; bounded cleanup is a follow-up |
+| `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` / `:on-release` receive a number or `[start end]` for range thumbs. `:on-release` is Kit `SliderEvent::Release` after a real click/drag. Clojure is source of truth: a controlled value is applied even when it is off-step and emits neither callback. Entity is kept across unmounts (crate bounds are private; dropping remounts at 100% fill). A layout canvas re-renders when the track size changes so fill and thumb stay aligned. Dynamic unique ids retain slots until the window closes; bounded cleanup is a follow-up |
 | `progress::Progress` | `ui/progress` | ✅ | B | 0–100 |
 | `progress::ProgressCircle` | `ui/progress-circle` | ✅ | C | 0–100. `:loading true` is Kit indeterminate (value ignored). Optional `:color` hex, `:accessibility-label`, children inside the ring. Named `:size` is `control-size` |
 | `separator::Separator` | `ui/separator` | ✅ | B | Horizontal default; `:orientation :vertical` |
@@ -54,7 +54,7 @@ Classification:
 | `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids in original item order. Outer wrapper owns `:width` / `:height` / `:size` / `:flex` (default flex-none + full width) so crate `size_full()` does not eat leftover column height |
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |
 | `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
-| `slider::Slider` range / log / reverse | `ui/slider` | ✅ | C | Two-number vector or `:range true`. `:scale :logarithmic` (`:log`) needs `min > 0` (otherwise linear). `:reverse` fill is single-value only |
+| `slider::Slider` range / log / reverse | `ui/slider` | ✅ | C | Two-number vector or `:range true`. `:scale :logarithmic` (`:log`) needs `min > 0` (otherwise linear, with a host warning). `:reverse` fill is single-value only |
 | `input::Textarea` | `ui/textarea` | ✅ | C | Host-held `TextareaState`. Same string callbacks as `ui/input`. `:rows` default 3. `:on-submit` enables Kit `submit_on_enter` (Enter submits, Shift+Enter newline) |
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse |
 | `input::OtpInput` | `ui/otp-input` | ✅ | C | Host-held `OtpState`. `:on-change` only when every cell is filled (crate complete-only). `:count` default 6, clamped 1–12. `:masked` |
@@ -76,7 +76,7 @@ Classification:
 | `VirtualList` | `ui/virtual-list` | ✅ | C | `{id, label, height?}` rows; host `v_virtual_list` / `h_virtual_list`. Vertical by default; `:orientation :horizontal` for a row. Default row height 36 |
 | `sheet::Sheet` | `ui/sheet` | ✅ | C | One crate sheet; last open in tree order. Live spec + next-frame `WindowExt`. `:placement`, `:footer` |
 | `notification::Notification` | `ui/notification` | ✅ | C | Presence shows unless `:open? false`. Fingerprint skips re-push. Autohide default true |
-| `button::DropdownButton` | `ui/dropdown-button` | ✅ | C | Split action button + menu. Same `{id, label}` items as `ui/dropdown-menu`. Action-half `:on-click`; menu `:on-change`. Outer `:variant` / `:size` / `:outline` / `:disabled` apply to both halves |
+| `button::DropdownButton` | `ui/dropdown-button` | ✅ | C | Split action button + menu. Same `{id, label}` items as `ui/dropdown-menu`. Action-half `:on-click`; menu `:on-change`. Outer `:variant` / `:size` / `:outline` / `:selected` / `:disabled` apply to both halves. Unset outer size/variant inherit from the inner action Button. All Kit ButtonVariants (`primary`…`text`) |
 | `button::ButtonGroup` | — | ❌ | E | Use `ui/hstack` of buttons |
 | `color_picker::ColorPicker` | `ui/color-picker` | ✅ | C | Hex string / JSON `null`. Host `ColorPickerState` |
 | `date_picker::DatePicker` / `calendar` | `ui/date-picker` | ✅ | C | ISO `YYYY-MM-DD` or `[start, end]`. `:range` / `:multiple`. Format `%Y-%m-%d` |
@@ -129,7 +129,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 | Widget | callback | payload |
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
-| `slider` | `:on-change` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity) |
+| `slider` | `:on-change` / `:on-release` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity). `:on-release` is Kit `Release` after a real click/drag; `set_value` emits neither |
 | `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
 | `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
 | `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |

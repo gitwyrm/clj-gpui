@@ -408,17 +408,23 @@
 
 (defn button
   "A clickable button. `on-click` is a real Clojure function (often `#()`).
+  Named `:size` becomes `:control-size`. `:selected` is Kit Selectable
+  chrome (not list selection). `:variant` is Kit ButtonVariants:
+  `:primary`, `:secondary`, `:danger`, `:warning`, `:success`, `:info`,
+  `:ghost`, `:link`, `:text`. `:outline` is a separate look.
 
   (ui/button \"+\" #(swap! count inc))
-  (ui/button \"Save\" save! {:primary true})"
+  (ui/button \"Save\" save! {:primary true})
+  (ui/button \"Warn\" {:variant :warning :size :small})"
   ([text]
    {:type :button :text (str text)})
   ([text on-click]
    (if (map? on-click)
-     (merge {:type :button :text (str text)} on-click)
+     (merge {:type :button :text (str text)} (apply-control-size on-click))
      {:type :button :text (str text) :on-click on-click}))
   ([text on-click style]
-   (merge {:type :button :text (str text) :on-click on-click} style)))
+   (merge {:type :button :text (str text) :on-click on-click}
+          (apply-control-size (or style {})))))
 
 (defn window
   "Native window. Return this from `app`. Only one makes sense.
@@ -660,14 +666,16 @@
 
 (defn slider
   "Numeric slider. A single value sends a number; a two-number vector is
-  Kit range thumbs and `:on-change` receives `[start end]`. `:range true`
-  with a scalar is `min`..value. `:scale :logarithmic` (`:log`) needs
-  `min > 0` (otherwise the host keeps linear so Kit does not assert).
-  `:reverse` fills from the thumb to max on a single slider (ignored for
-  range). Named `:size` becomes `:control-size`.
+  Kit range thumbs and `:on-change` / `:on-release` receive `[start end]`.
+  `:range true` with a scalar is `min`..value. `:scale :logarithmic`
+  (`:log`) needs `min > 0` (otherwise the host keeps linear so Kit does
+  not assert, and warns). `:reverse` fills from the thumb to max on a
+  single slider (ignored for range). Named `:size` becomes `:control-size`.
+  `:on-change` fires while dragging; `:on-release` fires once after a
+  real click/drag. Programmatic controlled values emit neither.
 
   (ui/slider volume {:min 0 :max 100 :on-change #(swap! !state assoc :vol %)})
-  (ui/slider [20 70] {:min 0 :max 100 :on-change set-span!})
+  (ui/slider [20 70] {:min 0 :max 100 :on-change set-span! :on-release commit!})
   (ui/slider zoom {:min 0.25 :max 4 :step 0.05 :scale :logarithmic})"
   ([value]
    {:type :slider :value (slider-value value)})
@@ -1299,12 +1307,15 @@
   (item `:on-click` then menu `:on-change`). The action half is `:trigger`
   (a button, or a string wrapped as one). Its `:on-click` fires when that
   half is pressed. Omit the trigger for a menu-only split (Kit-valid).
-  Outer `:variant` / `:size` / `:outline` / `:disabled` apply to both
-  halves. `:placement` (or `:anchor`) is the menu `Anchor` (Kit default
-  `top-right`).
+  Outer `:variant` / `:size` / `:outline` / `:selected` / `:disabled`
+  apply to both halves. Unset outer size/variant inherit from the inner
+  action Button. `:variant` is Kit ButtonVariants (`:primary`,
+  `:secondary`, `:danger`, `:warning`, `:success`, `:info`, `:ghost`,
+  `:link`, `:text`). `:placement` (or `:anchor`) is the menu `Anchor`
+  (Kit default `top-right`).
 
   (ui/dropdown-button [{:id :csv :label \"CSV\"} {:id :pdf :label \"PDF\"}]
-                      {:on-change handle! :variant :primary}
+                      {:on-change handle! :variant :primary :selected true}
                       (ui/button \"Export\" export!))"
   ([items]
    (dropdown-button items nil nil))

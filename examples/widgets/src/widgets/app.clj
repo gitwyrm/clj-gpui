@@ -14,6 +14,7 @@
            :span [20 70]
            :zoom 1.0
            :remaining 40
+           :released nil
            :lang :clj
            :tab :general
            :section :audio
@@ -66,7 +67,7 @@
   (fn [v]
     (swap! !state assoc k v)))
 
-(defn- general-panel [{:keys [notify? bold? theme-mode volume span zoom remaining lang page]}]
+(defn- general-panel [{:keys [notify? bold? theme-mode volume span zoom remaining released lang page]}]
   (ui/vstack
    {:gap 12}
    (ui/hstack
@@ -84,14 +85,16 @@
     (ui/slider volume {:id "volume"
                        :min 0 :max 100 :flex 1
                        :tooltip "0–100"
-                       :on-change (set-key :volume)}))
+                       :on-change (set-key :volume)
+                       :on-release (set-key :released)}))
    (ui/hstack
     {:gap 12 :align :center}
     (ui/label (str "Span " (pr-str span)))
     (ui/slider span {:id "span"
                      :min 0 :max 100 :flex 1
                      :tooltip "Range thumbs"
-                     :on-change (set-key :span)}))
+                     :on-change (set-key :span)
+                     :on-release (set-key :released)}))
    (ui/hstack
     {:gap 12 :align :center}
     (ui/label (str "Zoom " zoom))
@@ -108,6 +111,7 @@
                           :reverse true
                           :tooltip "Remaining fill"
                           :on-change (set-key :remaining)}))
+   (ui/label (str "Released " (pr-str released)))
    (ui/progress volume {:tooltip "Mirrors the slider"})
    (ui/hstack
     {:gap 12 :align :center}
@@ -264,8 +268,13 @@
       {:id :share :label "Share"
        :items [{:id :email :label "Email"}
                {:id :link :label "Copy link"}]}]
-     {:on-change (set-key :menu) :variant :primary}
-     (ui/button "Export" #(swap! !state assoc :menu :export))))
+     {:on-change (set-key :menu) :variant :primary :selected true}
+     (ui/button "Export" #(swap! !state assoc :menu :export)))
+    (ui/dropdown-button
+     [{:id :copy :label "Copy"}
+      {:id :share :label "Share"}]
+     {:on-change (set-key :menu) :variant :warning}
+     (ui/button "Warn" {:size :small})))
    (ui/context-menu
     [{:id :inspect :label "Inspect"}
      {:id :delete :label "Delete"}]

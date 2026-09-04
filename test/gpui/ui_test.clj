@@ -97,7 +97,13 @@
     (is (nil? (:size n))))
   (let [n (ui/icon :check {:size :large})]
     (is (= "large" (:control-size n)))
-    (is (= "check" (:icon n)))))
+    (is (= "check" (:icon n))))
+  (let [n (ui/button "Go" {:size :small})]
+    (is (= "small" (:control-size n)))
+    (is (nil? (:size n))))
+  (let [n (ui/button "Go" (fn []) {:size :large})]
+    (is (= "large" (:control-size n)))
+    (is (nil? (:size n)))))
 
 (deftest option-item-normalization
   (is (= {:id "light" :label "light"} (ui/option-item :light)))
@@ -151,7 +157,8 @@
       (is (= [20 70] (:value n)))
       (is (= "logarithmic" (:scale n)))
       (is (true? (:reverse n))))
-    (is (true? (:range (ui/slider 40 {:range true})))))
+    (is (true? (:range (ui/slider 40 {:range true}))))
+    (is (fn? (:on-release (ui/slider 40 {:on-release (fn [_])})))))
   (testing "select options"
     (let [n (ui/select :clj {:options [{:id :clj :label "Clojure"} "Rust"]
                              :placeholder "Lang"})]
@@ -316,7 +323,8 @@
         exported (runtime/export-tree
                   (ui/vstack
                    (ui/switch true {:on-change #(reset! got %)})
-                   (ui/slider 10 {:on-change #(reset! got %)})
+                   (ui/slider 10 {:on-change #(reset! got %)
+                                  :on-release #(reset! got [:release %])})
                    (ui/select "a" {:options ["a" "b"]
                                    :on-change #(reset! got %)})
                    (ui/alert "x" {:on-close #(reset! got :closed)})
@@ -324,6 +332,7 @@
         children (:children exported)
         switch-id (get-in children [0 :on-change])
         slider-id (get-in children [1 :on-change])
+        slider-release (get-in children [1 :on-release])
         select-id (get-in children [2 :on-change])
         close-id (get-in children [3 :on-close])
         copied-id (get-in children [4 :on-copied])]
@@ -332,6 +341,10 @@
     (is (true? @got))
     (is (= {:ok true :id slider-id} (runtime/invoke-callback! slider-id 33.5)))
     (is (= 33.5 @got))
+    (is (string? slider-release))
+    (is (not= slider-id slider-release))
+    (is (= {:ok true :id slider-release} (runtime/invoke-callback! slider-release [20.0 70.0])))
+    (is (= [:release [20.0 70.0]] @got))
     (is (= {:ok true :id select-id} (runtime/invoke-callback! select-id "b")))
     (is (= "b" @got))
     (is (string? close-id))
@@ -646,6 +659,29 @@
       (is (nil? (:anchor split)))
       (is (true? (get-in split [:items 1 :separator])))
       (is (fn? (:on-change split))))
+    (let [split (ui/dropdown-button [{:id :csv :label "CSV"}]
+                                    {:selected true :variant :warning}
+                                    (ui/button "Export" {:size :small :selected true :outline true}))]
+      (is (true? (:selected split)))
+      (is (= :warning (:variant split)))
+      (is (nil? (:control-size split)))
+      (is (nil? (:value split)))
+      (is (= "small" (get-in split [:trigger :control-size])))
+      (is (nil? (get-in split [:trigger :size])))
+      (is (true? (get-in split [:trigger :selected])))
+      (is (true? (get-in split [:trigger :outline]))))
+    (is (= :link (:variant (ui/dropdown-button [{:id :csv :label "CSV"}]
+                                               {:variant :link}
+                                               (ui/button "Go")))))
+    (is (= :secondary (:variant (ui/dropdown-button [{:id :csv :label "CSV"}]
+                                                    {:variant :secondary}
+                                                    (ui/button "Go")))))
+    (is (= :success (:variant (ui/dropdown-button [{:id :csv :label "CSV"}]
+                                                  {:variant :success}
+                                                  (ui/button "Go")))))
+    (is (= :info (:variant (ui/dropdown-button [{:id :csv :label "CSV"}]
+                                               {:variant :info}
+                                               (ui/button "Go")))))
     (is (nil? (:trigger (ui/dropdown-button [{:id :csv :label "CSV"}])))))
   (testing "context-menu wraps a flex data-table"
     (let [tbl (ui/data-table {:columns [{:id :n :label "N"}]

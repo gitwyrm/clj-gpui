@@ -184,6 +184,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `on-click` | string callback id | `button`, `checkbox`, `label`, `vstack`, `hstack`, `link`, `notification` |
 | `on-double-click` | string callback id | `label` (0-arg; wins over `on-click` when `click_count >= 2`); `data-table` double-click row (row id) |
 | `on-change` | string callback id | `input`/`textarea`/`editor` (string), `switch`/`toggle` (bool), `slider` (number, or `[start, end]` when range), `number-input`/`rating`/`pagination` (number), `select`/`combobox`/`radio-group`/`tabs`/`breadcrumb`/`accordion`/`list`/`data-table`/`tree`/`dropdown-menu`/`dropdown-button`/`context-menu`/`virtual-list`/`sidebar`/`stepper` (wire id; Clojure restores the original id). Accordion / combobox `:multiple` sends a JSON array in original item order. `otp-input` string when full. `color-picker` hex or `null`. `date-picker` ISO string or `[start, end]`. `settings` `{"id","value"}`. `resizable` array of px sizes |
+| `on-release` | string callback id | `slider`: same payload as `on-change` (number, or `[start, end]` when range). Kit `SliderEvent::Release` after a real click/drag. Programmatic `set_value` emits neither `on-change` nor `on-release` |
 | `on-submit` | string callback id | `input` (Enter). `textarea`: when set, Enter submits and Shift+Enter inserts a newline (Kit `submit_on_enter`); omitted, both keys insert a newline |
 | `on-blur` | string callback id | `input`, `textarea`, `otp-input`, `editor` (called with the current string) |
 | `on-escape` | string callback id | `input`, `textarea`, `editor` (0-arg) |
@@ -208,11 +209,11 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `href` | string | `link` |
 | `src` | string | `avatar`: Kit `ImageSource` (http URL or file path). Empty/omitted is initials or the placeholder icon. Remote http URLs need the host HTTP client (installed at startup) |
 | `icon` | string | `icon`, `spinner` (kebab `circle-check`); `avatar` placeholder icon (Kit default User) |
-| `control-size` | string | `xs`/`small`/`medium`/`large` (Clojure `:size :small` is rewritten so pixel `:size` stays numeric) |
+| `control-size` | string | `xs`/`small`/`medium`/`large` (Clojure `:size :small` is rewritten so pixel `:size` stays numeric). `dropdown-button`: omitted outer size inherits the inner action Button's size. Inner `trigger` may set `control-size` too |
 | `count` | number | `badge`; `otp-input` length (default 6, clamped 1–12) |
 | `dot` | bool | `badge`. `chart` `:line` / `:radar`: show vertices. Line default is false (Kit) |
 | `dashed` | bool | `separator` |
-| `outline` | bool | `tag` |
+| `outline` | bool | `tag`, `button`, `dropdown-button`. Also accepted as `variant: outline` on buttons |
 | `searchable` | bool | `select` / `combobox`: show a filter field; host uses `SearchableVec` so typing actually filters. Combobox defaults true in `ui/combobox`. `list`: filter rows by label |
 | `open` | bool | `dialog`, `alert-dialog`, `popover`, `sheet`: controlled open (`:open?` in Clojure). Omitted/false dialogs/sheets are not shown. `notification`: omitted/true shows; `false` hides |
 | `overlay-closable` | bool | `dialog`, `sheet`: click the dimmed overlay to dismiss (default true). `alert-dialog` is not backdrop-dismissible |
@@ -233,8 +234,9 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `multiple` | bool | `accordion`, `combobox` |
 | `message` | string | `alert` (alias of `text`) |
 | `shape` | string | `checkbox`: `circle` for a round toggle |
-| `primary` | bool | `button` (alias for `variant: primary`) |
-| `variant` | string | `button`, `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`), `notification` (`info`/`success`/`warning`/`error`), `chart` (`line`/`bar`/`area`/`pie`/`radar`/`candlestick`/`sankey`), settings field kind |
+| `primary` | bool | `button` / `dropdown-button` (alias for `variant: primary` when `variant` is omitted) |
+| `selected` | bool | `button` / `dropdown-button`: Kit `Selectable` chrome. Not list / table / tree selection (those Clojure `:selected` keys become `value`) |
+| `variant` | string | `button` / `dropdown-button`: Kit `ButtonVariants` (`primary`, `secondary`, `danger`, `warning`, `success`, `info`, `ghost`, `link`, `text`). `tag`, `alert`, `tabs`, `group-box`, `toggle`, `dialog` (`confirm` / `alert`), `notification` (`info`/`success`/`warning`/`error`), `chart` (`line`/`bar`/`area`/`pie`/`radar`/`candlestick`/`sankey`), settings field kind |
 | `alignment` | string | `chart` `:bar`: Kit `BarAlignment` (`bottom` default, `top`, `left`, `right`). `left` is horizontal bars growing right |
 | `label-axis` | bool | `chart`: band-axis labels (default true) |
 | `value-axis` | bool | `chart`: value-axis tick labels (default false) |
@@ -259,7 +261,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `body-width-ratio` | number | `chart` `:candlestick`: body width vs band (Kit default 0.8). Forwarded unclamped |
 | `node-align` | string | `chart` `:sankey`: `justify` (default), `left`, `right`, `center` |
 | `value-scale` | string | `chart` `:sankey`: `linear` (default) or `sqrt` |
-| `scale` | string | `slider`: `linear` (default / omitted) or `logarithmic` (`log`). Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise the host keeps linear |
+| `scale` | string | `slider`: `linear` (default / omitted) or `logarithmic` (`log`). Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise the host keeps linear and warns |
 | `node-width` / `node-padding` / `iterations` / `node-corner-radius` / `link-opacity` / `min-link-width` | number | `chart` `:sankey` layout |
 | `node-label` / `value-label` | bool | `chart` `:sankey`: convenience labels (default true). Custom item `label-lines` take precedence |
 | `title` | string | `window` (or any root): native window title (default `clj-gpui`). Also `alert` / `group-box` / `dialog` / `alert-dialog` / `sheet` / `notification` / `sidebar` titles |
@@ -285,7 +287,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer + `gpui-fps` HUD) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
 
-Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` are walked too. The registry is rebuilt on every export.
+Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-release` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-open-change` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` are walked too. The registry is rebuilt on every export.
 
 The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets (`icon`, `spinner`, `alert`, `select` chevron, `clipboard`) load SVGs from `gpui-kit-assets`. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 

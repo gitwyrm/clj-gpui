@@ -17,7 +17,7 @@ use gpui_component::{
     alert::Alert,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants as _, DropdownButton, Toggle, ToggleVariants as _},
+    button::{Button, DropdownButton, Toggle, ToggleVariants as _},
     checkbox::Checkbox,
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
@@ -122,6 +122,7 @@ struct SliderSlot {
     step: f32,
     scale: SliderScale,
     on_change: Option<String>,
+    on_release: Option<String>,
     /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
     /// track width changes we must re-render or they disagree by a few px.
     bar_px: Option<(f32, f32)>,
@@ -1021,10 +1022,12 @@ impl RootView {
                 && slot.scale == scale
             {
                 slot.on_change = node.on_change.clone();
+                slot.on_release = node.on_release.clone();
                 let current = slot.state.read(cx).value();
-                // `set_value` notifies without emitting Change, so applying
-                // Clojure's current value cannot loop. Step is drag granularity
-                // only; a 40→42 update with step 5 must still land on 42.
+                // `set_value` notifies without emitting Change or Release, so
+                // applying Clojure's current value cannot loop. Step is drag
+                // granularity only; a 40→42 update with step 5 must still land
+                // on 42.
                 if slider_value_changed(current, value) {
                     slot.state.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
@@ -1039,17 +1042,17 @@ impl RootView {
             builder = builder.scale(SliderScale::Logarithmic);
         }
         let state = cx.new(|_cx| builder.default_value(value));
+        if slider_log_scale_fallback(node, lo, hi) {
+            eprintln!(
+                "[host] slider {}: logarithmic scale requires min > 0 and min < max; using linear",
+                node.id.as_deref().unwrap_or("?")
+            );
+        }
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
-            let SliderEvent::Change(changed) = event else {
-                return;
-            };
-            let payload = slider_event_payload(*changed);
-            let Some(id) = this
-                .sliders
-                .get(&key_owned)
-                .and_then(|slot| slot.on_change.clone())
-            else {
+            let Some((id, payload)) = this.sliders.get(&key_owned).and_then(|slot| {
+                slider_slot_callback(event, slot.on_change.as_deref(), slot.on_release.as_deref())
+            }) else {
                 return;
             };
             this.emit_value(id, payload);
@@ -1064,6 +1067,7 @@ impl RootView {
                 step,
                 scale,
                 on_change: node.on_change.clone(),
+                on_release: node.on_release.clone(),
                 bar_px: None,
                 settle: 0,
             },
@@ -1183,14 +1187,8 @@ impl RootView {
             }
             "button" => {
                 let label = node.text.clone().unwrap_or_default();
-                let mut button = Button::new(eid(&key)).label(label);
-                button = apply_button_variant(button, node);
-                if node.compact {
-                    button = button.compact();
-                }
-                if node.disabled {
-                    button = button.disabled(true);
-                }
+                let mut button =
+                    overlay::apply_button_chrome(Button::new(eid(&key)).label(label), node);
                 if node.on_click.is_some() {
                     let emit = Self::action_emitter(cx);
                     let key = key.clone();
@@ -2384,7 +2382,8 @@ impl RootView {
         let items = node.items.clone();
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
-        let mut dropdown = apply_dropdown_button_chrome(DropdownButton::new(eid(&key)), node);
+        let mut dropdown =
+            overlay::apply_dropdown_button_chrome(DropdownButton::new(eid(&key)), node);
         if let Some(trigger) = node.trigger.as_deref() {
             let mut button = overlay::trigger_button(Some(trigger), &key);
             if trigger.compact || node.compact {
@@ -4109,8 +4108,8 @@ fn parse_color(value: &str) -> Option<u32> {
 /// Step is drag granularity. Clojure's controlled value is accepted as-is
 /// (then clamped to min/max). Compare f32 values exactly so a tiny-range
 /// slider (e.g. 0 → 5e-5 with max 1e-4) is not discarded. `set_value`
-/// notifies without emitting `SliderEvent::Change`, so an unchanged tree
-/// cannot loop.
+/// notifies without emitting `SliderEvent::Change` or `Release`, so an
+/// unchanged tree cannot loop.
 fn slider_range(min: Option<f32>, max: Option<f32>) -> (f32, f32) {
     let min = min.unwrap_or(0.0);
     let max = max.unwrap_or(100.0);
@@ -4180,6 +4179,28 @@ fn slider_event_payload(value: SliderValue) -> Value {
     }
 }
 
+fn slider_slot_callback(
+    event: &SliderEvent,
+    on_change: Option<&str>,
+    on_release: Option<&str>,
+) -> Option<(String, Value)> {
+    match event {
+        SliderEvent::Change(changed) => {
+            on_change.map(|id| (id.to_string(), slider_event_payload(*changed)))
+        }
+        SliderEvent::Release(changed) => {
+            on_release.map(|id| (id.to_string(), slider_event_payload(*changed)))
+        }
+    }
+}
+
+/// Kit panics on logarithmic scale when `min <= 0` or `min >= max`. Warn
+/// once when a new slot falls back to linear instead of asserting.
+fn slider_log_scale_fallback(node: &Node, min: f32, max: f32) -> bool {
+    mapping::parse_slider_scale(node.scale.as_deref()).is_logarithmic()
+        && slider_effective_scale(node, min, max) == SliderScale::Linear
+}
+
 fn slider_value_changed(current: SliderValue, wanted: SliderValue) -> bool {
     current != wanted
 }
@@ -4238,40 +4259,6 @@ fn scroll_viewport(node: &Node) -> ScrollViewport {
             .map(ScrollExtent::Px)
             .unwrap_or(ScrollExtent::Fill),
     }
-}
-
-fn apply_button_variant(button: Button, node: &Node) -> Button {
-    match node.variant.as_deref() {
-        Some("primary") => button.primary(),
-        Some("ghost") => button.ghost(),
-        Some("text") => button.text(),
-        Some("danger") => button.danger(),
-        Some("outline") => button.outline(),
-        _ if node.primary => button.primary(),
-        _ => button,
-    }
-}
-
-fn apply_dropdown_button_chrome(mut dropdown: DropdownButton, node: &Node) -> DropdownButton {
-    match node.variant.as_deref() {
-        Some("primary") => dropdown = dropdown.primary(),
-        Some("ghost") => dropdown = dropdown.ghost(),
-        Some("text") => dropdown = dropdown.text(),
-        Some("danger") => dropdown = dropdown.danger(),
-        Some("outline") => dropdown = dropdown.outline(),
-        _ if node.primary => dropdown = dropdown.primary(),
-        _ => {}
-    }
-    if node.outline && node.variant.as_deref() != Some("outline") {
-        dropdown = dropdown.outline();
-    }
-    if node.disabled {
-        dropdown = dropdown.disabled(true);
-    }
-    if node.control_size.is_some() {
-        dropdown = dropdown.with_size(mapping::parse_scale(node.control_size.as_deref()));
-    }
-    dropdown
 }
 
 fn select_opts(node: &Node) -> Vec<SelectOpt> {
@@ -5351,8 +5338,9 @@ mod select_control_tests {
 #[cfg(test)]
 mod slider_control_tests {
     use super::{
-        Node, SliderScale, SliderValue, slider_controlled_value, slider_effective_scale,
-        slider_event_payload, slider_range, slider_range_thumbs, slider_step, slider_value_changed,
+        Node, SliderEvent, SliderScale, SliderValue, slider_controlled_value,
+        slider_effective_scale, slider_event_payload, slider_log_scale_fallback, slider_range,
+        slider_range_thumbs, slider_slot_callback, slider_step, slider_value_changed,
         slider_wanted_value,
     };
     use serde_json::json;
@@ -5479,6 +5467,57 @@ mod slider_control_tests {
         assert_eq!(
             slider_effective_scale(&linear, 0.25, 4.0),
             SliderScale::Linear
+        );
+        assert!(slider_log_scale_fallback(&log, 0.0, 100.0));
+        assert!(slider_log_scale_fallback(&log, 10.0, 10.0));
+        assert!(!slider_log_scale_fallback(&log, 0.25, 4.0));
+        assert!(!slider_log_scale_fallback(&linear, 0.0, 100.0));
+    }
+
+    #[test]
+    fn release_emits_on_release_payload() {
+        let single = slider_slot_callback(
+            &SliderEvent::Release(SliderValue::Single(42.0)),
+            Some("change"),
+            Some("release"),
+        );
+        assert_eq!(single, Some(("release".into(), json!(42.0))));
+
+        let range = slider_slot_callback(
+            &SliderEvent::Release(SliderValue::Range(20.0, 70.0)),
+            Some("change"),
+            Some("release"),
+        );
+        assert_eq!(range, Some(("release".into(), json!([20.0, 70.0]))));
+
+        let change = slider_slot_callback(
+            &SliderEvent::Change(SliderValue::Single(10.0)),
+            Some("change"),
+            Some("release"),
+        );
+        assert_eq!(change, Some(("change".into(), json!(10.0))));
+    }
+
+    #[test]
+    fn missing_on_release_is_silent_and_set_value_has_no_event() {
+        // Host only forwards Kit SliderEvent. SliderState::set_value notifies
+        // without emitting Change or Release, so a controlled echo cannot fire
+        // either callback.
+        assert_eq!(
+            slider_slot_callback(
+                &SliderEvent::Release(SliderValue::Single(42.0)),
+                Some("change"),
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            slider_slot_callback(
+                &SliderEvent::Change(SliderValue::Range(1.0, 2.0)),
+                None,
+                Some("release")
+            ),
+            None
         );
     }
 }

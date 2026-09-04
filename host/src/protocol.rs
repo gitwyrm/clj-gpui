@@ -517,6 +517,10 @@ pub struct Node {
     pub on_click: Option<String>,
     #[serde(default, rename = "on-change")]
     pub on_change: Option<String>,
+    /// Slider: Kit `SliderEvent::Release` after a real click/drag.
+    /// Same payload shape as `on-change`. `set_value` emits neither.
+    #[serde(default, rename = "on-release")]
+    pub on_release: Option<String>,
     #[serde(default, rename = "on-submit")]
     pub on_submit: Option<String>,
     #[serde(default, rename = "on-double-click")]
@@ -637,6 +641,10 @@ pub struct Node {
     pub dashed: bool,
     #[serde(default)]
     pub outline: bool,
+    /// Button / dropdown-button Kit `Selectable` chrome. List / table /
+    /// tree Clojure `:selected` is rewritten to `value` and is not sent here.
+    #[serde(default)]
+    pub selected: bool,
     #[serde(default)]
     pub searchable: bool,
     #[serde(default)]
@@ -1049,6 +1057,7 @@ mod tests {
             "max": 100,
             "step": 0.5,
             "on-change": "cb-2",
+            "on-release": "cb-3",
             "orientation": "horizontal"
         }))
         .unwrap();
@@ -1057,6 +1066,7 @@ mod tests {
         assert_eq!(slider.min, Some(0.0));
         assert_eq!(slider.max, Some(100.0));
         assert_eq!(slider.step, Some(0.5));
+        assert_eq!(slider.on_release.as_deref(), Some("cb-3"));
 
         let range: Node = serde_json::from_value(json!({
             "type": "slider",
@@ -1717,8 +1727,15 @@ mod tests {
         let split: Node = serde_json::from_value(json!({
             "type": "dropdown-button",
             "items": [{"id": "csv", "label": "CSV"}],
-            "trigger": {"type": "button", "text": "Export"},
-            "variant": "primary",
+            "trigger": {
+                "type": "button",
+                "text": "Export",
+                "control-size": "small",
+                "selected": true,
+                "outline": true
+            },
+            "variant": "warning",
+            "selected": true,
             "placement": "bottom-left"
         }))
         .unwrap();
@@ -1728,7 +1745,14 @@ mod tests {
             split.trigger.as_ref().unwrap().text.as_deref(),
             Some("Export")
         );
-        assert_eq!(split.variant.as_deref(), Some("primary"));
+        assert_eq!(
+            split.trigger.as_ref().unwrap().control_size.as_deref(),
+            Some("small")
+        );
+        assert!(split.trigger.as_ref().unwrap().selected);
+        assert!(split.trigger.as_ref().unwrap().outline);
+        assert_eq!(split.variant.as_deref(), Some("warning"));
+        assert!(split.selected);
         assert_eq!(split.placement.as_deref(), Some("bottom-left"));
         assert_eq!(PROTOCOL_VERSION, 10);
     }

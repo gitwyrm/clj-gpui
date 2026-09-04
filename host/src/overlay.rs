@@ -12,12 +12,12 @@ use gpui::{
     Styled, Window, div, px,
 };
 use gpui_component::{
-    Colorize as _, Disableable as _, Icon, IconName, Sizable as _, Size,
+    Colorize as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
     alert::Alert,
     avatar::{Avatar, AvatarGroup},
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants as _},
+    button::{Button, DropdownButton},
     clipboard::Clipboard,
     dialog::{AlertDialog, DialogButtonProps},
     group_box::{GroupBox, GroupBoxVariants as _},
@@ -981,20 +981,58 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
     }
 }
 
-fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
-    match node.variant.as_deref() {
-        Some("primary") => button = button.primary(),
-        Some("ghost") => button = button.ghost(),
-        Some("outline") => button = button.outline(),
-        Some("danger") => button = button.danger(),
-        Some("text") => button = button.text(),
-        _ if node.primary => button = button.primary(),
-        _ => {}
+pub(crate) fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
+    let chrome = mapping::button_chrome(
+        node.variant.as_deref(),
+        node.primary,
+        node.outline,
+        node.selected,
+        node.control_size.as_deref(),
+    );
+    button = mapping::apply_named_button_variant(button, chrome.variant);
+    if chrome.outline {
+        button = button.outline();
+    }
+    if chrome.selected {
+        button = button.selected(true);
+    }
+    if let Some(size) = chrome.size {
+        button = button.with_size(size);
+    }
+    if node.compact {
+        button = button.compact();
     }
     if node.disabled {
         button = button.disabled(true);
     }
     button
+}
+
+pub(crate) fn apply_dropdown_button_chrome(
+    mut dropdown: DropdownButton,
+    node: &Node,
+) -> DropdownButton {
+    let chrome = mapping::button_chrome(
+        node.variant.as_deref(),
+        node.primary,
+        node.outline,
+        node.selected,
+        node.control_size.as_deref(),
+    );
+    dropdown = mapping::apply_named_button_variant(dropdown, chrome.variant);
+    if chrome.outline {
+        dropdown = dropdown.outline();
+    }
+    if chrome.selected {
+        dropdown = dropdown.selected(true);
+    }
+    if let Some(size) = chrome.size {
+        dropdown = dropdown.with_size(size);
+    }
+    if node.disabled {
+        dropdown = dropdown.disabled(true);
+    }
+    dropdown
 }
 
 /// Build a `Button` trigger for popover / dropdown-menu. Triggers must be
