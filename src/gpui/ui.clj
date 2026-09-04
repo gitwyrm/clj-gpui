@@ -2425,6 +2425,13 @@
       (keyword? (:loading-style opts)) (update :loading-style name)
       (keyword? (:role opts)) (update :role name)
       (some? (:icon opts)) (assoc :icon (wire-id (:icon opts)))
+      (contains? opts :scroll-to-item)
+      (assoc :scroll-to-item (let [item (:scroll-to-item opts)]
+                               (cond
+                                 (nil? item) nil
+                                 (number? item) item
+                                 :else (wire-id item))))
+      (keyword? (:scroll-generation opts)) (update :scroll-generation name)
       (some? (:stack-style opts)) (update :stack-style style-slot)
       (some? (:shimmer-style opts)) (update :shimmer-style style-slot)
       (some? (:separator-style opts)) (update :separator-style style-slot)
@@ -2813,19 +2820,32 @@
   is the jump button tooltip. `:jump-button-renderer` is button chrome
   (`:variant`, `:size`, `:icon`, `:tooltip`, `:label` / `:text`) for
   `with_jump_button_renderer`; `:label` becomes wire `:text` and is
-  Kit `Button::label` (visible / accessible name). `scroll_to_item` /
-  `scroll_to_end` are not wrapped; child-list sync cannot express
-  programmatic navigation to an existing row. Kit's constructor takes
-  an arbitrary row renderer (`IntoElement`); scroller rows here paint
-  the static overlay subset plus this chat family (not list /
-  data-table / editor) because they cannot re-enter `RootView`.
+  Kit `Button::label` (visible / accessible name). `:scroll-to-item`
+  is Kit `scroll_to_item` (opaque row `:id`, not trimmed, or 0-based
+  index). `:scroll-to-end`
+  true is Kit `scroll_to_end` (resume tail follow) and wins when both
+  are set. Omitted / nil leaves native scroll (user drag, jump button).
+  `:scroll-generation` (integer or string) re-applies the same target
+  after the user has scrolled away — same shape as nav-stack
+  `:replace-generation`. An unresolved or rejected `:scroll-to-item`
+  is not marked applied, so the same request can succeed after
+  append/load. Requests run after child-list sync. Kit's
+  constructor takes an arbitrary row renderer (`IntoElement`); scroller
+  rows here paint the static overlay subset plus this chat family
+  (not list / data-table / editor) because they cannot re-enter
+  `RootView`.
 
   (ui/message-scroller {:id \"chat\" :height 400
                         :jump-button-label \"Jump tooltip\"
                         :jump-button-renderer {:label \"Latest\"
                                               :variant :primary
                                               :size :small
-                                              :icon :arrow-down}}
+                                              :icon :arrow-down}
+                        :scroll-to-item \"m1\"
+                        :scroll-generation 1}
+    (ui/message {:id \"m1\"} (ui/bubble \"Hi\")))
+  (ui/message-scroller {:id \"chat\" :scroll-to-end true
+                        :scroll-generation 2}
     (ui/message {:id \"m1\"} (ui/bubble \"Hi\")))"
   [& args]
   (let [[opts children] (leading-opts args)]

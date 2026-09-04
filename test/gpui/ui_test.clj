@@ -1321,7 +1321,42 @@
                                   :jump-button-renderer {:label "Latest"}})]
       (is (= "Jump tooltip" (:jump-button-label n)))
       (is (= "Latest" (get-in n [:jump-button-renderer :text])))
-      (is (nil? (get-in n [:jump-button-renderer :label]))))))
+      (is (nil? (get-in n [:jump-button-renderer :label])))))
+  (testing "message-scroller scroll-to-item and scroll-to-end"
+    (let [n (ui/message-scroller {:id "chat"
+                                  :scroll-to-item :m1
+                                  :scroll-generation 2}
+                                 (ui/message {:id "m1"} (ui/bubble "Hi")))]
+      (is (= "m1" (:scroll-to-item n)))
+      (is (= 2 (:scroll-generation n)))
+      (is (nil? (:scroll-to-end n))))
+    (let [n (ui/message-scroller {:id "chat"
+                                  :scroll-to-item 0
+                                  :scroll-to-end true
+                                  :scroll-generation "g3"}
+                                 (ui/message {:id "m1"} (ui/bubble "Hi")))]
+      (is (= 0 (:scroll-to-item n)))
+      (is (true? (:scroll-to-end n)))
+      (is (= "g3" (:scroll-generation n))))
+    (let [plain (ui/message-scroller {:id "chat"}
+                                     (ui/message {:id "m1"} (ui/bubble "Hi")))]
+      (is (not (contains? plain :scroll-to-item)))
+      (is (not (contains? plain :scroll-to-end)))
+      (is (not (contains? plain :scroll-generation))))
+    (let [exported (runtime/export-tree
+                    (ui/message-scroller {:id "chat"
+                                          :scroll-to-item "m2"
+                                          :scroll-generation 1}
+                                         (ui/message {:id "m2"} (ui/bubble "Hi"))))]
+      (is (= "m2" (:scroll-to-item exported)))
+      (is (= 1 (:scroll-generation exported))))
+    (let [n (ui/message-scroller {:id "chat"
+                                  :scroll-to-item " message-1 "}
+                                 (ui/message {:id " message-1 "}
+                                             (ui/bubble "Hi")))]
+      (is (= " message-1 " (:scroll-to-item n))
+          "scroll-to-item keeps leading/trailing space like the row :id")
+      (is (= " message-1 " (:id (first (:children n))))))))
 
 (deftest nav-stack-trail-and-page-catalog
   (let [n (ui/nav-stack {:id "nav" :stack [:home :detail] :transition 0.22

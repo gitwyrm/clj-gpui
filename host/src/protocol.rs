@@ -1273,6 +1273,24 @@ pub struct Node {
     /// `text` is Kit `Button::label` (visible / accessible name).
     #[serde(default, rename = "jump-button-renderer")]
     pub jump_button_renderer: Option<Box<Node>>,
+    /// MessageScroller: Kit `scroll_to_item`. Opaque row id (not
+    /// trimmed) or 0-based index. Empty string / omitted / JSON null
+    /// leaves native scroll. Applied after child-list sync. Unresolved
+    /// / Kit-rejected items are not marked applied, so the same request
+    /// can succeed after append/load. `:scroll-to-end true` wins when
+    /// both are set.
+    #[serde(default, rename = "scroll-to-item")]
+    pub scroll_to_item: Option<Value>,
+    /// MessageScroller: Kit `scroll_to_end` (resume tail follow).
+    /// True applies; omitted / false leaves native scroll.
+    #[serde(default, rename = "scroll-to-end")]
+    pub scroll_to_end: Option<bool>,
+    /// MessageScroller: replay token for `scroll_to_item` / `scroll_to_end`.
+    /// Same target with a new token re-applies (click Top twice after the
+    /// user scrolled away). Integer or non-empty string. Omitted still
+    /// applies the first distinct target.
+    #[serde(default, rename = "scroll-generation")]
+    pub scroll_generation: Option<Value>,
 }
 
 impl Node {
@@ -2431,6 +2449,27 @@ mod tests {
         assert_eq!(scroller.jump_button_label.as_deref(), Some("Latest"));
         assert_eq!(scroller.jump_button_transition, Some(0.0));
         assert_eq!(scroller.bottom_fade.as_deref(), Some("#1a1b26"));
+
+        let scrolled: Node = serde_json::from_value(json!({
+            "type": "message-scroller",
+            "id": "chat",
+            "scroll-to-item": "m1",
+            "scroll-to-end": true,
+            "scroll-generation": 2
+        }))
+        .unwrap();
+        assert_eq!(scrolled.scroll_to_item, Some(json!("m1")));
+        assert_eq!(scrolled.scroll_to_end, Some(true));
+        assert_eq!(scrolled.scroll_generation, Some(json!(2)));
+
+        let indexed: Node = serde_json::from_value(json!({
+            "type": "message-scroller",
+            "scroll-to-item": 0
+        }))
+        .unwrap();
+        assert_eq!(indexed.scroll_to_item, Some(json!(0)));
+        assert!(indexed.scroll_to_end.is_none());
+        assert!(indexed.scroll_generation.is_none());
 
         let nav: Node = serde_json::from_value(json!({
             "type": "nav-stack",

@@ -27,6 +27,7 @@ use gpui_component::{
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
+use serde_json::Value;
 use std::sync::mpsc;
 
 /// Recursion into the rest of the tree (RootView in-window, overlay painter
@@ -126,6 +127,170 @@ pub fn scroller_item_id(node: &Node, index: usize) -> String {
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("idx:{index}"))
+}
+
+/// Programmatic MessageScroller navigation. Kit `scroll_to_item` /
+/// `scroll_to_end` are one-shots: child-list sync cannot jump to an
+/// existing row. Omitted leaves native scroll (user drag, jump button).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScrollerScroll {
+    End,
+    Item(String),
+}
+
+/// Replay identity for a programmatic scroll. Structured so a row id
+/// that contains `:` cannot collide with a generation that contains `:`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollerScrollToken {
+    pub request: ScrollerScroll,
+    pub generation: Option<String>,
+}
+
+/// Kit call to make once a request is new and the target exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScrollerScrollApply {
+    End,
+    Item(usize),
+}
+
+/// Wire `scroll-generation`: integer or non-empty string, same shape as
+/// nav-stack `replace-generation`. Omitted / null is not a replay token.
+pub fn scroller_scroll_generation(value: Option<&Value>) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else {
+                let f = n.as_f64()?;
+                if f.is_finite() && f == f.trunc() {
+                    Some((f as i64).to_string())
+                } else {
+                    None
+                }
+            }
+        }
+        Some(_) => None,
+    }
+}
+
+/// Row ids are opaque identity: leading/trailing space is kept so a
+/// `:scroll-to-item` matches `scroller_item_id` byte-for-byte. Empty
+/// string is still omit (`scroller_item_id` already rejects empty
+/// ids). Replay tokens (`:scroll-generation`) keep trim, same as
+/// nav-stack `:replace-generation`.
+fn scroll_item_spec(value: Option<&Value>) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        Some(Value::Number(n)) => {
+            if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else {
+                None
+            }
+        }
+        Some(_) => None,
+    }
+}
+
+/// `:scroll-to-end true` is Kit `scroll_to_end` and wins over
+/// `:scroll-to-item`. Omitted / false and omitted item leave native scroll.
+pub fn scroller_scroll_request(
+    scroll_to_end: Option<bool>,
+    scroll_to_item: Option<&Value>,
+) -> Option<ScrollerScroll> {
+    if scroll_to_end == Some(true) {
+        return Some(ScrollerScroll::End);
+    }
+    scroll_item_spec(scroll_to_item).map(ScrollerScroll::Item)
+}
+
+/// Resolve a `:scroll-to-item` spec against current row ids. A matching
+/// id wins; otherwise a 0-based index that is in range.
+pub fn scroller_item_index(spec: &str, ids: &[String]) -> Option<usize> {
+    if let Some(index) = ids.iter().position(|id| id == spec) {
+        return Some(index);
+    }
+    spec.parse::<usize>()
+        .ok()
+        .filter(|index| *index < ids.len())
+}
+
+/// Identity of a scroll request for replay. Token includes the Clojure
+/// spec (id / index string), not the resolved index, so prepend that
+/// shifts `m1` from 0→1 does not re-fire Kit (prepend already preserves
+/// the native anchor).
+pub fn scroller_scroll_token(
+    request: Option<&ScrollerScroll>,
+    generation: Option<&str>,
+) -> Option<ScrollerScrollToken> {
+    Some(ScrollerScrollToken {
+        request: request?.clone(),
+        generation: generation.map(str::to_string),
+    })
+}
+
+/// Apply when the token is present and differs from the last
+/// *successfully applied* request. Omitted token leaves native scroll.
+pub fn should_apply_scroller_scroll(
+    last: Option<&ScrollerScrollToken>,
+    token: Option<&ScrollerScrollToken>,
+) -> bool {
+    match token {
+        Some(token) => last != Some(token),
+        None => false,
+    }
+}
+
+/// Resolve a present request against current row ids. `None` means do
+/// not call Kit: omit, or `:scroll-to-item` is not in this list yet.
+pub fn scroller_scroll_apply(
+    request: Option<&ScrollerScroll>,
+    ids: &[String],
+) -> Option<ScrollerScrollApply> {
+    match request {
+        None => None,
+        Some(ScrollerScroll::End) => Some(ScrollerScrollApply::End),
+        Some(ScrollerScroll::Item(spec)) => {
+            scroller_item_index(spec, ids).map(ScrollerScrollApply::Item)
+        }
+    }
+}
+
+/// Plan a Kit scroll for this tree. Unresolved items return `None` so
+/// the host does not record a last-applied token; the same request can
+/// succeed after append/load. A successful Kit call then binds `token`.
+pub fn scroller_scroll_plan(
+    last: Option<&ScrollerScrollToken>,
+    request: Option<&ScrollerScroll>,
+    generation: Option<&str>,
+    ids: &[String],
+) -> Option<(ScrollerScrollApply, ScrollerScrollToken)> {
+    let token = scroller_scroll_token(request, generation)?;
+    if !should_apply_scroller_scroll(last, Some(&token)) {
+        return None;
+    }
+    let apply = scroller_scroll_apply(request, ids)?;
+    Some((apply, token))
 }
 
 pub fn node_fingerprint(node: &Node) -> u64 {
@@ -852,8 +1017,131 @@ mod tests {
     fn scroller_item_id_prefers_node_id() {
         let named: Node = serde_json::from_value(json!({"type": "message", "id": "m1"})).unwrap();
         assert_eq!(scroller_item_id(&named, 3), "m1");
+        let padded: Node =
+            serde_json::from_value(json!({"type": "message", "id": " message-1 "})).unwrap();
+        assert_eq!(scroller_item_id(&padded, 0), " message-1 ");
         let anon: Node = serde_json::from_value(json!({"type": "message"})).unwrap();
         assert_eq!(scroller_item_id(&anon, 3), "idx:3");
+    }
+
+    #[test]
+    fn scroller_scroll_request_end_wins_and_item_resolves_id_before_index() {
+        let ids = ["m1".into(), "m2".into(), "m3".into()];
+        assert!(scroller_scroll_request(None, None).is_none());
+        assert!(scroller_scroll_request(Some(false), Some(&json!("m1"))).is_some());
+        assert_eq!(
+            scroller_scroll_request(Some(true), Some(&json!("m1"))),
+            Some(ScrollerScroll::End),
+            "scroll_to_end wins over scroll_to_item"
+        );
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!("m2"))),
+            Some(ScrollerScroll::Item("m2".into()))
+        );
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!(0))),
+            Some(ScrollerScroll::Item("0".into()))
+        );
+        assert_eq!(scroller_item_index("m2", &ids), Some(1));
+        assert_eq!(scroller_item_index("0", &ids), Some(0), "numeric index");
+        let id_zero = ["0".into(), "m1".into()];
+        assert_eq!(
+            scroller_item_index("0", &id_zero),
+            Some(0),
+            "matching row id wins over index"
+        );
+        assert_eq!(scroller_item_index("9", &ids), None);
+        assert!(scroller_scroll_request(None, Some(&json!(""))).is_none());
+        assert!(scroller_scroll_request(None, Some(&Value::Null)).is_none());
+        let padded = [" message-1 ".into(), "message-1".into()];
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!(" message-1 "))),
+            Some(ScrollerScroll::Item(" message-1 ".into())),
+            "row ids are opaque; leading/trailing space is kept"
+        );
+        assert_eq!(scroller_item_index(" message-1 ", &padded), Some(0));
+        assert_eq!(
+            scroller_item_index("message-1", &padded),
+            Some(1),
+            "trimmed spec is a different id"
+        );
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!("  "))),
+            Some(ScrollerScroll::Item("  ".into())),
+            "whitespace-only is a valid row id, unlike empty string"
+        );
+    }
+
+    #[test]
+    fn scroller_scroll_applies_on_new_token_not_omit_or_echo() {
+        let end = ScrollerScroll::End;
+        let item = ScrollerScroll::Item("m1".into());
+        let first = scroller_scroll_token(Some(&item), Some("1"));
+        assert!(should_apply_scroller_scroll(None, first.as_ref()));
+        assert!(!should_apply_scroller_scroll(
+            first.as_ref(),
+            first.as_ref()
+        ));
+        let again = scroller_scroll_token(Some(&item), Some("2"));
+        assert!(
+            should_apply_scroller_scroll(first.as_ref(), again.as_ref()),
+            "generation bump re-applies the same row"
+        );
+        assert!(!should_apply_scroller_scroll(first.as_ref(), None));
+        let shifted = scroller_scroll_token(Some(&item), Some("1"));
+        assert_eq!(
+            shifted, first,
+            "token is the id spec, not the resolved index"
+        );
+        let to_end = scroller_scroll_token(Some(&end), Some("1"));
+        assert!(should_apply_scroller_scroll(
+            first.as_ref(),
+            to_end.as_ref()
+        ));
+        assert_eq!(
+            scroller_scroll_generation(Some(&json!(3))).as_deref(),
+            Some("3")
+        );
+        assert!(scroller_scroll_generation(Some(&json!(""))).is_none());
+        assert!(
+            scroller_scroll_generation(Some(&json!("  "))).is_none(),
+            "generation still trims, unlike scroll-to-item"
+        );
+        let colon_id = scroller_scroll_token(Some(&ScrollerScroll::Item("a:b".into())), Some("c"));
+        let colon_gen = scroller_scroll_token(Some(&ScrollerScroll::Item("a".into())), Some("b:c"));
+        assert_ne!(
+            colon_id, colon_gen,
+            "row id and generation are not flattened through `:`"
+        );
+    }
+
+    #[test]
+    fn unresolved_scroll_to_item_is_not_applied_until_the_row_exists() {
+        let request = scroller_scroll_request(None, Some(&json!("m9")));
+        let mut last = None;
+        let absent = ["m1".into(), "m2".into()];
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &absent).is_none(),
+            "absent row must not consume the request"
+        );
+        assert!(
+            last.is_none(),
+            "failed resolve does not record a last-applied token"
+        );
+
+        let loaded = ["m1".into(), "m2".into(), "m9".into()];
+        let (apply, token) = scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded)
+            .expect("same request is attempted once the row exists");
+        assert_eq!(apply, ScrollerScrollApply::Item(2));
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded).is_some(),
+            "Kit reject (token not stored) retries the same request"
+        );
+        last = Some(token);
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded).is_none(),
+            "successful apply then echoes"
+        );
     }
 
     #[test]

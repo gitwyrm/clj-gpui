@@ -261,6 +261,11 @@ struct MessageScrollerSlot {
     items: Rc<RefCell<Vec<Node>>>,
     last_ids: Vec<String>,
     last_fps: Vec<u64>,
+    /// Last successfully applied `scroll_to_item` / `scroll_to_end`
+    /// request. Unresolved items are not stored, so the same request can
+    /// succeed after append/load. Omitted Clojure request leaves native
+    /// scroll (jump button, user drag).
+    last_scroll: Option<chat::ScrollerScrollToken>,
     _observe: Subscription,
 }
 
@@ -4254,6 +4259,37 @@ impl RootView {
         state
     }
 
+    fn apply_message_scroller_scroll(
+        slot: &mut MessageScrollerSlot,
+        node: &Node,
+        ids: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        let request =
+            chat::scroller_scroll_request(node.scroll_to_end, node.scroll_to_item.as_ref());
+        let generation = chat::scroller_scroll_generation(node.scroll_generation.as_ref());
+        let Some((apply, token)) = chat::scroller_scroll_plan(
+            slot.last_scroll.as_ref(),
+            request.as_ref(),
+            generation.as_deref(),
+            ids,
+        ) else {
+            return;
+        };
+        let applied = match apply {
+            chat::ScrollerScrollApply::End => {
+                slot.state.update(cx, |state, cx| state.scroll_to_end(cx));
+                true
+            }
+            chat::ScrollerScrollApply::Item(index) => slot
+                .state
+                .update(cx, |state, cx| state.scroll_to_item(index, cx)),
+        };
+        if applied {
+            slot.last_scroll = Some(token);
+        }
+    }
+
     fn render_message_scroller(
         &mut self,
         node: &Node,
@@ -4279,8 +4315,9 @@ impl RootView {
                 MessageScrollerSlot {
                     state,
                     items: Rc::new(RefCell::new(children)),
-                    last_ids: ids,
+                    last_ids: ids.clone(),
                     last_fps: fps,
+                    last_scroll: None,
                     _observe: observe,
                 },
             );
@@ -4326,8 +4363,11 @@ impl RootView {
                 }
             }
             *slot.items.borrow_mut() = children;
-            slot.last_ids = ids;
+            slot.last_ids = ids.clone();
             slot.last_fps = fps;
+        }
+        if let Some(slot) = self.scrollers.get_mut(key) {
+            Self::apply_message_scroller_scroll(slot, node, &ids, cx);
         }
         let slot = self.scrollers.get(key).expect("scroller slot");
         let items = slot.items.clone();

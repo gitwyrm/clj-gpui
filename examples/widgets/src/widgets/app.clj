@@ -64,7 +64,9 @@
            :setting-accent :blue
            :split-id "split-a"
            :split-sizes nil
-           :chat-count 3
+           :chat-count 8
+           :chat-scroll nil
+           :chat-scroll-gen 0
            :trail [:home]
            :forward []
            :reuse-forward? true
@@ -654,7 +656,13 @@
                 (ui/bubble text (cond-> {:variant (if outgoing? :filled :secondary)}
                                   (= id "m3") (assoc :reactions (ui/bubble-reactions "👍")))))))
 
-(defn- chat-panel [{:keys [chat-count]}]
+(defn- request-chat-scroll! [target]
+  #(swap! !state (fn [s]
+                   (-> s
+                       (assoc :chat-scroll target)
+                       (update :chat-scroll-gen (fnil inc 0))))))
+
+(defn- chat-panel [{:keys [chat-count chat-scroll chat-scroll-gen]}]
   (ui/vstack
    {:gap 12}
    (ui/label "Kit Message / Bubble" {:font-size 16 :font-weight :semibold})
@@ -691,12 +699,20 @@
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Append" #(swap! !state update :chat-count inc))
-    (ui/label (str chat-count " scroller rows") {:font-size 13}))
+    (ui/button "Top" (request-chat-scroll! "m1"))
+    (ui/button "Latest" (request-chat-scroll! :end))
+    (ui/label (str chat-count " rows · scroll " (pr-str chat-scroll)
+                   " · gen " chat-scroll-gen)
+              {:font-size 13}))
    (apply ui/message-scroller
-          {:id "chat" :height 280 :padding 8
-           :jump-button-label "Jump to latest"
-           :content-style {:padding 4}
-           :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}}
+          (cond-> {:id "chat" :height 280 :padding 8
+                   :jump-button-label "Jump to latest"
+                   :content-style {:padding 4}
+                   :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}
+                   :scroll-generation chat-scroll-gen}
+            (= :end chat-scroll) (assoc :scroll-to-end true)
+            (and (some? chat-scroll) (not= :end chat-scroll))
+            (assoc :scroll-to-item chat-scroll))
           (map chat-message (chat-row chat-count)))))
 
 (defn- docs-panel [_]
