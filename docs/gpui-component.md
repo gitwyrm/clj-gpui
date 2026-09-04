@@ -45,7 +45,7 @@ Classification:
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |
 | `badge::Badge` | `ui/badge` | ✅ | B | Count or `:dot`; wraps a child. Host wrapper owns layout keys |
 | `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel; keyword ids round-trip |
-| `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`; `:searchable true` filters by label; `nil` clears |
+| `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`IndexPath` section+row). `:searchable true` filters by label (and group title, matching Kit). `nil` clears. Option `:display` is `SelectItem::display_title`; `:disabled` greys a row. Chrome: `:cleanable`, `:title-prefix`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty`, `:icon`, `:appearance`, `:accessibility-label`. Custom row `render` of child widgets is not wrapped |
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
 | `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string. Host wrapper owns layout keys |
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
@@ -59,7 +59,7 @@ Classification:
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse |
 | `input::OtpInput` | `ui/otp-input` | ✅ | C | Host-held `OtpState`. `:on-change` only when every cell is filled (crate complete-only). `:count` default 6, clamped 1–12. `:masked` |
 | `input::Editor` / `EditorState` | `ui/editor` | ✅ | C | Kit `Editor` highlighter. `:language` (default `text`). **No LSP**. `tree-sitter-languages` enabled; no Clojure grammar |
-| `select` searchable sections / custom item render | — | ⚠️ | C | Basic string select is B; groups/custom rows are not. Use `ui/combobox` for a searchable multi-select |
+| `select` custom item render | — | ⚠️ | C | Grouped `SelectGroup` options are wrapped on `ui/select`. Custom `SearchableListItem::render` of arbitrary child widgets is not. `ui/combobox` still has no grouped `SearchableVec<SelectGroup>` |
 | `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
 | `table::DataTable` | `ui/data-table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate`. `column()` returns owned `Column` |
 | `table::Table` (declarative) | `ui/table` plus `ui/table-header`, `ui/table-body`, `ui/table-footer`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, `ui/table-caption` | ✅ | C | Not virtualized. Kit primitives on the wire so per-cell `col_span` / align / widget children stay accessible. `{:columns :rows :footer :caption}` is Clojure shorthand that expands into those primitives; column `:span` is header-only. `:accessibility-label` is Kit `Table::accessibility_label` |
@@ -94,15 +94,16 @@ Classification:
 | `Inspector` | — | ❌ | D | Debug-only |
 | `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |
 | `History` | — | ❌ | E | Undo stack, not UI |
-| `webview` | — | ❌ | D | `gpui-wry`: later, when an app needs a WebView. Not this pass |
+| `webview` | — | ❌ | D | **Intentionally unsupported.** `gpui-wry` is a standalone WebView stack. clj-gpui does not carry it; wrap it later only if an app needs an embedded browser |
+| `gpui-shell` | — | ❌ | D | **Intentionally unsupported.** Kit's JS scripting runtime. Clojure is already the scriptable layer; a second JS host does not fit |
 | `animation` helpers | — | ❌ | E | Not a control |
 | `IndexPath` / `Rope` / geometry | — | ❌ | E | Host types |
 
-Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints on `:chrome :dev`. `gpui-shell` is not wrapped: Clojure already is the scriptable layer. `gpui-wry` is deferred until an app needs a WebView.
+Chat `Message`/`Bubble` and `NavStack` are still follow-ups, as are `Command` / `NativeMenu` / `StatusBar` and remaining DataTable extras. `gpui-fps` paints on `:chrome :dev`. `gpui-shell` and `gpui-wry` are **intentionally unsupported**, not accidental gaps: Clojure is already the scripting layer, and WebView is a separate stack with no current reason to ship it inside clj-gpui.
 
 ## Category C — remaining
 
-Slider range thumbs / log scale / reverse and `ui/dropdown-button` are wrapped. Remaining C work is searchable select sections and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, and `ui/avatar-group` are wrapped. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Grouped searchable `ui/select` (`SelectGroup` / `IndexPath`) is wrapped. Remaining C work is chat `Message`/`Bubble`, `NavStack`, `Command` / `NativeMenu` / `StatusBar`, Combobox `SelectGroup` sections, custom Select/Combobox row widgets, and remaining DataTable public extras. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `gpui-shell` and `gpui-wry` are intentionally unsupported.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 
@@ -122,7 +123,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 
 ## Path to near-complete coverage
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/hover-card/menus are in-tree. Remaining C work is searchable select sections and chat / NavStack — not a new architecture. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select (flat or `SelectGroup`), combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/hover-card/menus are in-tree. Remaining C work is chat / NavStack / Command chrome / DataTable extras — not a new architecture. `gpui-shell` and `gpui-wry` are intentionally unsupported.
 
 ## Callback payloads (protocol v10)
 
@@ -130,7 +131,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
 | `slider` | `:on-change` / `:on-release` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity). `:on-release` is Kit `Release` after a real click/drag; same-gesture Change+Release is one batch. `set_value` emits neither |
-| `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
+| `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id. Select groups still send the leaf id, not the section title |
 | `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
 | `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |
 | `alert` | `:on-close` | none (0-arg) |

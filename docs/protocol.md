@@ -76,7 +76,7 @@ v8 is the GPUI Kit 0.6 rename: `text-field` → `input`, `divider` → `separato
 
 v9 adds Kit's remaining first-pass widgets: declarative `table`, `combobox`, `rating`, `stepper`, and the `gpui-fps` HUD on `:chrome :dev`.
 
-v10 adds the rest of Kit's chart kinds (`radar`, `candlestick`, `sankey`) and Kit `BarChart` alignment (`left` / `right` for horizontal bars, plus `:labels` / `:value-axis`). The same protocol version also exposes Kit 0.6 chart builders on `ui/chart` (line/area/pie/bar/radar/candlestick/sankey options) without imposing extra limits Kit itself does not. Additive on the same version: `pagination`, `progress-circle`, `shimmer` (`ShimmerText`), `hover-card`, avatar image `src`, and `avatar-group`. A v9 host would paint the new kinds as a line chart and ignore the extra fields.
+v10 adds the rest of Kit's chart kinds (`radar`, `candlestick`, `sankey`) and Kit `BarChart` alignment (`left` / `right` for horizontal bars, plus `:labels` / `:value-axis`). The same protocol version also exposes Kit 0.6 chart builders on `ui/chart` (line/area/pie/bar/radar/candlestick/sankey options) without imposing extra limits Kit itself does not. Additive on the same version: `pagination`, `progress-circle`, `shimmer` (`ShimmerText`), `hover-card`, avatar image `src`, `avatar-group`, and Select `SelectGroup` sections (`options[].items`) plus Select chrome (`cleanable`, `title-prefix`, `menu-width`, `menu-max-h`, `search-placeholder`, `empty`). A v9 host would paint the new kinds as a line chart and ignore the extra fields.
 
 ## Host → Clojure ops
 
@@ -176,7 +176,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input`, `table-head` / `table-cell` / `table-caption` (when they have no children) |
 | `placeholder` | string | `input`, `textarea`, `select`, `combobox`, `date-picker`, `number-input` |
 | `children` | array of nodes | layouts, `scroll`, `group-box`, `badge`, `dialog`, `popover`, `hover-card`, `avatar-group` (avatar nodes), `context-menu`, `sheet`, `resizable`, declarative `table` and its Kit primitives (`table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`) |
-| `items` / `options` | array of `{id,label,text,disabled,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,values,height,side,variant,min,max,step,color,stroke,fill,stroke-style,inner-radius,outer-radius,label-lines,open,high,low,close,source,target}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value` (or `values` for radar/area series). Candlestick points use `open`/`high`/`low`/`close`. Pie slices may set `inner-radius` / `outer-radius` (Kit radius fns) and `color` (Kit `chart_2` when omitted). Area/radar series maps may set `stroke` (alias `color`) / `fill` / `stroke-style`. Sankey links use `source`/`target`/`value`; sankey nodes may set `label-lines`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
+| `items` / `options` | array of `{id,label,text,disabled,display,content,on-click,span,items,cells,separator,width,align,checked,icon,expanded,value,values,height,side,variant,min,max,step,color,stroke,fill,stroke-style,inner-radius,outer-radius,label-lines,open,high,low,close,source,target}` | `radio-group`, `select`, `combobox`, `tabs`, `breadcrumb`, `accordion`, `description-list` (`span` is description-list column span). Nested `items` are menu submenus / tree children / settings groups / **Select `SelectGroup` sections**. Select option `display` is Kit `SelectItem::display_title`. Data-table **columns** are `options`; **rows** are `items` with `cells`. Chart points use `value` (or `values` for radar/area series). Candlestick points use `open`/`high`/`low`/`close`. Pie slices may set `inner-radius` / `outer-radius` (Kit radius fns) and `color` (Kit `chart_2` when omitted). Area/radar series maps may set `stroke` (alias `color`) / `fill` / `stroke-style`. Sankey links use `source`/`target`/`value`; sankey nodes may set `label-lines`. Virtual-list rows may set `height`. Dock panels set `side` + `content`. Do not reuse `columns` (u32) for table column defs. Clojure `ui/table` shorthand expands to primitive children before the wire |
 | `links` | array of items | `chart` `:sankey` flows (`source`, `target`, `value`) |
 | `series` | array of items | `chart` `:radar` / `:area` series names, stroke/fill colors, and stroke styles, in value-index order |
 | `trigger` | node | `popover`, `dropdown-menu` (usually a `button`); `dropdown-button` (action-half `button`, optional); `hover-card` (any widget) |
@@ -214,13 +214,19 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `dot` | bool | `badge`. `chart` `:line` / `:radar`: show vertices. Line default is false (Kit) |
 | `dashed` | bool | `separator` |
 | `outline` | bool | `tag`, `button`, `dropdown-button`. Also accepted as `variant: outline` on buttons |
-| `searchable` | bool | `select` / `combobox`: show a filter field; host uses `SearchableVec` so typing actually filters. Combobox defaults true in `ui/combobox`. `list`: filter rows by label |
+| `searchable` | bool | `select` / `combobox`: show a filter field; host uses `SearchableVec` so typing actually filters. Select nested `options[].items` are Kit `SelectGroup` sections (`IndexPath` section+row). Combobox defaults true in `ui/combobox`. `list`: filter rows by label |
+| `cleanable` | bool | `select`: Kit `Select::cleanable` (clear button when a value is selected) |
+| `title-prefix` | string | `select`: Kit `Select::title_prefix` |
+| `menu-width` | number | `select`: Kit `Select::menu_width` in pixels. Omitted is Kit `Auto` |
+| `menu-max-h` | number | `select`: Kit `Select::menu_max_h` in pixels. Omitted is Kit's 20rem default |
+| `search-placeholder` | string | `select`: Kit `Select::search_placeholder` |
+| `empty` | string | `select`: Kit `Select::empty` copy when the list has no rows |
 | `open` | bool | `dialog`, `alert-dialog`, `popover`, `sheet`: controlled open (`:open?` in Clojure). Omitted/false dialogs/sheets are not shown. `notification`: omitted/true shows; `false` hides |
 | `overlay-closable` | bool | `dialog`, `sheet`: click the dimmed overlay to dismiss (default true). `alert-dialog` is not backdrop-dismissible |
 | `placement` | string | `sheet`: `left` / `right` / `top` / `bottom` (default `right`). `hover-card` / `dropdown-button`: Kit `Anchor` (`top-center` default on hover-card; `top-right` default on dropdown-button; also `top-left` / `top-right` / `bottom-*` / `left` / `right`) |
 | `open-delay` | number | `hover-card`: seconds before show (Kit default 0.6). Omitted leaves Kit's default |
 | `close-delay` | number | `hover-card`: seconds before hide (Kit default 0.3). Omitted leaves Kit's default |
-| `appearance` | bool | `hover-card`: Kit default popover chrome (Kit default true). Omitted leaves Kit's default |
+| `appearance` | bool | `hover-card`: Kit default popover chrome (Kit default true). Omitted leaves Kit's default. `select`: Kit `Select::appearance` |
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |
 | `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false) |
 | `autohide` | bool | `notification` (default true) |

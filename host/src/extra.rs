@@ -312,6 +312,163 @@ pub fn combobox_slot_sync(
     }
 }
 
+/// One selectable row in a Select dropdown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectLeaf {
+    pub id: String,
+    pub label: String,
+    pub disabled: bool,
+    pub display: Option<String>,
+}
+
+/// Kit `SelectGroup`: a named section of [`SelectLeaf`] rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectSection {
+    pub title: String,
+    pub items: Vec<SelectLeaf>,
+}
+
+pub fn select_leaf_from_item(item: &Item) -> SelectLeaf {
+    SelectLeaf {
+        id: item.id_or_label(),
+        label: item.label_or_id(),
+        disabled: item.disabled,
+        display: item
+            .display
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    }
+}
+
+/// Nested `:items` on any option means Kit `SearchableVec<SelectGroup<_>>`.
+pub fn select_is_grouped(items: &[Item]) -> bool {
+    items.iter().any(|item| !item.items.is_empty())
+}
+
+/// Build Kit sections. Consecutive ungrouped options share one untitled
+/// section so mixed lists still get an `IndexPath` section+row.
+pub fn select_sections(items: &[Item]) -> Vec<SelectSection> {
+    let mut sections = Vec::new();
+    let mut untitled: Vec<SelectLeaf> = Vec::new();
+    fn flush(untitled: &mut Vec<SelectLeaf>, sections: &mut Vec<SelectSection>) {
+        if !untitled.is_empty() {
+            sections.push(SelectSection {
+                title: String::new(),
+                items: std::mem::take(untitled),
+            });
+        }
+    }
+    for item in items {
+        if item.items.is_empty() {
+            untitled.push(select_leaf_from_item(item));
+        } else {
+            flush(&mut untitled, &mut sections);
+            sections.push(SelectSection {
+                title: item.label_or_id(),
+                items: item.items.iter().map(select_leaf_from_item).collect(),
+            });
+        }
+    }
+    flush(&mut untitled, &mut sections);
+    sections
+}
+
+fn hash_select_item(hasher: &mut impl std::hash::Hasher, item: &Item) {
+    use std::hash::Hash;
+    item.id.hash(hasher);
+    item.label.hash(hasher);
+    item.text.hash(hasher);
+    item.display.hash(hasher);
+    item.disabled.hash(hasher);
+    item.items.len().hash(hasher);
+    for child in &item.items {
+        hash_select_item(hasher, child);
+    }
+}
+
+/// Identity of select options, including `SelectGroup` children.
+pub fn select_fingerprint(items: &[Item]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    items.len().hash(&mut hasher);
+    for item in items {
+        hash_select_item(&mut hasher, item);
+    }
+    hasher.finish()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectSlotSync {
+    pub set_items: bool,
+    pub set_selected: bool,
+}
+
+/// Skip `set_items` / `set_selected_index` when the collection and
+/// controlled id are unchanged so an open searchable query survives
+/// an unrelated Clojure rerender.
+pub fn select_slot_sync(
+    prev_fingerprint: u64,
+    next_fingerprint: u64,
+    prev_selected: Option<&str>,
+    next_selected: Option<&str>,
+) -> SelectSlotSync {
+    let set_items = prev_fingerprint != next_fingerprint;
+    SelectSlotSync {
+        set_items,
+        set_selected: set_items || prev_selected != next_selected,
+    }
+}
+
+/// Kit `IndexPath` for a controlled select value. Flat lists stay
+/// section 0; grouped lists use section+row from [`select_sections`].
+pub fn select_index(items: &[Item], selected: Option<&str>) -> Option<gpui_component::IndexPath> {
+    let id = selected?;
+    if select_is_grouped(items) {
+        for (section, group) in select_sections(items).iter().enumerate() {
+            for (row, leaf) in group.items.iter().enumerate() {
+                if leaf.id == id {
+                    return Some(
+                        gpui_component::IndexPath::default()
+                            .section(section)
+                            .row(row),
+                    );
+                }
+            }
+        }
+        None
+    } else {
+        items
+            .iter()
+            .position(|item| item.id_or_label() == id)
+            .map(|ix| gpui_component::IndexPath::default().row(ix))
+    }
+}
+
+/// Ids Kit would keep after `SearchableVec<SelectGroup<_>>::perform_search`.
+pub fn select_group_search_ids(sections: &[SelectSection], query: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    let mut ids = Vec::new();
+    for section in sections {
+        let title_hit = section.title.to_lowercase().contains(&q);
+        let item_hit = section
+            .items
+            .iter()
+            .any(|item| item.label.to_lowercase().contains(&q));
+        if !title_hit && !item_hit {
+            continue;
+        }
+        for item in &section.items {
+            if item.label.to_lowercase().contains(&q) {
+                ids.push(item.id.clone());
+            }
+        }
+    }
+    ids
+}
+
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
     match value {
         Some(Value::String(s)) => {
@@ -1979,6 +2136,138 @@ mod tests {
             !echo.set_selected,
             "native Change cache matching a Clojure echo must not clear the query"
         );
+    }
+
+    fn select_item(id: &str, label: &str) -> Item {
+        Item {
+            id: Some(id.into()),
+            label: Some(label.into()),
+            ..Item::default()
+        }
+    }
+
+    fn select_group(title: &str, items: Vec<Item>) -> Item {
+        Item {
+            label: Some(title.into()),
+            items,
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn select_index_uses_section_and_row_for_groups() {
+        let flat = vec![select_item("clj", "Clojure"), select_item("rs", "Rust")];
+        assert!(!select_is_grouped(&flat));
+        let a = select_index(&flat, Some("clj")).unwrap();
+        let b = select_index(&flat, Some("rs")).unwrap();
+        assert_eq!(a.section, 0);
+        assert_eq!(a.row, 0);
+        assert_eq!(b.row, 1);
+        assert!(select_index(&flat, None).is_none());
+        assert!(select_index(&flat, Some("go")).is_none());
+
+        let grouped = vec![
+            select_group(
+                "Lisp",
+                vec![
+                    select_item("clj", "Clojure"),
+                    select_item("cljs", "ClojureScript"),
+                ],
+            ),
+            select_group(
+                "Systems",
+                vec![select_item("rs", "Rust"), select_item("go", "Go")],
+            ),
+        ];
+        assert!(select_is_grouped(&grouped));
+        let clj = select_index(&grouped, Some("clj")).unwrap();
+        assert_eq!(clj.section, 0);
+        assert_eq!(clj.row, 0);
+        let rs = select_index(&grouped, Some("rs")).unwrap();
+        assert_eq!(rs.section, 1);
+        assert_eq!(rs.row, 0);
+        let go = select_index(&grouped, Some("go")).unwrap();
+        assert_eq!(go.section, 1);
+        assert_eq!(go.row, 1);
+        assert!(select_index(&grouped, Some("python")).is_none());
+    }
+
+    #[test]
+    fn select_mixed_leaves_share_an_untitled_section() {
+        let mixed = vec![
+            select_item("plain", "Plain"),
+            select_group("A", vec![select_item("apple", "Apple")]),
+            select_item("tail", "Tail"),
+        ];
+        let sections = select_sections(&mixed);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].title, "");
+        assert_eq!(sections[0].items[0].id, "plain");
+        assert_eq!(sections[1].title, "A");
+        assert_eq!(sections[2].title, "");
+        assert_eq!(sections[2].items[0].id, "tail");
+        let tail = select_index(&mixed, Some("tail")).unwrap();
+        assert_eq!(tail.section, 2);
+        assert_eq!(tail.row, 0);
+    }
+
+    #[test]
+    fn select_group_search_filters_titles_not_ids() {
+        let sections = select_sections(&[select_group(
+            "Lisp",
+            vec![select_item("clj", "Clojure"), select_item("rs", "Rust")],
+        )]);
+        assert_eq!(
+            select_group_search_ids(&sections, "clo"),
+            vec!["clj".to_string()]
+        );
+        assert!(
+            select_group_search_ids(&sections, "clj").is_empty(),
+            "filter is on title, not id"
+        );
+        assert_eq!(
+            select_group_search_ids(&sections, "isp"),
+            Vec::<String>::new(),
+            "a group-title hit with no matching row keeps an empty section"
+        );
+        assert_eq!(
+            select_group_search_ids(&sections, "ust"),
+            vec!["rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_unrelated_rerender_skips_set_items() {
+        let items = vec![select_group("Lisp", vec![select_item("clj", "Clojure")])];
+        let fp = select_fingerprint(&items);
+        let sync = select_slot_sync(fp, fp, Some("clj"), Some("clj"));
+        assert!(!sync.set_items);
+        assert!(!sync.set_selected);
+        let renamed = vec![select_group(
+            "Lisp",
+            vec![Item {
+                id: Some("clj".into()),
+                label: Some("Clojure lang".into()),
+                ..Item::default()
+            }],
+        )];
+        let items_changed =
+            select_slot_sync(fp, select_fingerprint(&renamed), Some("clj"), Some("clj"));
+        assert!(items_changed.set_items);
+        assert!(items_changed.set_selected);
+        let sel_only = select_slot_sync(fp, fp, Some("clj"), Some("rs"));
+        assert!(!sel_only.set_items);
+        assert!(sel_only.set_selected);
+        let display = vec![select_group(
+            "Lisp",
+            vec![Item {
+                id: Some("clj".into()),
+                label: Some("Clojure".into()),
+                display: Some("Clojure (clj)".into()),
+                ..Item::default()
+            }],
+        )];
+        assert_ne!(fp, select_fingerprint(&display));
     }
 
     #[test]

@@ -45,7 +45,7 @@ use gpui_component::{
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
     searchable_list::SearchableListItem,
-    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState},
     separator::Separator,
     shimmer::ShimmerText,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
@@ -136,6 +136,19 @@ struct SliderSlot {
 struct SelectOpt {
     id: SharedString,
     label: SharedString,
+    disabled: bool,
+    display: Option<SharedString>,
+}
+
+impl From<extra::SelectLeaf> for SelectOpt {
+    fn from(leaf: extra::SelectLeaf) -> Self {
+        Self {
+            id: SharedString::from(leaf.id),
+            label: SharedString::from(leaf.label),
+            disabled: leaf.disabled,
+            display: leaf.display.map(SharedString::from),
+        }
+    }
 }
 
 impl SelectItem for SelectOpt {
@@ -145,14 +158,29 @@ impl SelectItem for SelectOpt {
         self.label.clone()
     }
 
+    fn display_title(&self) -> Option<AnyElement> {
+        self.display.as_ref().map(|s| s.clone().into_any_element())
+    }
+
     fn value(&self) -> &Self::Value {
         &self.id
     }
+
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+enum SelectStateHandle {
+    Flat(Entity<SelectState<SearchableVec<SelectOpt>>>),
+    Grouped(Entity<SelectState<SearchableVec<SelectGroup<SelectOpt>>>>),
 }
 
 struct SelectSlot {
-    state: Entity<SelectState<SearchableVec<SelectOpt>>>,
+    state: SelectStateHandle,
     searchable: bool,
+    fingerprint: u64,
+    selected: Option<SharedString>,
     on_change: Option<String>,
 }
 
@@ -1116,62 +1144,122 @@ impl RootView {
         state
     }
 
-    fn select_slot(
-        &mut self,
-        key: &str,
-        node: &Node,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<SelectState<SearchableVec<SelectOpt>>> {
+    fn select_slot(&mut self, key: &str, node: &Node, window: &mut Window, cx: &mut Context<Self>) {
         self.used_selects.insert(key.to_string());
-        let items = select_opts(node);
-        let selected_index = select_selected_index(&items, node.string_value().as_deref());
-        // SearchableVec implements perform_search; Vec<T> does not (0.5.1).
+        let grouped = extra::select_is_grouped(node.collection());
+        let fingerprint = extra::select_fingerprint(node.collection());
+        let selected = node.string_value().map(SharedString::from);
+        let selected_index = extra::select_index(node.collection(), node.string_value().as_deref());
 
         if let Some(slot) = self.selects.get_mut(key) {
-            if slot.searchable == node.searchable {
+            let same_kind = match &slot.state {
+                SelectStateHandle::Grouped(_) => grouped,
+                SelectStateHandle::Flat(_) => !grouped,
+            };
+            if same_kind && slot.searchable == node.searchable {
                 slot.on_change = node.on_change.clone();
-                slot.state.update(cx, |state, cx| {
-                    state.set_items(SearchableVec::new(items.clone()), window, cx);
-                    state.set_selected_index(selected_index, window, cx);
-                });
-                return slot.state.clone();
+                let sync = extra::select_slot_sync(
+                    slot.fingerprint,
+                    fingerprint,
+                    slot.selected.as_deref(),
+                    selected.as_deref(),
+                );
+                if sync.set_items {
+                    slot.fingerprint = fingerprint;
+                }
+                if sync.set_selected {
+                    slot.selected = selected.clone();
+                }
+                if sync.set_items || sync.set_selected {
+                    match &slot.state {
+                        SelectStateHandle::Flat(state) => {
+                            let state = state.clone();
+                            let items = select_flat_vec(node);
+                            state.update(cx, |state, cx| {
+                                if sync.set_items {
+                                    state.set_items(items, window, cx);
+                                }
+                                if sync.set_selected {
+                                    state.set_selected_index(selected_index, window, cx);
+                                }
+                            });
+                        }
+                        SelectStateHandle::Grouped(state) => {
+                            let state = state.clone();
+                            let items = select_group_vec(node);
+                            state.update(cx, |state, cx| {
+                                if sync.set_items {
+                                    state.set_items(items, window, cx);
+                                }
+                                if sync.set_selected {
+                                    state.set_selected_index(selected_index, window, cx);
+                                }
+                            });
+                        }
+                    }
+                }
+                return;
             }
         }
 
         let searchable = node.searchable;
-        let state = cx.new(|cx| {
-            let built = SelectState::new(SearchableVec::new(items), selected_index, window, cx);
-            built.searchable(searchable)
-        });
         let key_owned = key.to_string();
-        cx.subscribe(
-            &state,
-            move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, _cx| {
-                let SelectEvent::Confirm(value) = event;
-                let Some(id) = this
-                    .selects
-                    .get(&key_owned)
-                    .and_then(|slot| slot.on_change.clone())
-                else {
-                    return;
-                };
-                match value {
-                    Some(selected) => this.emit_value(id, json!(selected.to_string())),
-                    None => this.emit_value(id, Value::Null),
-                }
-            },
-        )
-        .detach();
+        let handle = if grouped {
+            let state = cx.new(|cx| {
+                SelectState::new(select_group_vec(node), selected_index, window, cx)
+                    .searchable(searchable)
+            });
+            cx.subscribe(
+                &state,
+                move |this, _, event: &SelectEvent<SearchableVec<SelectGroup<SelectOpt>>>, _cx| {
+                    let SelectEvent::Confirm(value) = event;
+                    emit_select_confirm(this, &key_owned, value.as_ref());
+                },
+            )
+            .detach();
+            SelectStateHandle::Grouped(state)
+        } else {
+            let state = cx.new(|cx| {
+                SelectState::new(select_flat_vec(node), selected_index, window, cx)
+                    .searchable(searchable)
+            });
+            cx.subscribe(
+                &state,
+                move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, _cx| {
+                    let SelectEvent::Confirm(value) = event;
+                    emit_select_confirm(this, &key_owned, value.as_ref());
+                },
+            )
+            .detach();
+            SelectStateHandle::Flat(state)
+        };
         self.selects.insert(
             key.to_string(),
             SelectSlot {
-                state: state.clone(),
+                state: handle,
                 searchable,
+                fingerprint,
+                selected,
                 on_change: node.on_change.clone(),
             },
         );
-        state
+    }
+
+    fn render_select(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.select_slot(key, node, window, cx);
+        let Some(slot) = self.selects.get(key) else {
+            return div().into_any_element();
+        };
+        match &slot.state {
+            SelectStateHandle::Flat(state) => finish_select(Select::new(state), node, cx),
+            SelectStateHandle::Grouped(state) => finish_select(Select::new(state), node, cx),
+        }
     }
 
     fn render_node(
@@ -1806,25 +1894,6 @@ impl RootView {
             });
         }
         apply_style(bar, node, cx).into_any_element()
-    }
-
-    fn render_select(
-        &mut self,
-        node: &Node,
-        key: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let state = self.select_slot(key, node, window, cx);
-        let mut select = Select::new(&state);
-        if let Some(placeholder) = node.placeholder.clone() {
-            select = select.placeholder(placeholder);
-        }
-        if node.disabled {
-            select = select.disabled(true);
-        }
-        select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
-        apply_style(select, node, cx).into_any_element()
     }
 
     fn render_combobox(
@@ -4304,13 +4373,96 @@ fn scroll_viewport(node: &Node) -> ScrollViewport {
 }
 
 fn select_opts(node: &Node) -> Vec<SelectOpt> {
-    node.collection()
-        .iter()
-        .map(|item| SelectOpt {
-            id: SharedString::from(item.id_or_label()),
-            label: SharedString::from(item.label_or_id()),
-        })
+    extra::select_sections(node.collection())
+        .into_iter()
+        .flat_map(|section| section.items)
+        .map(SelectOpt::from)
         .collect()
+}
+
+fn select_flat_vec(node: &Node) -> SearchableVec<SelectOpt> {
+    SearchableVec::new(
+        node.collection()
+            .iter()
+            .map(extra::select_leaf_from_item)
+            .map(SelectOpt::from)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn select_group_vec(node: &Node) -> SearchableVec<SelectGroup<SelectOpt>> {
+    SearchableVec::new(
+        extra::select_sections(node.collection())
+            .into_iter()
+            .map(|section| {
+                SelectGroup::new(section.title)
+                    .items(section.items.into_iter().map(SelectOpt::from))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn emit_select_confirm(this: &mut RootView, key: &str, value: Option<&SharedString>) {
+    let Some(id) = this
+        .selects
+        .get(key)
+        .and_then(|slot| slot.on_change.clone())
+    else {
+        return;
+    };
+    if let Some(slot) = this.selects.get_mut(key) {
+        slot.selected = value.cloned();
+    }
+    match value {
+        Some(selected) => this.emit_value(id, json!(selected.to_string())),
+        None => this.emit_value(id, Value::Null),
+    }
+}
+
+fn finish_select<D>(mut select: Select<D>, node: &Node, cx: &App) -> AnyElement
+where
+    D: gpui_component::searchable_list::SearchableListDelegate + 'static,
+    <D::Item as SearchableListItem>::Value: PartialEq + Clone,
+{
+    if let Some(placeholder) = node.placeholder.clone() {
+        select = select.placeholder(placeholder);
+    }
+    if node.disabled {
+        select = select.disabled(true);
+    }
+    select = select.with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if node.cleanable {
+        select = select.cleanable(true);
+    }
+    if let Some(prefix) = node.title_prefix.clone().filter(|s| !s.is_empty()) {
+        select = select.title_prefix(prefix);
+    }
+    if let Some(width) = node.menu_width.filter(|n| n.is_finite() && *n > 0.0) {
+        select = select.menu_width(px(width));
+    }
+    if let Some(height) = node.menu_max_h.filter(|n| n.is_finite() && *n > 0.0) {
+        select = select.menu_max_h(px(height));
+    }
+    if let Some(placeholder) = node.search_placeholder.clone().filter(|s| !s.is_empty()) {
+        select = select.search_placeholder(placeholder);
+    }
+    if let Some(appearance) = node.appearance {
+        select = select.appearance(appearance);
+    }
+    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        select = select.icon(Icon::new(name));
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        select = select.accessibility_label(label.to_string());
+    }
+    if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
+        select = select.empty(move |_, _| empty.clone());
+    }
+    apply_style(select, node, cx).into_any_element()
 }
 
 fn combo_opts(node: &Node) -> Vec<ComboOpt> {
@@ -5260,6 +5412,8 @@ mod select_control_tests {
         SelectOpt {
             id: SharedString::from(id.to_string()),
             label: SharedString::from(label.to_string()),
+            disabled: false,
+            display: None,
         }
     }
 
@@ -5300,6 +5454,49 @@ mod select_control_tests {
         );
         assert_eq!(select_search_matches(&items, "ust"), vec!["rs".to_string()]);
         assert!(select_search_matches(&items, "python").is_empty());
+    }
+
+    #[test]
+    fn grouped_options_use_section_index_paths() {
+        let node = Node {
+            kind: "select".into(),
+            options: vec![
+                Item {
+                    label: Some("Lisp".into()),
+                    items: vec![Item {
+                        id: Some("clj".into()),
+                        label: Some("Clojure".into()),
+                        ..Item::default()
+                    }],
+                    ..Item::default()
+                },
+                Item {
+                    label: Some("Systems".into()),
+                    items: vec![
+                        Item {
+                            id: Some("rs".into()),
+                            label: Some("Rust".into()),
+                            ..Item::default()
+                        },
+                        Item {
+                            id: Some("go".into()),
+                            label: Some("Go".into()),
+                            disabled: true,
+                            ..Item::default()
+                        },
+                    ],
+                    ..Item::default()
+                },
+            ],
+            ..Node::default()
+        };
+        let items = select_opts(&node);
+        assert_eq!(items.len(), 3);
+        assert!(items[2].disabled);
+        let rs = crate::extra::select_index(node.collection(), Some("rs")).unwrap();
+        assert_eq!(rs.section, 1);
+        assert_eq!(rs.row, 0);
+        assert!(crate::extra::select_is_grouped(node.collection()));
     }
 
     #[test]
