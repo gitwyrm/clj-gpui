@@ -948,8 +948,13 @@ pub struct Node {
     #[serde(default)]
     pub loading: bool,
     /// ShimmerText sweep duration in seconds. Kit default 2. Omitted leaves Kit's default.
+    /// NavStack: Kit `Transition` duration in seconds. Omitted / ≤0 is immediate.
     #[serde(default)]
     pub duration: Option<f32>,
+    /// NavStack: Kit `NavMotion`. `immediate` skips the stack transition.
+    /// Omitted / `animated` runs the transition when `duration` is set and > 0.
+    #[serde(default)]
+    pub motion: Option<String>,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
     #[serde(default)]
     pub spread: Option<f32>,
@@ -2151,6 +2156,30 @@ mod tests {
         assert_eq!(scroller.jump_button_label.as_deref(), Some("Latest"));
         assert_eq!(scroller.jump_button_transition, Some(0.0));
         assert_eq!(scroller.bottom_fade.as_deref(), Some("#1a1b26"));
+
+        let nav: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "id": "nav",
+            "value": ["home", "detail"],
+            "duration": 0.22,
+            "motion": "immediate",
+            "height": 180,
+            "children": [
+                {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
+                {"type": "nav-page", "id": "detail", "children": [{"type": "button", "text": "Back"}]}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(nav.kind, "nav-stack");
+        assert_eq!(
+            nav.string_values(),
+            vec!["home".to_string(), "detail".to_string()]
+        );
+        assert_eq!(nav.duration, Some(0.22));
+        assert_eq!(nav.motion.as_deref(), Some("immediate"));
+        assert_eq!(nav.children.len(), 2);
+        assert_eq!(nav.children[0].kind, "nav-page");
+        assert_eq!(nav.children[0].id.as_deref(), Some("home"));
 
         let marker: Node = serde_json::from_value(json!({
             "type": "marker",

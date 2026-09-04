@@ -296,6 +296,13 @@ struct DockSlot {
     panels: HashMap<String, Entity<extra::CljPanel>>,
 }
 
+struct NavStackSlot {
+    state: Entity<gpui::base::NavStackState>,
+    ids: Vec<String>,
+    pages: HashMap<String, Entity<extra::CljNavPage>>,
+    _observe: Subscription,
+}
+
 struct NotificationSlot {
     entity: Entity<Notification>,
     fingerprint: String,
@@ -405,6 +412,7 @@ pub struct RootView {
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
     scrollers: HashMap<String, MessageScrollerSlot>,
     docks: HashMap<String, DockSlot>,
+    nav_stacks: HashMap<String, NavStackSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
     used_resizables: HashSet<String>,
     dialogs: Vec<overlay::DialogSpec>,
@@ -432,6 +440,7 @@ pub struct RootView {
     used_vlists: HashSet<String>,
     used_scrollers: HashSet<String>,
     used_docks: HashSet<String>,
+    used_nav_stacks: HashSet<String>,
     _appearance: Subscription,
     _window_bounds: Subscription,
     _keystrokes: Subscription,
@@ -564,6 +573,7 @@ impl RootView {
             vlists: HashMap::new(),
             scrollers: HashMap::new(),
             docks: HashMap::new(),
+            nav_stacks: HashMap::new(),
             resizables: HashMap::new(),
             used_resizables: HashSet::new(),
             dialogs: Vec::new(),
@@ -591,6 +601,7 @@ impl RootView {
             used_vlists: HashSet::new(),
             used_scrollers: HashSet::new(),
             used_docks: HashSet::new(),
+            used_nav_stacks: HashSet::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
             _keystrokes: keystrokes,
@@ -1509,6 +1520,8 @@ impl RootView {
                 cx,
             ),
             "dock" => self.render_dock(node, &key, window, cx),
+            "nav-stack" => self.render_nav_stack(node, &key, window, cx),
+            "nav-page" => overlay::paint_scroller_tree(node, path, &self.cmd_tx),
             "resizable" => self.render_resizable(node, path, &key, window, cx),
             "message-scroller" => self.render_message_scroller(node, path, &key, window, cx),
             "message"
@@ -4151,6 +4164,74 @@ impl RootView {
         viewport_sized(area, node, 360.0, cx)
     }
 
+    fn render_nav_stack(
+        &mut self,
+        node: &Node,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_nav_stacks.insert(key.to_string());
+        let cmd_tx = self.cmd_tx.clone();
+        if !self.nav_stacks.contains_key(key) {
+            let state = cx.new(|_| gpui::base::NavStackState::new());
+            let observe = cx.observe(&state, |_, _, cx| cx.notify());
+            self.nav_stacks.insert(
+                key.to_string(),
+                NavStackSlot {
+                    state,
+                    ids: Vec::new(),
+                    pages: HashMap::new(),
+                    _observe: observe,
+                },
+            );
+        }
+        let catalog = extra::nav_catalog(node);
+        let catalog_ids: Vec<String> = catalog.iter().map(|(id, _)| id.clone()).collect();
+        let desired = extra::nav_desired_ids(node, &catalog_ids);
+        let motion = extra::nav_motion(node.duration, node.motion.as_deref());
+        if let Some(slot) = self.nav_stacks.get_mut(key) {
+            for (id, page_node) in &catalog {
+                if let Some(entity) = slot.pages.get(id) {
+                    entity.update(cx, |page, _| {
+                        *page.live.borrow_mut() = page_node.clone();
+                    });
+                }
+            }
+            for (id, page_node) in &catalog {
+                if slot.pages.contains_key(id) {
+                    continue;
+                }
+                let live = Rc::new(RefCell::new(page_node.clone()));
+                let path = format!("{key}/nav-page/{id}");
+                let entity = cx.new(|_| extra::CljNavPage::new(live, path, cmd_tx.clone()));
+                slot.pages.insert(id.clone(), entity);
+            }
+            let keep: HashSet<String> = catalog_ids
+                .iter()
+                .cloned()
+                .chain(slot.ids.iter().cloned())
+                .collect();
+            slot.pages.retain(|id, _| keep.contains(id));
+            let op = extra::nav_trail_sync(&slot.ids, &desired);
+            apply_nav_trail_op(slot, op, motion, cx);
+        }
+        let slot = self.nav_stacks.get(key).expect("nav-stack slot");
+        let mut nav = gpui::base::NavStack::new(&slot.state)
+            .overflow_hidden()
+            .w_full()
+            .h_full();
+        if let Some(secs) = extra::nav_transition_secs(node.duration) {
+            nav = nav
+                .transition(gpui::base::motion::Transition::new(
+                    Duration::from_secs_f32(secs),
+                ))
+                .item(|page, _, _| extra::nav_stack_slide(page));
+        }
+        let nav = apply_kit_visual_style(nav, node, cx);
+        viewport_box_sized(nav, node, 200.0)
+    }
+
     fn render_resizable(
         &mut self,
         node: &Node,
@@ -4323,6 +4404,7 @@ impl Render for RootView {
         self.used_vlists.clear();
         self.used_scrollers.clear();
         self.used_docks.clear();
+        self.used_nav_stacks.clear();
         self.used_resizables.clear();
         let tree = self.tree.clone();
         let error = self.error.clone();
@@ -4375,6 +4457,9 @@ impl Render for RootView {
         self.scrollers.retain(|key, _| used_scrollers.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
         self.docks.retain(|key, _| used_docks.contains(key));
+        let used_nav_stacks = std::mem::take(&mut self.used_nav_stacks);
+        self.nav_stacks
+            .retain(|key, _| used_nav_stacks.contains(key));
         let used_resizables = std::mem::take(&mut self.used_resizables);
         self.resizables
             .retain(|key, _| used_resizables.contains(key));
@@ -5085,6 +5170,58 @@ fn dock_tabs(panels: Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>, cx: &
     layout
 }
 
+fn apply_nav_trail_op(
+    slot: &mut NavStackSlot,
+    op: extra::NavTrailOp,
+    motion: gpui::base::NavMotion,
+    cx: &mut Context<RootView>,
+) {
+    match op {
+        extra::NavTrailOp::Leave => {}
+        extra::NavTrailOp::Push(id) => {
+            let Some(page) = slot.pages.get(&id).cloned() else {
+                return;
+            };
+            slot.state.update(cx, |stack, cx| {
+                stack.push(page, motion, cx);
+            });
+            slot.ids.push(id);
+        }
+        extra::NavTrailOp::Pop => {
+            slot.state.update(cx, |stack, cx| {
+                let _ = stack.pop(motion, cx);
+            });
+            slot.ids.pop();
+        }
+        extra::NavTrailOp::Replace(id) => {
+            let Some(page) = slot.pages.get(&id).cloned() else {
+                return;
+            };
+            slot.state.update(cx, |stack, cx| {
+                let _ = stack.replace(page, motion, cx);
+            });
+            if let Some(last) = slot.ids.last_mut() {
+                *last = id;
+            } else {
+                slot.ids.push(id);
+            }
+        }
+        extra::NavTrailOp::Rebuild(new_ids) => {
+            let views: Vec<(String, Entity<extra::CljNavPage>)> = new_ids
+                .into_iter()
+                .filter_map(|id| slot.pages.get(&id).cloned().map(|page| (id, page)))
+                .collect();
+            slot.state.update(cx, |stack, cx| {
+                stack.clear(cx);
+                for (_, page) in &views {
+                    stack.push(page.clone(), gpui::base::NavMotion::Immediate, cx);
+                }
+            });
+            slot.ids = views.into_iter().map(|(id, _)| id).collect();
+        }
+    }
+}
+
 fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {
     let mut wrap = v_flex().min_h_0();
     if node.width.is_none() && node.size.is_none() {
@@ -5098,9 +5235,8 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
 
 /// Viewport/box geometry only. Visual Styled stays on the inner Kit widget.
 ///
-/// Used by `MessageScroller`, whose root `Styled` is a documented style
-/// boundary separate from `with_content_style` / `with_list_style` /
-/// `with_row_style`. List / table / editor still use `viewport_sized`.
+/// Used by `MessageScroller` and `NavStack`, whose root `Styled` is a
+/// documented style boundary. List / table / editor still use `viewport_sized`.
 fn viewport_box_sized(el: impl IntoElement, node: &Node, default_h: f32) -> AnyElement {
     let mut wrap = v_flex().min_h_0();
     if node.width.is_none() && node.size.is_none() {
@@ -6311,6 +6447,14 @@ mod widget_wrap_tests {
             assert!(!wrap.flex_fill, "{kind}");
             assert_eq!(wrap.size, None, "{kind}");
         }
+        let nav = Node {
+            kind: "nav-stack".into(),
+            ..Node::default()
+        };
+        let wrap = viewport_wrap(&nav, 200.0);
+        assert!(wrap.fill_width);
+        assert_eq!(wrap.default_height, Some(200.0));
+        assert!(!wrap.flex_fill);
     }
 
     #[test]

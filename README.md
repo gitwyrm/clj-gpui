@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, `ui/avatar-group`, `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, and `ui/message-scroller` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, `ui/avatar-group`, `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, `ui/message-scroller`, and `ui/nav-stack` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -378,10 +378,13 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
                       :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}}
   (ui/message {:id "row-1" :alignment :start} (ui/bubble "First"))
   (ui/message {:id "row-2" :alignment :end} (ui/bubble "Second")))
+(ui/nav-stack {:id "nav" :stack [:home :detail] :transition 0.22 :height 180}
+  (ui/nav-page {:id :home} (ui/label "Home") (ui/button "Open" push-detail!))
+  (ui/nav-page {:id :detail} (ui/label "Detail") (ui/button "Back" pop!)))
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 
-`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select/combobox options by label; nested `:items` are Kit `SelectGroup` sections. Group titles are not selectable values and are not in the callback id map, so a title that shares a wire id with a leaf (`{:label "clj" :items [{:id :clj …}]}`) restores the leaf. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on and forwards `:cleanable`, `:menu-width` / `:menu-max-h`, `:search-placeholder`, `:icon`, `:check-icon`, `:appearance`, and string `:empty`. `render_trigger`, `footer`, and `ComboboxState::query` / `set_query` are not wrapped.
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select/combobox options by label; nested `:items` are Kit `SelectGroup` sections. Group titles are not selectable values and are not in the callback id map, so a title that shares a wire id with a leaf (`{:label "clj" :items [{:id :clj …}]}`) restores the leaf. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on and forwards `:cleanable`, `:menu-width` / `:menu-max-h`, `:search-placeholder`, `:icon`, `:check-icon`, `:appearance`, and string `:empty`. `render_trigger`, `footer`, and `ComboboxState::query` / `set_query` are not wrapped. `ui/nav-stack` is Kit `NavStack`: Clojure `:stack` is page ids root-first; children are `ui/nav-page` templates. Omitted stack is the first page; `:stack []` clears. `:transition` is seconds; `:motion :immediate` skips animation. Re-adding a popped id is a new push (Kit `forward` is not wrapped). Pages paint the overlay static subset, not list/data-table/editor.
 
 GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 

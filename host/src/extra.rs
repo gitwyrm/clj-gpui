@@ -1,5 +1,5 @@
 //! Product widgets that sit on the v6 protocol: dates, colors, charts,
-//! markdown, virtual lists, settings fields, and dock panels.
+//! markdown, virtual lists, settings fields, dock panels, and nav stacks.
 //!
 //! Overlay sheet/notification collection lives in `overlay`. Slot maps and
 //! `RootView::render_node` arms stay in `renderer`.
@@ -8,9 +8,9 @@ use crate::mapping;
 use crate::protocol::{self, ChartLabelLine, Cmd, Item, Node};
 use chrono::NaiveDate;
 use gpui::{
-    App, Axis, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, div, linear_color_stop, prelude::*, px,
-    size,
+    AnyElement, App, Axis, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, linear_color_stop,
+    prelude::*, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
@@ -88,6 +88,111 @@ pub fn color_sync(wanted: Option<Hsla>, current: Option<Hsla>) -> ColorSync {
         (None, None) => ColorSync::Keep,
         (None, Some(_)) => ColorSync::RecreateClear,
     }
+}
+
+/// How to sync Kit `NavStackState` with Clojure's controlled page-id trail.
+///
+/// Clojure owns the trail. The host diffs and calls Kit `push` / `pop` /
+/// `replace` / `clear`. Re-adding a popped id is a new `Push` and discards
+/// Kit's forward branch (`forward` is not wrapped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavTrailOp {
+    Leave,
+    Push(String),
+    Pop,
+    Replace(String),
+    Rebuild(Vec<String>),
+}
+
+pub fn nav_trail_sync(current: &[String], desired: &[String]) -> NavTrailOp {
+    if current == desired {
+        return NavTrailOp::Leave;
+    }
+    if desired.is_empty() {
+        return NavTrailOp::Rebuild(Vec::new());
+    }
+    if current.is_empty() {
+        return NavTrailOp::Rebuild(desired.to_vec());
+    }
+    if desired.len() == current.len() + 1 && desired.starts_with(current) {
+        return NavTrailOp::Push(desired[desired.len() - 1].clone());
+    }
+    if current.len() == desired.len() + 1 && current.starts_with(desired) {
+        return NavTrailOp::Pop;
+    }
+    if current.len() == desired.len() {
+        let prefix = current.len() - 1;
+        if current[..prefix] == desired[..prefix] {
+            return NavTrailOp::Replace(desired[prefix].clone());
+        }
+    }
+    NavTrailOp::Rebuild(desired.to_vec())
+}
+
+/// Kit `Transition` seconds. `None` / non-finite / ≤0 means no animation.
+pub fn nav_transition_secs(duration: Option<f32>) -> Option<f32> {
+    duration.filter(|n| n.is_finite() && *n > 0.0)
+}
+
+/// Per-op Kit `NavMotion`. A stack without a transition is always immediate.
+pub fn nav_motion(duration: Option<f32>, motion: Option<&str>) -> gpui::base::NavMotion {
+    if nav_transition_secs(duration).is_none() {
+        return gpui::base::NavMotion::Immediate;
+    }
+    match motion.map(crate::catalog::normalize).as_deref() {
+        Some("immediate") => gpui::base::NavMotion::Immediate,
+        _ => gpui::base::NavMotion::Animated,
+    }
+}
+
+pub fn nav_page_id(node: &Node) -> Option<String> {
+    if node.kind != "nav-page" {
+        return None;
+    }
+    node.id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// Catalog pages in tree order. Only `nav-page` children with an id.
+pub fn nav_catalog(node: &Node) -> Vec<(String, Node)> {
+    node.children
+        .iter()
+        .filter_map(|child| nav_page_id(child).map(|id| (id, child.clone())))
+        .collect()
+}
+
+/// Controlled trail. Omitted / null is the first catalog id. `[]` clears.
+/// Unknown ids are dropped.
+pub fn nav_desired_ids(node: &Node, catalog_ids: &[String]) -> Vec<String> {
+    let known = |id: &str| catalog_ids.iter().any(|c| c == id);
+    match &node.value {
+        None | Some(Value::Null) => catalog_ids.iter().take(1).cloned().collect(),
+        Some(Value::Array(items)) if items.is_empty() => Vec::new(),
+        _ => node
+            .string_values()
+            .into_iter()
+            .filter(|id| known(id))
+            .collect(),
+    }
+}
+
+/// Kit showcase slide: push/replace enter from the right, pop exits the
+/// same way, the covered page drifts. Used when `:transition` is set.
+pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
+    use gpui::base::NavOperation;
+    use gpui::base::motion::PresencePhase;
+    let offset = match (page.phase(), page.operation()) {
+        (PresencePhase::Entering, Some(NavOperation::Push | NavOperation::Replace)) => {
+            1.0 - page.progress()
+        }
+        (PresencePhase::Exiting, Some(NavOperation::Pop)) => page.progress(),
+        (PresencePhase::Exiting, Some(NavOperation::Push)) => -0.3 * page.progress(),
+        (PresencePhase::Entering, Some(NavOperation::Pop)) => -0.3 * (1.0 - page.progress()),
+        _ => 0.0,
+    };
+    page.left(relative(offset)).into_any_element()
 }
 
 /// Text-field payload vs number-input payload for a reused `InputSlot`.
@@ -1707,6 +1812,28 @@ impl StyledPanel for CljPanel {
     }
 }
 
+/// Live `nav-page` view. Reads a RefCell so callback ids stay current
+/// without rebuilding the Kit stack. Paint is the overlay static subset
+/// (plus chat); pages cannot re-enter `RootView`.
+pub struct CljNavPage {
+    pub live: Rc<RefCell<Node>>,
+    pub path: String,
+    cmd_tx: mpsc::Sender<Cmd>,
+}
+
+impl CljNavPage {
+    pub fn new(live: Rc<RefCell<Node>>, path: String, cmd_tx: mpsc::Sender<Cmd>) -> Self {
+        Self { live, path, cmd_tx }
+    }
+}
+
+impl Render for CljNavPage {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let node = self.live.borrow().clone();
+        crate::overlay::paint_scroller_tree(&node, &self.path, &self.cmd_tx)
+    }
+}
+
 pub fn dock_side(item: &Item) -> &'static str {
     match item
         .side
@@ -3227,5 +3354,131 @@ mod tests {
         assert_eq!(slots.len(), 1);
         assert!(slots.contains_key("split-a"));
         assert!(!slots.contains_key("split-b"));
+    }
+
+    #[test]
+    fn nav_trail_sync_cases() {
+        use super::NavTrailOp::*;
+        assert_eq!(nav_trail_sync(&["a".into()], &["a".into()]), Leave);
+        assert_eq!(
+            nav_trail_sync(&["a".into()], &["a".into(), "b".into()]),
+            Push("b".into())
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into(), "b".into()], &["a".into()]),
+            Pop
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into(), "b".into()], &["a".into(), "c".into()]),
+            Replace("c".into())
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into()], &["z".into()]),
+            Replace("z".into())
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into(), "b".into()], &["z".into()]),
+            Rebuild(vec!["z".into()])
+        );
+        assert_eq!(nav_trail_sync(&["a".into()], &[]), Rebuild(vec![]));
+        assert_eq!(
+            nav_trail_sync(&[], &["a".into()]),
+            Rebuild(vec!["a".into()])
+        );
+        assert_eq!(
+            nav_trail_sync(&["a".into(), "b".into(), "c".into()], &["a".into()]),
+            Rebuild(vec!["a".into()])
+        );
+    }
+
+    #[test]
+    fn nav_motion_follows_duration_and_immediate() {
+        use gpui::base::NavMotion;
+        assert_eq!(nav_motion(None, None), NavMotion::Immediate);
+        assert_eq!(nav_motion(Some(0.0), None), NavMotion::Immediate);
+        assert_eq!(nav_motion(Some(f32::NAN), None), NavMotion::Immediate);
+        assert_eq!(nav_motion(Some(0.22), None), NavMotion::Animated);
+        assert_eq!(
+            nav_motion(Some(0.22), Some("immediate")),
+            NavMotion::Immediate
+        );
+        assert_eq!(
+            nav_motion(Some(0.22), Some("animated")),
+            NavMotion::Animated
+        );
+    }
+
+    #[test]
+    fn nav_desired_ids_omit_empty_and_unknown() {
+        let catalog = vec!["home".to_string(), "detail".to_string()];
+        let omitted = Node {
+            kind: "nav-stack".into(),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired_ids(&omitted, &catalog),
+            vec!["home".to_string()]
+        );
+        let empty = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!([])),
+            ..Node::default()
+        };
+        assert!(nav_desired_ids(&empty, &catalog).is_empty());
+        let trail = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!(["home", "detail"])),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired_ids(&trail, &catalog),
+            vec!["home".to_string(), "detail".to_string()]
+        );
+        let unknown = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!(["nope"])),
+            ..Node::default()
+        };
+        assert!(nav_desired_ids(&unknown, &catalog).is_empty());
+        let scalar = Node {
+            kind: "nav-stack".into(),
+            value: Some(json!("detail")),
+            ..Node::default()
+        };
+        assert_eq!(
+            nav_desired_ids(&scalar, &catalog),
+            vec!["detail".to_string()]
+        );
+    }
+
+    #[test]
+    fn nav_catalog_keeps_id_pages_only() {
+        let node = Node {
+            kind: "nav-stack".into(),
+            children: vec![
+                Node {
+                    kind: "nav-page".into(),
+                    id: Some("home".into()),
+                    ..Node::default()
+                },
+                Node {
+                    kind: "nav-page".into(),
+                    ..Node::default()
+                },
+                Node {
+                    kind: "label".into(),
+                    id: Some("skip".into()),
+                    ..Node::default()
+                },
+                Node {
+                    kind: "nav-page".into(),
+                    id: Some("detail".into()),
+                    ..Node::default()
+                },
+            ],
+            ..Node::default()
+        };
+        let ids: Vec<String> = nav_catalog(&node).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, vec!["home".to_string(), "detail".to_string()]);
     }
 }
