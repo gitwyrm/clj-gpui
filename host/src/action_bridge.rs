@@ -82,7 +82,56 @@ fn collect_leaf_actions(items: &[Item], slot: &str, prefix: &[String], out: &mut
 /// state. Nested submenus append their identity to `item_path`.
 /// Disabled wins over checked when Kit cannot represent both (no icon).
 pub fn fill_native_menu(items: &[Item], slot: &str) -> NativeMenu {
-    fill_native_menu_at(items, slot, &[])
+    // Kit's NativeMenu::submenu() always stores disabled: false. The public
+    // From<gpui::Menu> conversion can represent a disabled submenu, but
+    // gpui::MenuItem has no icon, so that snapshot drops leaf icons.
+    if native_tree_has_disabled_submenu(items) {
+        NativeMenu::from(gpui_menu_from_items(items, slot, &[]))
+    } else {
+        fill_native_menu_at(items, slot, &[])
+    }
+}
+
+pub(crate) fn native_tree_has_disabled_submenu(items: &[Item]) -> bool {
+    items.iter().any(|item| {
+        !item.items.is_empty() && (item.disabled || native_tree_has_disabled_submenu(&item.items))
+    })
+}
+
+fn gpui_menu_from_items(items: &[Item], slot: &str, prefix: &[String]) -> gpui::Menu {
+    gpui::Menu::new("").items(gpui_menu_items(items, slot, prefix))
+}
+
+pub(crate) fn gpui_menu_items(
+    items: &[Item],
+    slot: &str,
+    prefix: &[String],
+) -> Vec<gpui::MenuItem> {
+    items
+        .iter()
+        .filter_map(|item| gpui_menu_item(item, slot, prefix))
+        .collect()
+}
+
+fn gpui_menu_item(item: &Item, slot: &str, prefix: &[String]) -> Option<gpui::MenuItem> {
+    if item.is_separator() {
+        return Some(gpui::MenuItem::separator());
+    }
+    if !item.items.is_empty() {
+        let mut path = prefix.to_vec();
+        path.push(item.id_or_label());
+        let submenu = gpui::Menu::new(item.label_or_id())
+            .disabled(item.disabled)
+            .items(gpui_menu_items(&item.items, slot, &path));
+        return Some(gpui::MenuItem::submenu(submenu));
+    }
+    let mut path = prefix.to_vec();
+    path.push(item.id_or_label());
+    Some(
+        gpui::MenuItem::action(item.label_or_id(), CljAction::new(slot, path))
+            .disabled(item.disabled)
+            .checked(item.checked.unwrap_or(false)),
+    )
 }
 
 fn fill_native_menu_at(items: &[Item], slot: &str, prefix: &[String]) -> NativeMenu {
@@ -290,21 +339,41 @@ pub fn command_item_path(items: &[Item], index: IndexPath) -> Option<Vec<String>
     None
 }
 
-/// Whether a controlled Command `:selected` should override native highlight.
+/// Callback-generation latch for a native Command echo (`:on-select` / `:on-query`).
 ///
-/// After Clojure `:on-select` fires, `last_emitted_path` latches the path
-/// we sent so a lagging Clojure tree does not yank the highlight back.
-/// If no `:on-select` was installed, the latch stays empty and the host
-/// always restores the Clojure-owned value (native highlight is not an
-/// echo that will ever arrive).
-pub fn should_apply_command_selected_path(
-    last_emitted_path: Option<&[String]>,
-    current_path: Option<&[String]>,
+/// `seq` is the host callback seq sent with that native event. Unrelated
+/// trees (`tree_seq != seq`, including `request-render` with `None`) must
+/// not release it. The tree for that exact seq consumes it, and Clojure's
+/// value then wins even when it differs from what we emitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandEchoLatch<T> {
+    pub seq: u64,
+    pub value: T,
+}
+
+/// Whether a controlled Command value should override native state.
+pub fn should_apply_command_echo<T: PartialEq>(
+    latch: Option<&CommandEchoLatch<T>>,
+    current: Option<&T>,
+    tree_seq: Option<u64>,
 ) -> bool {
-    match last_emitted_path {
-        Some(emitted) if current_path == Some(emitted) => false,
+    match latch {
+        Some(latch) if tree_seq == Some(latch.seq) => true,
+        Some(latch) if current == Some(&latch.value) => false,
         _ => true,
     }
+}
+
+/// Kit `set_selected_index` looks up `desired` in the currently installed
+/// matched list. An empty (first paint) or stale (replaced items) list
+/// cannot represent the new model's path, so `Command::render` must
+/// `install_model` before controlled selection sync.
+#[cfg(test)]
+pub fn command_selection_on_matched(
+    matched: &[IndexPath],
+    desired: Option<IndexPath>,
+) -> Option<IndexPath> {
+    desired.filter(|want| matched.iter().any(|have| have == want))
 }
 
 /// Controlled Command highlight from node `value`.
@@ -553,21 +622,118 @@ mod tests {
     }
 
     #[test]
-    fn command_select_sync_restores_controlled_value_without_on_select() {
+    fn command_select_echo_latch_lives_until_the_callback_seq() {
         let file = vec!["file".to_string(), "open".to_string()];
         let project = vec!["project".to_string(), "open".to_string()];
         assert!(
-            should_apply_command_selected_path(None, Some(project.as_slice())),
+            should_apply_command_echo::<Vec<String>>(None, Some(&project), Some(1)),
             "no :on-select means no latch; Clojure :selected must restore"
         );
+        let latch = CommandEchoLatch {
+            seq: 7,
+            value: project.clone(),
+        };
         assert!(
-            !should_apply_command_selected_path(Some(project.as_slice()), Some(project.as_slice())),
-            "an emitted :on-select waits for the Clojure echo"
+            !should_apply_command_echo(Some(&latch), Some(&project), None),
+            "an unrelated request-render must not release the latch"
         );
-        assert!(should_apply_command_selected_path(
-            Some(project.as_slice()),
-            Some(file.as_slice())
+        assert!(
+            !should_apply_command_echo(Some(&latch), Some(&project), Some(3)),
+            "a different callback seq must not release the latch"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch), Some(&project), Some(7)),
+            "the matching seq consumes the latch; Clojure may reject project/open"
+        );
+        assert!(should_apply_command_echo(
+            Some(&latch),
+            Some(&file),
+            Some(3)
         ));
+        let query = CommandEchoLatch {
+            seq: 7,
+            value: "fi".to_string(),
+        };
+        assert!(!should_apply_command_echo(
+            Some(&query),
+            Some(&"fi".to_string()),
+            None
+        ));
+        assert!(should_apply_command_echo(
+            Some(&query),
+            Some(&"fi".to_string()),
+            Some(7)
+        ));
+        assert!(
+            should_apply_command_echo(Some(&query), Some(&"fi".to_string()), Some(7))
+                && should_apply_command_echo(Some(&query), Some(&"find".to_string()), Some(7)),
+            "the matching seq may echo, reject, or transform the typed query"
+        );
+    }
+
+    #[test]
+    fn controlled_selection_requires_the_installed_command_model() {
+        let items = vec![
+            item("copy", "Copy"),
+            group("edit", "Edit", vec![item("find", "Find")]),
+        ];
+        let desired = command_index_path(&items, &["find".into()]);
+        assert_eq!(
+            command_selection_on_matched(&[], desired),
+            None,
+            "first paint still has the empty default model"
+        );
+        let installed = [IndexPath::new(0).section(0), IndexPath::new(0).section(1)];
+        assert_eq!(
+            command_selection_on_matched(&installed, desired),
+            desired,
+            "after install_model the IndexPath is in matched"
+        );
+
+        let previous = vec![item("copy", "Copy"), item("wrap", "Wrap")];
+        let next = vec![
+            group("file", "File", vec![item("open", "Open file")]),
+            group("project", "Project", vec![item("open", "Open project")]),
+        ];
+        let new_desired = command_index_path(&next, &["project".into(), "open".into()]);
+        let old_matched = [IndexPath::new(0).section(0), IndexPath::new(1).section(0)];
+        assert_eq!(
+            command_index_path(&previous, &["project".into(), "open".into()]),
+            None
+        );
+        assert_eq!(
+            command_selection_on_matched(&old_matched, new_desired),
+            None,
+            "the previous model's matched list cannot represent project/open"
+        );
+        let new_matched = [IndexPath::new(0).section(0), IndexPath::new(0).section(1)];
+        assert_eq!(
+            command_selection_on_matched(&new_matched, new_desired),
+            new_desired
+        );
+    }
+
+    #[test]
+    fn disabled_submenu_is_represented_on_the_gpui_menu_bridge() {
+        let mut share = group("share", "Share", vec![item("link", "Copy link")]);
+        share.disabled = true;
+        let items = vec![item("copy", "Copy"), share];
+        assert!(native_tree_has_disabled_submenu(&items));
+        let gpui_items = gpui_menu_items(&items, "edit-menu", &[]);
+        assert_eq!(gpui_items.len(), 2);
+        assert!(!gpui_items[0].is_disabled());
+        assert!(
+            gpui_items[1].is_disabled(),
+            "Kit NativeMenu::submenu() drops disabled; From<gpui::Menu> keeps it"
+        );
+        let bridged = NativeMenu::from(gpui::Menu::new("").items(gpui_items));
+        assert!(
+            !bridged.is_empty(),
+            "From<gpui::Menu> is the NativeMenu path that keeps submenu.disabled"
+        );
+        assert!(!fill_native_menu(&items, "edit-menu").is_empty());
+        let enabled = vec![group("share", "Share", vec![item("link", "Copy link")])];
+        assert!(!native_tree_has_disabled_submenu(&enabled));
     }
 
     #[test]

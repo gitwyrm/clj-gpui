@@ -246,11 +246,10 @@ struct CommandSlot {
     state: Entity<CommandState>,
     suppress_select: bool,
     pending_select: Option<Vec<String>>,
-    last_emitted_query: Option<String>,
-    /// Last path sent to Clojure `:on-select`. Empty unless that callback
-    /// exists and actually fired, so a controlled `:selected` without
-    /// `:on-select` can still restore native highlight.
-    last_emitted_path: Option<Vec<String>>,
+    /// Last query sent to Clojure `:on-query`, held until that callback's seq.
+    query_latch: Option<action_bridge::CommandEchoLatch<String>>,
+    /// Last path sent to Clojure `:on-select`, held until that callback's seq.
+    selected_latch: Option<action_bridge::CommandEchoLatch<Vec<String>>>,
     programmatic_query: Option<String>,
 }
 
@@ -878,19 +877,16 @@ impl RootView {
         }
     }
 
-    fn flush_callback_queue(&mut self) {
-        let Some(tree) = self.tree.as_ref() else {
-            return;
-        };
-        let Some(calls) = self.callback_queue.next(tree) else {
-            return;
-        };
+    fn flush_callback_queue(&mut self) -> Option<u64> {
+        let tree = self.tree.as_ref()?;
+        let calls = self.callback_queue.next(tree)?;
         // Share the existing sequence allocator with input-submit responses.
         // The matching Tree is the barrier, not a timer or an arbitrary paint.
         self.next_submit_seq = self.next_submit_seq.saturating_add(1);
         let seq = self.next_submit_seq;
         self.callback_queue.sent(seq);
         protocol::send_callbacks_seq(&self.cmd_tx, calls, Some(seq));
+        Some(seq)
     }
 
     fn schedule_input_change_flush(
@@ -2778,8 +2774,8 @@ impl RootView {
                 state: state.clone(),
                 suppress_select: false,
                 pending_select: None,
-                last_emitted_query: None,
-                last_emitted_path: None,
+                query_latch: None,
+                selected_latch: None,
                 programmatic_query: None,
             },
         );
@@ -2797,15 +2793,15 @@ impl RootView {
             return;
         };
         let mut suppress = false;
+        let tree_seq = self.tree_seq;
         if let Some(desired) = node.query.as_ref() {
             let current = state.read(cx).query(cx).to_string();
             if current != *desired {
-                let waiting = self
+                let latch = self
                     .commands
                     .get(key)
-                    .and_then(|slot| slot.last_emitted_query.as_ref())
-                    == Some(&current);
-                if !waiting {
+                    .and_then(|slot| slot.query_latch.as_ref());
+                if action_bridge::should_apply_command_echo(latch, Some(&current), tree_seq) {
                     if let Some(slot) = self.commands.get_mut(key) {
                         slot.programmatic_query = Some(desired.clone());
                         slot.suppress_select = true;
@@ -2816,8 +2812,6 @@ impl RootView {
                         cmd.set_query(desired, window, cx);
                     });
                 }
-            } else if let Some(slot) = self.commands.get_mut(key) {
-                slot.last_emitted_query = None;
             }
         }
         match action_bridge::command_value_path(node.value.as_ref()) {
@@ -2832,13 +2826,14 @@ impl RootView {
                 if current_ix != desired_ix {
                     let current_path =
                         current_ix.and_then(|ix| action_bridge::command_item_path(&node.items, ix));
-                    let last_emitted = self
+                    let latch = self
                         .commands
                         .get(key)
-                        .and_then(|slot| slot.last_emitted_path.as_deref());
-                    if action_bridge::should_apply_command_selected_path(
-                        last_emitted,
-                        current_path.as_deref(),
+                        .and_then(|slot| slot.selected_latch.as_ref());
+                    if action_bridge::should_apply_command_echo(
+                        latch,
+                        current_path.as_ref(),
+                        tree_seq,
                     ) {
                         if let Some(slot) = self.commands.get_mut(key) {
                             slot.suppress_select = true;
@@ -2848,9 +2843,26 @@ impl RootView {
                             cmd.set_selected_index(desired_ix, window, cx);
                         });
                     }
-                } else if let Some(slot) = self.commands.get_mut(key) {
-                    slot.last_emitted_path = None;
                 }
+            }
+        }
+        // The matching callback-seq tree consumes the latch even when
+        // Clojure omits `:query` / `:selected` or returns a different
+        // value. Unrelated trees leave it in place.
+        if let Some(slot) = self.commands.get_mut(key) {
+            if slot
+                .query_latch
+                .as_ref()
+                .is_some_and(|latch| tree_seq == Some(latch.seq))
+            {
+                slot.query_latch = None;
+            }
+            if slot
+                .selected_latch
+                .as_ref()
+                .is_some_and(|latch| tree_seq == Some(latch.seq))
+            {
+                slot.selected_latch = None;
             }
         }
         let loading = node.loading;
@@ -2885,7 +2897,6 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.command_slot(key, window, cx);
-        self.sync_command_state(key, node, window, cx);
         let emit = Self::action_emitter(cx);
         let entity = cx.weak_entity();
         let mut command =
@@ -2924,15 +2935,19 @@ impl RootView {
                     else {
                         return;
                     };
-                    if let Some(slot) = this.commands.get_mut(&key) {
-                        slot.last_emitted_path = Some(item_path.clone());
-                    }
                     this.callback_queue
                         .push(overlay::QueuedAction::CommandSelect {
                             key: key.clone(),
-                            item_path,
+                            item_path: item_path.clone(),
                         });
-                    this.flush_callback_queue();
+                    if let Some(seq) = this.flush_callback_queue()
+                        && let Some(slot) = this.commands.get_mut(&key)
+                    {
+                        slot.selected_latch = Some(action_bridge::CommandEchoLatch {
+                            seq,
+                            value: item_path,
+                        });
+                    }
                 });
             });
         }
@@ -2974,15 +2989,17 @@ impl RootView {
                         }
                         return;
                     }
-                    if let Some(slot) = this.commands.get_mut(&key) {
-                        slot.last_emitted_query = Some(query.clone());
-                    }
                     this.callback_queue
                         .push(overlay::QueuedAction::CommandQuery {
                             key: key.clone(),
-                            query,
+                            query: query.clone(),
                         });
-                    this.flush_callback_queue();
+                    if let Some(seq) = this.flush_callback_queue()
+                        && let Some(slot) = this.commands.get_mut(&key)
+                    {
+                        slot.query_latch =
+                            Some(action_bridge::CommandEchoLatch { seq, value: query });
+                    }
                 });
             });
         }
@@ -2997,7 +3014,15 @@ impl RootView {
             });
         }
         let _ = emit;
-        apply_style(command, node, cx).into_any_element()
+        let command = apply_style(command, node, cx);
+        // Command::render calls install_model. Controlled query/selection
+        // resolve against that matched list, so they must run after this.
+        // RenderOnce returns `impl IntoElement`, which in edition 2024
+        // captures the `&mut Window` / `&mut App` lifetimes; convert to
+        // an owned AnyElement so the later sync can borrow them again.
+        let element = command.render(window, cx).into_any_element();
+        self.sync_command_state(key, node, window, cx);
+        element
     }
 
     fn render_status_bar(

@@ -1,6 +1,6 @@
 # GPUI Kit 0.6 migration plan
 
-Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps`, protocol 9) landed in [PR #14](https://github.com/gitwyrm/clj-gpui/pull/14). Extra Kit chart kinds (horizontal `BarChart` alignment, radar, candlestick, sankey) are protocol 10.
+Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps`, protocol 9) landed in [PR #14](https://github.com/gitwyrm/clj-gpui/pull/14). Extra Kit chart kinds (horizontal `BarChart` alignment, radar, candlestick, sankey) are protocol 10. NativeMenu / Command / StatusBar and nested menu/command path-vector parent callbacks are protocol 11.
 
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 

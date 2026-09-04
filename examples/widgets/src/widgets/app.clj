@@ -318,7 +318,7 @@
     [{:id :copy :label "Copy" :icon :copy}
      :-
      {:id :wrap :label "Word wrap" :checked wrap?}
-     {:id :share :label "Share"
+     {:id :share :label "Share" :disabled true
       :items [{:id :email :label "Email"}
               {:id :link :label "Copy link"}]}]
     {:id "gallery-native"

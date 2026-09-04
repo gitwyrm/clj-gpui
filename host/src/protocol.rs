@@ -130,7 +130,7 @@ pub enum NavItemWire {
     Spec(NavItemSpec),
 }
 
-pub const PROTOCOL_VERSION: u64 = 10;
+pub const PROTOCOL_VERSION: u64 = 11;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -2065,7 +2065,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
@@ -2246,7 +2246,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
@@ -2346,7 +2346,7 @@ mod tests {
         assert_eq!(group.limit, Some(5.0));
         assert!(group.ellipsis);
         assert_eq!(group.children.len(), 2);
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
 
         let message: Node = serde_json::from_value(json!({
             "type": "message",
@@ -2669,7 +2669,7 @@ mod tests {
         assert_eq!(split.variant.as_deref(), Some("warning"));
         assert!(split.selected);
         assert_eq!(split.placement.as_deref(), Some("bottom-left"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
@@ -2684,7 +2684,9 @@ mod tests {
             "items": [
                 {"id": "copy", "label": "Copy", "on-click": "cb-copy"},
                 {"separator": true},
-                {"id": "wrap", "label": "Word wrap", "checked": true, "icon": "check"}
+                {"id": "wrap", "label": "Word wrap", "checked": true, "icon": "check"},
+                {"id": "share", "label": "Share", "disabled": true,
+                 "items": [{"id": "link", "label": "Copy link"}]}
             ]
         }))
         .unwrap();
@@ -2693,6 +2695,8 @@ mod tests {
         assert_eq!(menu.position.as_deref(), Some(&[120.0, 40.0][..]));
         assert_eq!(menu.items[2].checked, Some(true));
         assert_eq!(menu.items[2].icon.as_deref(), Some("check"));
+        assert!(menu.items[3].disabled);
+        assert_eq!(menu.items[3].items[0].id_or_label(), "link");
         assert!(menu.contains_text("Word wrap"));
 
         let command: Node = serde_json::from_value(json!({
@@ -2738,7 +2742,7 @@ mod tests {
         assert!(bar.contains_text("Ln 1"));
         assert!(bar.contains_text("UTF-8"));
         assert!(bar.contains_text("Ready"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]

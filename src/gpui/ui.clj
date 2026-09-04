@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  10)
+  11)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -1484,6 +1484,12 @@
   the original leaf id, or a path vector `[submenu-id leaf-id]` when
   the leaf is nested, so duplicate submenu leaves stay distinct.
   Nested `:items` are submenus. `-` / `:-` is a separator.
+  `:disabled true` on a submenu wrapper is forwarded. Kit's
+  `NativeMenu::submenu` builder always creates an enabled submenu; the
+  host uses `From<gpui::Menu>` when any wrapper is disabled. That
+  conversion has no icon field, so a snapshot that contains a disabled
+  submenu drops leaf icons. Enabled-only menus keep NativeMenu builders
+  and icons.
 
   Kit's public NativeMenu builders cannot combine a check mark with an
   icon or with disabled. Icon (including icon+disabled) wins over a
@@ -1533,6 +1539,13 @@
   search text (`CommandState::query` / `set_query`). `:selected` /
   `:value` is the highlighted leaf id, or a path vector to
   disambiguate duplicate ids (`CommandState::selected_index`).
+  The host consumes Kit `Command::render` (`install_model`) before
+  applying those controlled fields, so an initial `:selected` and a
+  same-tree item replacement resolve against the current model, not
+  the empty default. Native `:on-select` / `:on-query` hold an echo
+  latch until the matching callback-seq tree; that tree's Clojure
+  value then wins even when it differs from what native emitted.
+  Unrelated `request-render` trees do not release it.
   `:focus` focuses the query field when searchable. `:loading` is the
   search-field spinner. `:bordered false` drops Kit's surrounding
   chrome (default true). `:menu-max-h` is Kit `Command::max_h` in px

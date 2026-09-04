@@ -698,6 +698,16 @@
       (is (true? (get-in native [:items 1 :separator])))
       (is (true? (get-in native [:items 2 :checked])))
       (is (fn? (:on-change native))))
+    (let [disabled-share (ui/native-menu
+                          [{:id :copy :label "Copy"}
+                           {:id :share :label "Share" :disabled true
+                            :items [{:id :link :label "Copy link"}]}]
+                          {:id "edit-menu"})
+          exported (runtime/export-tree disabled-share)]
+      (is (true? (get-in disabled-share [:items 1 :disabled]))
+          "submenu wrappers keep :disabled")
+      (is (= "link" (get-in disabled-share [:items 1 :items 0 :id])))
+      (is (true? (get-in exported [:items 1 :disabled]))))
     (let [cmd (ui/command
                [{:id :copy :label "Copy" :icon :copy :keywords [:duplicate]}
                 :-
