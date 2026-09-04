@@ -2212,7 +2212,11 @@ impl RootView {
     }
 
     fn render_avatar_group(&self, node: &Node, cx: &App) -> AnyElement {
-        apply_style(overlay::avatar_group_element(node), node, cx).into_any_element()
+        // Kit `AvatarGroup: Styled` keys (`:gap`, padding, colors, …) refine
+        // the real group. The clip wrap only takes workaround geometry plus
+        // Clojure box keys (`:width` / `:height` / `:size` / `:flex`).
+        let group = apply_kit_visual_style(overlay::kit_avatar_group(node), node, cx);
+        apply_outer_box_style(overlay::avatar_group_element(group, node), node).into_any_element()
     }
 
     fn render_hover_card(
@@ -4336,7 +4340,7 @@ fn outer_layout(node: &Node) -> OuterLayout {
     }
 }
 
-fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+fn apply_outer_box_style<E: Styled>(mut el: E, node: &Node) -> E {
     let layout = outer_layout(node);
     if let Some(width) = layout.width {
         el = el.w(px(width));
@@ -4348,6 +4352,8 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.size(px(size));
     }
     if layout.flex_fill {
+        // Flex items default to content-sized minimums. Allow shrinking on
+        // both axes so long rows stay bounded and nested scrolling works.
         el = el.flex_1();
     }
     if layout.shrink_width {
@@ -4356,7 +4362,12 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
     if layout.shrink_height {
         el = el.min_h_0();
     }
-    if layout.full_width {
+    el
+}
+
+fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+    el = apply_outer_box_style(el, node);
+    if outer_layout(node).full_width {
         el = el.w_full();
     }
     el
@@ -4671,33 +4682,14 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
+/// Kit `Styled` refinements: gap, padding, type, colors, alignment.
+/// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
+fn apply_kit_visual_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
     }
     if let Some(padding) = node.padding {
         el = el.p(px(padding));
-    }
-    if let Some(width) = node.width {
-        el = el.w(px(width));
-    }
-    if let Some(height) = node.height {
-        el = el.h(px(height));
-    }
-    if let Some(size) = node.size {
-        el = el.size(px(size));
-    }
-    let layout = outer_layout(node);
-    if layout.flex_fill {
-        // Flex items default to content-sized minimums. Allow shrinking on
-        // both axes so long rows stay bounded and nested scrolling works.
-        el = el.flex_1();
-    }
-    if layout.shrink_width {
-        el = el.min_w_0();
-    }
-    if layout.shrink_height {
-        el = el.min_h_0();
     }
     if let Some(font_size) = node.font_size {
         el = el.text_size(px(font_size));
@@ -4762,6 +4754,10 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         }
     }
     el
+}
+
+fn apply_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
+    apply_outer_box_style(apply_kit_visual_style(el, node, cx), node)
 }
 
 fn node_theme_pref(node: &Node) -> Option<&str> {
@@ -5327,6 +5323,24 @@ mod widget_wrap_tests {
         assert!(row.flex_none);
         assert!(!row.fill_width);
         assert!(!row.flex_fill);
+
+        let styled = Node {
+            kind: "avatar-group".into(),
+            gap: Some(8.0),
+            padding: Some(4.0),
+            width: Some(200.0),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let split = crate::overlay::avatar_group_style_split(&styled);
+        assert_eq!(split.kit_gap, Some(8.0));
+        assert_eq!(split.kit_padding, Some(4.0));
+        assert_eq!(split.wrap_width, Some(200.0));
+        assert!(split.wrap_flex_fill);
+        assert_eq!(
+            split.wrap_workaround_w,
+            crate::overlay::avatar_group_content_width(&styled)
+        );
     }
 
     #[test]

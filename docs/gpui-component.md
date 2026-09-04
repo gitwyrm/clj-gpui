@@ -49,7 +49,7 @@ Classification:
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
 | `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string. Host wrapper owns layout keys |
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
-| `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; `:src` is a Kit image (http URL or file path); `:icon` is the placeholder |
+| `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; `:src` is a Kit image (http URL or file path); host installs GPUI's reqwest HTTP client so remote URLs load; `:icon` is the placeholder |
 | `avatar::AvatarGroup` | `ui/avatar-group` | ✅ | C | Child avatars; omitted `:limit` keeps Kit's 3; `:ellipsis` overflow |
 | `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids in original item order. Outer wrapper owns `:width` / `:height` / `:size` / `:flex` (default flex-none + full width) so crate `size_full()` does not eat leftover column height |
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |

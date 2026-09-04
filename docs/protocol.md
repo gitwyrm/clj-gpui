@@ -206,7 +206,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `interactive` | bool | `chart` `:line` / `:bar` / `:area` / `:radar`: Kit hover tooltip via `.id(...)`. Default false (Kit `id: None`). Not the string `tooltip` field |
 | `accessibility-label` | string | declarative `table`: Kit `Table::accessibility_label` (screen-reader name). A visible `table-caption` is not used as that name. `progress-circle`: Kit `ProgressCircle::accessibility_label` |
 | `href` | string | `link` |
-| `src` | string | `avatar`: Kit `ImageSource` (http URL or file path). Empty/omitted is initials or the placeholder icon |
+| `src` | string | `avatar`: Kit `ImageSource` (http URL or file path). Empty/omitted is initials or the placeholder icon. Remote http URLs need the host HTTP client (installed at startup) |
 | `icon` | string | `icon`, `spinner` (kebab `circle-check`); `avatar` placeholder icon (Kit default User) |
 | `control-size` | string | `xs`/`small`/`medium`/`large` (Clojure `:size :small` is rewritten so pixel `:size` stays numeric) |
 | `count` | number | `badge`; `otp-input` length (default 6, clamped 1–12) |

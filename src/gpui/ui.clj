@@ -949,8 +949,9 @@
 
 (defn avatar
   "Avatar. Initials from `:name` or a string. `:src` is a Kit image
-  source (http URL or file path). `:icon` is the placeholder when there
-  is no image (Kit default User).
+  source (http URL or file path). Remote http URLs load through the
+  host HTTP client. `:icon` is the placeholder when there is no image
+  (Kit default User).
 
   (ui/avatar \"Ada Lovelace\")
   (ui/avatar {:name \"Ada Lovelace\" :src \"https://example.com/ada.png\"})

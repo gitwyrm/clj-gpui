@@ -13,6 +13,9 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 gpui-kit = { version = "0.6.0", features = ["tree-sitter-languages"] }
 gpui-fps = "0.6.0"
+# Direct alias for the already-transitive matching GPUI snapshot. Remote
+# Avatar `:src` (and other `img` URIs) never load on NullHttpClient.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.3" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
