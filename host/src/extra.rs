@@ -267,20 +267,9 @@ pub fn combobox_payload(multiple: bool, values: &[SharedString]) -> Value {
     }
 }
 
-/// Identity of combobox options. Used to skip `set_items` when Clojure
-/// rerenders an unchanged collection.
+/// Identity of combobox options, including `SelectGroup` children.
 pub fn combobox_fingerprint(items: &[Item]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    items.len().hash(&mut hasher);
-    for item in items {
-        item.id.hash(&mut hasher);
-        item.label.hash(&mut hasher);
-        item.text.hash(&mut hasher);
-        item.disabled.hash(&mut hasher);
-    }
-    hasher.finish()
+    select_fingerprint(items)
 }
 
 /// Whether a reused combobox slot should push items / selection into Kit.
@@ -309,6 +298,40 @@ pub fn combobox_slot_sync(
     ComboboxSlotSync {
         set_items,
         set_selected: set_items || prev_selected != next_selected,
+    }
+}
+
+/// How a live grouped Combobox slot should apply Clojure's next tree.
+///
+/// Collection changes recreate `ComboboxState` so search query text and
+/// matched sections agree (the same Rebuild rule as Select groups).
+/// `set_selected_values` clears the query, so an unrelated rerender
+/// must Leave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComboboxLiveSync {
+    Leave,
+    SetValues,
+    Rebuild,
+}
+
+pub fn combobox_live_sync(
+    prev_fingerprint: u64,
+    next_fingerprint: u64,
+    prev_selected: &[SharedString],
+    next_selected: &[SharedString],
+) -> ComboboxLiveSync {
+    let sync = combobox_slot_sync(
+        prev_fingerprint,
+        next_fingerprint,
+        prev_selected,
+        next_selected,
+    );
+    if sync.set_items {
+        ComboboxLiveSync::Rebuild
+    } else if sync.set_selected {
+        ComboboxLiveSync::SetValues
+    } else {
+        ComboboxLiveSync::Leave
     }
 }
 
@@ -2214,6 +2237,50 @@ mod tests {
         assert!(
             !echo.set_selected,
             "native Change cache matching a Clojure echo must not clear the query"
+        );
+    }
+
+    #[test]
+    fn combobox_fingerprint_includes_group_children() {
+        let grouped = vec![select_group(
+            "Lisp",
+            vec![select_item("clj", "Clojure"), select_item("rs", "Rust")],
+        )];
+        let renamed_child = vec![select_group(
+            "Lisp",
+            vec![
+                select_item("clj", "Clojure lang"),
+                select_item("rs", "Rust"),
+            ],
+        )];
+        assert_ne!(
+            combobox_fingerprint(&grouped),
+            combobox_fingerprint(&renamed_child)
+        );
+        assert_eq!(combobox_fingerprint(&grouped), select_fingerprint(&grouped));
+    }
+
+    #[test]
+    fn combobox_grouped_live_sync_rebuilds_on_collection_change() {
+        let sel = [SharedString::from("clj")];
+        let grouped = vec![select_group("Lisp", vec![select_item("clj", "Clojure")])];
+        let fp = combobox_fingerprint(&grouped);
+        assert_eq!(
+            combobox_live_sync(fp, fp, &sel, &sel),
+            ComboboxLiveSync::Leave
+        );
+        let next = [SharedString::from("rs")];
+        assert_eq!(
+            combobox_live_sync(fp, fp, &sel, &next),
+            ComboboxLiveSync::SetValues
+        );
+        let renamed = vec![select_group(
+            "Lisp",
+            vec![select_item("clj", "Clojure lang")],
+        )];
+        assert_eq!(
+            combobox_live_sync(fp, combobox_fingerprint(&renamed), &sel, &sel),
+            ComboboxLiveSync::Rebuild
         );
     }
 

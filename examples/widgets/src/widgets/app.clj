@@ -487,9 +487,12 @@
     {:gap 8 :align :center}
     (ui/combobox combo
                  {:id "combo"
-                  :options [{:id :clj :label "Clojure"}
-                            {:id :rs :label "Rust"}
-                            {:id :go :label "Go"}]
+                  :options [{:label "Lisp"
+                             :items [{:id :clj :label "Clojure"}
+                                     {:id :cljs :label "ClojureScript"}]}
+                            {:label "Systems"
+                             :items [{:id :rs :label "Rust"}
+                                     {:id :go :label "Go"}]}]
                   :placeholder "Language"
                   :flex 1
                   :on-change (set-key :combo)})

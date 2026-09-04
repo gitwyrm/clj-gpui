@@ -341,7 +341,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | Kit 0.6 | Clojure | Notes |
 |---|---|---|
 | declarative `Table` | `ui/table` | Reserved name. Wrap once DataTable is stable. |
-| `Combobox` | `ui/combobox` | Replaces some of the deferred "searchable select sections" C item. |
+| `Combobox` | `ui/combobox` | Nested `:items` are Kit `SelectGroup` / `SearchableGroup` sections. |
 | `Rating`, `Stepper`, `Pagination` | `ui/rating`, `ui/stepper`, `ui/pagination` | Straightforward controlled widgets. |
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
 | `HoverCard`, `AvatarGroup` | `ui/hover-card`, `ui/avatar-group` | Hover-driven card; overlapping avatars. `FocusTrap` still unwrapped. |

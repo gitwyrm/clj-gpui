@@ -812,6 +812,34 @@
       (is (true? (:multiple n)))
       (is (false? (:searchable n)))
       (is (= ["clj" "rs"] (:value n)))))
+  (testing "combobox nested items restore leaf ids"
+    (let [!change (atom nil)
+          !confirm (atom nil)
+          n (ui/combobox :rs
+                         {:options [{:label "Lisp"
+                                     :items [{:id :clj :label "Clojure"}
+                                             {:id :cljs :label "ClojureScript"}]}
+                                    {:label "Systems"
+                                     :items [{:id :rs :label "Rust"}
+                                             {:id :go :label "Go" :disabled true}]}]
+                          :on-change #(reset! !change %)
+                          :on-confirm #(reset! !confirm %)})]
+      (is (= "Lisp" (get-in n [:options 0 :label])))
+      (is (= "clj" (get-in n [:options 0 :items 0 :id])))
+      (is (true? (get-in n [:options 1 :items 1 :disabled])))
+      ((:on-change n) "clj")
+      (is (= :clj @!change))
+      ((:on-confirm n) "cljs")
+      (is (= :cljs @!confirm)))
+    (let [!got (atom nil)
+          n (ui/combobox [:clj]
+                         {:multiple true
+                          :options [{:label "Lisp"
+                                     :items [{:id :clj :label "Clojure"}
+                                             {:id :rs :label "Rust"}]}]
+                          :on-change #(reset! !got %)})]
+      ((:on-change n) ["clj" "rs"])
+      (is (= [:clj :rs] @!got)))))
   (testing "rating and stepper"
     (let [n (ui/rating 3 {:max 5})]
       (is (= :rating (:type n)))

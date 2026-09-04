@@ -379,7 +379,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 
-`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select options by label; nested `:items` are Kit `SelectGroup` sections. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on.
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select/combobox options by label; nested `:items` are Kit `SelectGroup` sections. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on.
 
 GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 

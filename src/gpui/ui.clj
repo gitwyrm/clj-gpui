@@ -935,26 +935,41 @@
   that id (or vector). `:on-confirm` fires when the menu closes.
   Search is on by default.
 
+  Nested `:items` are Kit `SelectGroup` sections (`SearchableGroup`;
+  leaf values stay the option id). A group is
+  `{ :label \"Lisp\" :items [{:id :clj :label \"Clojure\"}] }`.
+  Custom row/section `render` and empty/`display_title` as arbitrary
+  `IntoElement` / `AnyElement` are not wrapped.
+
   A single-select pick can emit Kit `Change` then `Confirm` for one
   user action. The host sends `:on-change` then `:on-confirm` as one
   batch against the same callback generation, then fetches one tree.
   Confirm without Change (dismiss) is `:on-confirm` only.
 
   Controlled selection is pushed to Kit when the ids change *or* the
-  option collection changes (`set_items` does not rebuild Kit's cloned
-  selection, so a renamed or removed selected option would otherwise
-  stick). Kit `set_selected_values` clears the search query, so an
-  unrelated atom rerender with the same options and ids must not wipe
-  in-progress typing. A native `Change` updates the host cache first:
-  Clojure echoing those same ids is a no-op; a different Clojure value
-  still overrides native state.
+  option collection changes. Flat comboboxes `set_items` then
+  `set_selected_values` (cloned selection would otherwise keep old
+  labels). Grouped comboboxes rebuild `ComboboxState` on a collection
+  fingerprint change so query text and matched sections agree. Kit
+  `set_selected_values` clears the search query, so an unrelated atom
+  rerender with the same options and ids must not wipe in-progress
+  typing. A native `Change` updates the host cache first: Clojure
+  echoing those same ids is a no-op; a different Clojure value still
+  overrides native state.
 
   (ui/combobox selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
      :placeholder \"Language\"
      :on-change set-lang!})
   (ui/combobox picked
-    {:options langs :multiple true :on-change set-picked!})"
+    {:options langs :multiple true :on-change set-picked!})
+  (ui/combobox selected
+    {:options [{:label \"Lisp\"
+                :items [{:id :clj :label \"Clojure\"}
+                        {:id :cljs :label \"ClojureScript\"}]}
+               {:label \"Systems\"
+                :items [{:id :rs :label \"Rust\"}]}]
+     :on-change set-lang!})"
   ([value]
    {:type :combobox :searchable true :value (wire-selected value) :options []})
   ([value opts]
@@ -967,7 +982,7 @@
                 (-> opts
                     (dissoc :options :items)
                     (assoc :searchable searchable))
-                raw
+                (flatten-tree-items raw)
                 [:on-change :on-confirm])]
      (merge-widget {:type :combobox
                     :value (wire-selected value)
