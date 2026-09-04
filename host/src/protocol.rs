@@ -3,6 +3,133 @@ use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// A number, or a linear interpolation of Kit `NavPage::progress()` (`0..=1`).
+///
+/// `{from, to}` is `from + (to - from) * progress`, the data form of the
+/// showcase `1.0 - page.progress()` / `page.progress()` offsets.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum NavScalar {
+    Const(f32),
+    Lerp { from: f32, to: f32 },
+}
+
+impl NavScalar {
+    pub fn resolve(&self, progress: f32) -> f32 {
+        match self {
+            Self::Const(value) => *value,
+            Self::Lerp { from, to } => from + (to - from) * progress,
+        }
+    }
+}
+
+/// Styled vocabulary shared with ordinary clj-gpui nodes (`apply_styled`).
+/// Flattened onto a NavStack item spec / match arm so recipes do not grow
+/// a second paint path. Not a full `Node` (that would recurse through
+/// `Node.item`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct StyledKeys {
+    pub gap: Option<f32>,
+    pub padding: Option<f32>,
+    pub font_size: Option<f32>,
+    pub font_family: Option<String>,
+    pub font_weight: Option<String>,
+    pub color: Option<String>,
+    pub bg: Option<String>,
+    pub border: Option<String>,
+    pub border_bottom: Option<String>,
+    /// Omitted vs explicit `false` so a match arm can disable a base `true`.
+    pub strikethrough: Option<bool>,
+    pub shadow: Option<bool>,
+    pub align: Option<String>,
+    pub justify: Option<String>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub size: Option<f32>,
+    pub flex: Option<f32>,
+}
+
+impl StyledKeys {
+    pub fn to_node(&self) -> Node {
+        Node {
+            gap: self.gap,
+            padding: self.padding,
+            font_size: self.font_size,
+            font_family: self.font_family.clone(),
+            font_weight: self.font_weight.clone(),
+            color: self.color.clone(),
+            bg: self.bg.clone(),
+            border: self.border.clone(),
+            border_bottom: self.border_bottom.clone(),
+            strikethrough: self.strikethrough.unwrap_or(false),
+            shadow: self.shadow.unwrap_or(false),
+            align: self.align.clone(),
+            justify: self.justify.clone(),
+            width: self.width,
+            height: self.height,
+            size: self.size,
+            flex: self.flex,
+            ..Node::default()
+        }
+    }
+}
+
+/// One Kit `item` match arm. Omitted `phase` / `operation` / `index` match
+/// any. `operation` is a name (`push` / `pop` / `replace` / `none`) or an
+/// array of names. `none` is a settled page (`operation()` is `None`).
+/// Remaining keys are the ordinary clj-gpui Styled vocabulary (`padding`,
+/// `bg`, `color`, …) applied through `mapping::apply_styled`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct NavItemCase {
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub operation: Option<Value>,
+    #[serde(default)]
+    pub index: Option<f32>,
+    #[serde(default)]
+    pub left: Option<NavScalar>,
+    #[serde(default)]
+    pub opacity: Option<NavScalar>,
+    #[serde(flatten)]
+    pub style: StyledKeys,
+}
+
+/// Host-side Kit `NavStack::item` recipe. Styled keys on the spec apply to
+/// every mounted page; `match` arms overlay the first hit. `left` /
+/// `opacity` are relative offset / alpha (number or `{from, to}` lerp by
+/// eased `progress()`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct NavItemSpec {
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub operation: Option<Value>,
+    #[serde(default)]
+    pub index: Option<f32>,
+    #[serde(default)]
+    pub left: Option<NavScalar>,
+    #[serde(default)]
+    pub opacity: Option<NavScalar>,
+    #[serde(default, rename = "match")]
+    pub cases: Vec<NavItemCase>,
+    #[serde(flatten)]
+    pub style: StyledKeys,
+}
+
+/// Wire `item`: `"slide"`, `false` (dropped Clojure fn), a match-arm array,
+/// or a spec object. Presence of this field (including `false` / unknown
+/// names) suppresses `transition-style`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum NavItemWire {
+    Named(String),
+    Flag(bool),
+    Cases(Vec<NavItemCase>),
+    Spec(NavItemSpec),
+}
+
 pub const PROTOCOL_VERSION: u64 = 10;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
@@ -438,7 +565,7 @@ pub fn dialog_action_calls(
 }
 
 /// Collection item for radios, select, tabs, breadcrumbs, accordion, etc.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Item {
     #[serde(default)]
     pub id: Option<String>,
@@ -601,7 +728,7 @@ impl Item {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Node {
     #[serde(rename = "type", default)]
     pub kind: String,
@@ -962,9 +1089,20 @@ pub struct Node {
     pub motion: Option<String>,
     /// NavStack: convenience `item` renderer. `slide` is the showcase slide.
     /// Omitted keeps Kit's default unchanged `NavPage` renderer. Independent
-    /// of `duration` / `transition()`.
+    /// of `duration` / `transition()`. A present `item` field (including
+    /// unknown / `false`) suppresses this; it does not fall back to slide.
     #[serde(default, rename = "transition-style")]
     pub transition_style: Option<String>,
+    /// NavStack: Kit `NavStack::item` recipe. Evaluated on the host each
+    /// animation frame from live `NavPage` `phase` / `operation` / `index` /
+    /// eased `progress`. Always Styled-refines the same `NavPage` so the
+    /// mounted `view()` stays the child. Not a Clojure callback (`export-tree`
+    /// is not per-frame). `slide` is the showcase recipe; an object / array
+    /// is match arms (`left` / `opacity` number or `{from, to}` lerp, plus
+    /// ordinary Styled keys). `false` is a dropped Clojure fn. A present
+    /// `item` (including unknown / `false`) suppresses `transition-style`.
+    #[serde(default)]
+    pub item: Option<NavItemWire>,
     /// NavStack: CSS-like overflow. `hidden` clips (needed for a slide).
     /// Omitted does not clip. Not AvatarGroup ellipsis.
     #[serde(default)]
@@ -2201,6 +2339,14 @@ mod tests {
             "reuse-forward": false,
             "replace-generation": 2,
             "on-forward-change": "cb-forward",
+            "item": {
+                "match": [
+                    {"phase": "entering", "operation": ["push", "replace"],
+                     "left": {"from": 1, "to": 0}, "opacity": {"from": 0.35, "to": 1}},
+                    {"phase": "exiting", "operation": "pop",
+                     "left": {"from": 0, "to": 1}}
+                ]
+            },
             "height": 180,
             "children": [
                 {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
@@ -2221,6 +2367,82 @@ mod tests {
         assert_eq!(nav.reuse_forward, Some(false));
         assert_eq!(nav.replace_generation, Some(json!(2)));
         assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
+        match nav.item.as_ref() {
+            Some(NavItemWire::Spec(spec)) => {
+                assert_eq!(spec.cases.len(), 2);
+                assert_eq!(spec.cases[0].phase.as_deref(), Some("entering"));
+                assert_eq!(
+                    spec.cases[0].left,
+                    Some(NavScalar::Lerp { from: 1.0, to: 0.0 })
+                );
+                assert_eq!(
+                    spec.cases[0].opacity,
+                    Some(NavScalar::Lerp {
+                        from: 0.35,
+                        to: 1.0
+                    })
+                );
+                assert_eq!(spec.cases[1].operation, Some(json!("pop")));
+            }
+            other => panic!("expected item spec, got {other:?}"),
+        }
+        let named: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": "slide"
+        }))
+        .unwrap();
+        assert_eq!(named.item, Some(NavItemWire::Named("slide".into())));
+        let arms: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": [{"phase": "present", "left": 0}]
+        }))
+        .unwrap();
+        match arms.item {
+            Some(NavItemWire::Cases(cases)) => {
+                assert_eq!(cases[0].phase.as_deref(), Some("present"));
+                assert_eq!(cases[0].left, Some(NavScalar::Const(0.0)));
+            }
+            other => panic!("expected item cases, got {other:?}"),
+        }
+        let dropped: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": false,
+            "transition-style": "slide"
+        }))
+        .unwrap();
+        assert_eq!(dropped.item, Some(NavItemWire::Flag(false)));
+        assert_eq!(dropped.transition_style.as_deref(), Some("slide"));
+        let styled: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": {"padding": 8, "color": "#eeeeee", "match": []}
+        }))
+        .unwrap();
+        match styled.item {
+            Some(NavItemWire::Spec(spec)) => {
+                assert_eq!(spec.style.padding, Some(8.0));
+                assert_eq!(spec.style.color.as_deref(), Some("#eeeeee"));
+                assert!(spec.cases.is_empty());
+            }
+            other => panic!("expected styled spec, got {other:?}"),
+        }
+        let bools: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": {
+                "shadow": true,
+                "strikethrough": true,
+                "match": [{"phase": "present", "shadow": false, "strikethrough": false}]
+            }
+        }))
+        .unwrap();
+        match bools.item {
+            Some(NavItemWire::Spec(spec)) => {
+                assert_eq!(spec.style.shadow, Some(true));
+                assert_eq!(spec.style.strikethrough, Some(true));
+                assert_eq!(spec.cases[0].style.shadow, Some(false));
+                assert_eq!(spec.cases[0].style.strikethrough, Some(false));
+            }
+            other => panic!("expected bool overlay spec, got {other:?}"),
+        }
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");
         assert_eq!(nav.children[0].id.as_deref(), Some("home"));

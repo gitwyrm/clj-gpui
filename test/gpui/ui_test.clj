@@ -1242,7 +1242,54 @@
                             (ui/nav-page {:id :home} "Home")
                             (ui/nav-page {:id :detail} "Detail"))]
     (is (false? (:reuse-forward fresh)))
-    (is (= 2 (:replace-generation fresh)))))
+    (is (= 2 (:replace-generation fresh))))
+  (let [recipe (ui/nav-stack {:id "nav" :stack [:home]
+                              :item [{:phase :entering :operation [:push :replace]
+                                      :left {:from 1 :to 0}
+                                      :opacity {:from 0.35 :to 1}
+                                      :padding 8
+                                      :align :center
+                                      :bg :#111111}
+                                     {:phase :exiting :operation :pop
+                                      :left {:from 0 :to 1}}]}
+                             (ui/nav-page {:id :home} "Home"))]
+    (is (= "entering" (get-in recipe [:item :match 0 :phase])))
+    (is (= ["push" "replace"] (get-in recipe [:item :match 0 :operation])))
+    (is (= {:from 1 :to 0} (get-in recipe [:item :match 0 :left])))
+    (is (= {:from 0.35 :to 1} (get-in recipe [:item :match 0 :opacity])))
+    (is (= 8 (get-in recipe [:item :match 0 :padding])))
+    (is (= "center" (get-in recipe [:item :match 0 :align])))
+    (is (= "#111111" (get-in recipe [:item :match 0 :bg])))
+    (is (= "pop" (get-in recipe [:item :match 1 :operation]))))
+  (let [named (ui/nav-stack {:id "nav" :item :slide}
+                            (ui/nav-page {:id :home} "Home"))]
+    (is (= "slide" (:item named))))
+  (let [dropped (ui/nav-stack {:id "nav" :item (fn [_])}
+                              (ui/nav-page {:id :home} "Home"))]
+    (is (false? (:item dropped))))
+  (let [unknown-slide (ui/nav-stack {:id "nav"
+                                     :item :fade
+                                     :transition-style :slide}
+                                    (ui/nav-page {:id :home} "Home"))]
+    (is (= "fade" (:item unknown-slide)))
+    (is (= "slide" (:transition-style unknown-slide))))
+  (let [fn-slide (ui/nav-stack {:id "nav"
+                                :item (fn [_])
+                                :transition-style :slide}
+                               (ui/nav-page {:id :home} "Home"))]
+    (is (false? (:item fn-slide)))
+    (is (= "slide" (:transition-style fn-slide))))
+  (let [bools (ui/nav-stack {:id "nav"
+                             :item {:shadow true
+                                    :strikethrough true
+                                    :match [{:phase :present
+                                             :shadow false
+                                             :strikethrough false}]}}
+                            (ui/nav-page {:id :home} "Home"))]
+    (is (true? (get-in bools [:item :shadow])))
+    (is (true? (get-in bools [:item :strikethrough])))
+    (is (false? (get-in bools [:item :match 0 :shadow])))
+    (is (false? (get-in bools [:item :match 0 :strikethrough])))))
 
 (deftest nav-stack-forward-change-restores-page-ids
   (runtime/reset-callbacks!)
@@ -1258,6 +1305,36 @@
            (runtime/invoke-callback! (:on-forward-change exported)
                                      ["detail" "settings"])))
     (is (= [:detail :settings] @got))))
+
+(deftest nav-stack-item-recipe-is-not-a-callback
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/nav-stack {:id "nav" :stack [:home]
+                                 :item [{:phase :entering :operation :push
+                                         :left {:from 1 :to 0}}]}
+                                (ui/nav-page {:id :home} "Home")))]
+    (is (map? (:item exported)))
+    (is (not (string? (:item exported))))
+    (is (= "entering" (get-in exported [:item :match 0 :phase])))
+    (is (= "push" (get-in exported [:item :match 0 :operation])))
+    (is (= {:from 1 :to 0}
+           (get-in exported [:item :match 0 :left]))))
+  (let [unknown (runtime/export-tree
+                 (ui/nav-stack {:id "nav" :stack [:home]
+                                :item :fade
+                                :transition-style :slide}
+                               (ui/nav-page {:id :home} "Home")))]
+    (is (= "fade" (:item unknown)))
+    (is (= "slide" (:transition-style unknown)))
+    (is (not (str/starts-with? (str (:item unknown)) "cb-"))))
+  (let [dropped (runtime/export-tree
+                 (ui/nav-stack {:id "nav" :stack [:home]
+                                :item (fn [_])
+                                :transition-style :slide}
+                               (ui/nav-page {:id :home} "Home")))]
+    (is (false? (:item dropped)))
+    (is (= "slide" (:transition-style dropped)))
+    (is (not (string? (:item dropped))))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

@@ -366,7 +366,16 @@
    (ui/nav-stack {:id "gallery-nav"
                   :stack trail
                   :transition 0.22
-                  :transition-style :slide
+                  :item [{:phase :entering :operation [:push :replace]
+                          :left {:from 1 :to 0}
+                          :opacity {:from 0.35 :to 1}}
+                         {:phase :exiting :operation :pop
+                          :left {:from 0 :to 1}
+                          :opacity {:from 1 :to 0.35}}
+                         {:phase :exiting :operation :push
+                          :left {:from 0 :to -0.3}}
+                         {:phase :entering :operation :pop
+                          :left {:from -0.3 :to 0}}]
                   :overflow :hidden
                   :reuse-forward reuse-forward?
                   :replace-generation replace-generation
