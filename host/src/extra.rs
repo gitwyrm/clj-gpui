@@ -209,6 +209,7 @@ pub fn hover_card_delay_secs(value: Option<f32>) -> Option<f32> {
 }
 
 /// Avatar image source. Empty / omitted is initials or the placeholder icon.
+#[cfg(test)]
 pub fn avatar_src(node: &Node) -> Option<&str> {
     node.src.as_deref().filter(|s| !s.is_empty())
 }
