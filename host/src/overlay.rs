@@ -25,8 +25,10 @@ use gpui_component::{
     kbd::Kbd,
     link::Link,
     menu::{PopupMenu, PopupMenuItem},
-    progress::Progress,
+    pagination::Pagination,
+    progress::{Progress, ProgressCircle},
     separator::Separator,
+    shimmer::ShimmerText,
     skeleton::Skeleton,
     spinner::Spinner,
     tag::Tag,
@@ -39,6 +41,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct DialogSpec {
@@ -563,6 +566,82 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
                 node,
             )
             .into_any_element()
+        }
+        "progress-circle" => {
+            let value = node.number_value().filter(|n| n.is_finite()).unwrap_or(0.0);
+            let mut circle = ProgressCircle::new(SharedString::from(path.to_string()))
+                .value(value)
+                .loading(node.loading)
+                .with_size(mapping::parse_scale(node.control_size.as_deref()));
+            if let Some(color) = chart_hex(node.color.as_deref()) {
+                circle = circle.color(color);
+            }
+            if let Some(label) = node
+                .accessibility_label
+                .as_deref()
+                .filter(|s| !s.is_empty())
+            {
+                circle = circle.accessibility_label(label.to_string());
+            }
+            chart_layout(
+                circle.children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_chart_element(child, &static_child_path(path, child_ix))
+                })),
+                node,
+            )
+            .into_any_element()
+        }
+        "pagination" => {
+            let page = node
+                .number_value()
+                .filter(|n| n.is_finite())
+                .map(|n| n.round().max(0.0) as usize)
+                .unwrap_or(1);
+            let total = node
+                .total
+                .filter(|n| n.is_finite())
+                .map(|n| n.round().max(0.0) as usize)
+                .unwrap_or(1);
+            let mut pagination = Pagination::new(SharedString::from(path.to_string()))
+                .current_page(page)
+                .total_pages(total)
+                .with_size(mapping::parse_scale(node.control_size.as_deref()))
+                .disabled(node.disabled);
+            if node.compact {
+                pagination = pagination.compact();
+            }
+            if let Some(visible) = node
+                .visible_pages
+                .filter(|n| n.is_finite())
+                .map(|n| n.round().max(0.0) as usize)
+            {
+                pagination = pagination.visible_pages(visible);
+            }
+            chart_layout(pagination, node).into_any_element()
+        }
+        "shimmer" => {
+            let mut shimmer = ShimmerText::new(node.text.clone().unwrap_or_default());
+            if let Some(id) = node.id.clone().filter(|s| !s.is_empty()) {
+                shimmer = shimmer.id(id);
+            }
+            if let Some(secs) = node.duration.filter(|n| n.is_finite() && *n >= 0.0) {
+                shimmer = shimmer.duration(Duration::from_secs_f32(secs));
+            }
+            if let Some(width) = node.spread_px.filter(|n| n.is_finite()) {
+                shimmer = shimmer.spread(px(width));
+            } else if let Some(rel) = node.spread.filter(|n| n.is_finite()) {
+                shimmer = shimmer.spread(rel);
+            }
+            if node.reverse {
+                shimmer = shimmer.reverse(true);
+            }
+            if node.once {
+                shimmer = shimmer.once(true);
+            }
+            if let Some(color) = chart_hex(node.highlight_color.as_deref()) {
+                shimmer = shimmer.highlight_color(color);
+            }
+            chart_layout(shimmer, node).into_any_element()
         }
         "group-box" => {
             let mut box_ = GroupBox::new()

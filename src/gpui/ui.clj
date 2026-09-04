@@ -669,6 +669,39 @@
   ([value opts]
    (merge {:type :progress :value (or value 0)} opts)))
 
+(defn progress-circle
+  "Circular progress. `value` is 0–100. `:loading true` is Kit's
+  indeterminate animation (value is ignored). Optional `:color` hex,
+  `:accessibility-label`, and children painted inside the ring.
+
+  Kit clamps `.value()` to 0..=100. Named `:size` becomes `:control-size`.
+
+  (ui/progress-circle 45)
+  (ui/progress-circle 45 {:size :large :color \"#3366ff\"} (ui/label \"45\"))
+  (ui/progress-circle nil {:loading true})"
+  ([value]
+   {:type :progress-circle :value (or value 0)})
+  ([value opts-or-child]
+   (cond
+     (ui-node? opts-or-child)
+     {:type :progress-circle
+      :value (or value 0)
+      :children (flatten-children [opts-or-child])}
+     (map? opts-or-child)
+     (merge-widget {:type :progress-circle :value (or value 0)} opts-or-child)
+     :else {:type :progress-circle
+            :value (or value 0)
+            :children (flatten-children [opts-or-child])}))
+  ([value opts & children]
+   (if (ui-node? opts)
+     {:type :progress-circle
+      :value (or value 0)
+      :children (flatten-children (cons opts children))}
+     (merge-widget {:type :progress-circle
+                    :value (or value 0)
+                    :children (flatten-children children)}
+                   (if (map? opts) opts {})))))
+
 (defn separator
   "Horizontal (default) or vertical rule. Optional label.
 
@@ -726,6 +759,20 @@
    {:type :skeleton})
   ([opts]
    (merge {:type :skeleton} opts)))
+
+(defn shimmer
+  "Animated loading text (Kit `ShimmerText`). Omitted options keep Kit
+  defaults (2s sweep, relative spread 0.3, looping left-to-right).
+  `:duration` is seconds. `:spread` is a fraction of the text width;
+  `:spread-px` is an absolute half-width and wins when both are set.
+  `:highlight-color` is the sweep hex (layout `:color` is still text).
+
+  (ui/shimmer \"Thinking…\")
+  (ui/shimmer \"Indexing…\" {:duration 1 :spread 0.4 :reverse true})"
+  ([text]
+   {:type :shimmer :text (str text)})
+  ([text opts]
+   (merge-widget {:type :shimmer :text (str text)} opts)))
 
 (defn kbd
   "Keyboard shortcut chip. `stroke` is a GPUI keystroke such as `\"ctrl-s\"`.
@@ -1606,6 +1653,24 @@
                     :value (wire-id value)
                     :items (option-items raw)}
                    opts))))
+
+(defn pagination
+  "Page navigation. `page` is 1-based (Kit default 1). `:total` is the
+  page count (Kit default 1; Kit clamps both to ≥1). `:on-change`
+  receives the new page number. `:compact true` is prev/next only.
+  `:visible-pages` is the max numbered buttons (Kit default 5).
+
+  (ui/pagination 3 {:total 10 :on-change set-page!})
+  (ui/pagination 3 {:total 10 :compact true})"
+  ([page]
+   {:type :pagination :value (or page 1)})
+  ([page on-change-or-opts]
+   (if (map? on-change-or-opts)
+     (merge-widget {:type :pagination :value (or page 1)} on-change-or-opts)
+     {:type :pagination :value (or page 1) :on-change on-change-or-opts}))
+  ([page on-change opts]
+   (merge-widget {:type :pagination :value (or page 1) :on-change on-change}
+                 opts)))
 
 (defn otp-input
   "Fixed-length digit cells. `:on-change` fires when every cell is
