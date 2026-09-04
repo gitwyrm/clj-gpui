@@ -164,7 +164,15 @@ pub fn shimmer_style(node: Option<&Node>) -> Option<ShimmerStyle> {
     Some(style)
 }
 
-/// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, tooltip).
+/// Visible / accessible name for Kit `Button::label`.
+///
+/// Clojure `:label` on `:jump-button-renderer` is rewritten to wire `text`.
+/// `jump-button-label` on the scroller is Kit's tooltip only.
+pub fn jump_button_visible_label(node: &Node) -> Option<&str> {
+    node.text.as_deref().filter(|s| !s.is_empty())
+}
+
+/// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, label, tooltip).
 pub fn apply_jump_button_renderer(mut button: Button, node: &Node) -> Button {
     let chrome = button_chrome(
         node.variant.as_deref(),
@@ -191,6 +199,9 @@ pub fn apply_jump_button_renderer(mut button: Button, node: &Node) -> Button {
     }
     if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
         button = button.icon(icon);
+    }
+    if let Some(label) = jump_button_visible_label(node) {
+        button = button.label(label.to_string());
     }
     if let Some(tooltip) = node.tooltip.clone().filter(|s| !s.is_empty()) {
         button = button.tooltip(tooltip);
@@ -670,5 +681,36 @@ mod tests {
             Axis::Horizontal
         );
         assert_eq!(parse_virtual_list_axis(Some("vertical")), Axis::Vertical);
+    }
+
+    #[test]
+    fn jump_button_renderer_label_uses_text_not_scroller_tooltip() {
+        let tooltip = Node {
+            kind: "message-scroller".into(),
+            jump_button_label: Some("Jump tooltip".into()),
+            jump_button_renderer: Some(Box::new(Node {
+                text: Some("Latest".into()),
+                ..Node::default()
+            })),
+            ..Node::default()
+        };
+        assert_eq!(tooltip.jump_button_label.as_deref(), Some("Jump tooltip"));
+        assert_eq!(
+            jump_button_visible_label(tooltip.jump_button_renderer.as_ref().unwrap()),
+            Some("Latest")
+        );
+
+        let empty = Node {
+            text: Some("".into()),
+            ..Node::default()
+        };
+        assert_eq!(jump_button_visible_label(&empty), None);
+        assert_eq!(jump_button_visible_label(&Node::default()), None);
+
+        let button = apply_jump_button_renderer(
+            Button::new("jump"),
+            tooltip.jump_button_renderer.as_ref().unwrap(),
+        );
+        let _ = button;
     }
 }

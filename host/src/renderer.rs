@@ -3922,7 +3922,12 @@ impl RootView {
                 mapping::apply_jump_button_renderer(button, &chrome)
             });
         }
-        viewport_sized(scroller, node, 400.0, cx)
+        // Kit's root Styled (padding, gap, font/color, bg, border, shadow,
+        // align/justify) lives on MessageScroller. The host wrapper only
+        // supplies viewport/box geometry so content/list/row slots stay
+        // distinct from the scroller root.
+        let scroller = apply_kit_visual_style(scroller, node, cx);
+        viewport_box_sized(scroller, node, 400.0)
     }
 
     fn render_virtual_list(
@@ -4945,6 +4950,24 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
+/// Viewport/box geometry only. Visual Styled stays on the inner Kit widget.
+///
+/// Used by `MessageScroller`, whose root `Styled` is a documented style
+/// boundary separate from `with_content_style` / `with_list_style` /
+/// `with_row_style`. List / table / editor still use `viewport_sized`.
+fn viewport_box_sized(el: impl IntoElement, node: &Node, default_h: f32) -> AnyElement {
+    let mut wrap = v_flex().min_h_0();
+    if node.width.is_none() && node.size.is_none() {
+        wrap = wrap.w_full();
+    }
+    if node.height.is_none() && node.size.is_none() && node.flex.unwrap_or(0.0) < 1.0 {
+        wrap = wrap.h(px(default_h));
+    }
+    apply_outer_box_style(wrap, node)
+        .child(el)
+        .into_any_element()
+}
+
 /// Layout contract for `ui/context-menu`.
 ///
 /// The host is a flex column (`v_flex` + `min_h_0`), never a block `div`.
@@ -5198,6 +5221,20 @@ fn viewport_wrap(node: &Node, default_h: f32) -> ViewportWrap {
         default_height,
         visual: node.padding.is_some() || node.bg.is_some() || node.border.is_some(),
     }
+}
+
+/// MessageScroller wrap contract: box geometry on the host wrapper, visual
+/// Styled on Kit's MessageScroller root.
+#[cfg(test)]
+fn message_scroller_style_split(node: &Node) -> (ViewportWrap, bool) {
+    let mut wrap = viewport_wrap(node, 400.0);
+    let kit_root_visual = wrap.visual
+        || node.gap.is_some()
+        || node.color.is_some()
+        || node.font_size.is_some()
+        || node.shadow;
+    wrap.visual = false;
+    (wrap, kit_root_visual)
 }
 
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
@@ -5955,10 +5992,13 @@ mod accordion_control_tests {
 #[cfg(test)]
 mod widget_wrap_tests {
     use super::{
-        Node, content_wrap, context_menu_wrap, outer_layout, row_intrinsic_wrap, viewport_wrap,
+        Node, content_wrap, context_menu_wrap, message_scroller_style_split, outer_layout,
+        row_intrinsic_wrap, viewport_wrap,
     };
     use crate::extra;
+    use crate::mapping;
     use crate::protocol::Item;
+    use gpui_kit::{Styled, div};
     use serde_json::json;
 
     #[test]
@@ -6105,6 +6145,43 @@ mod widget_wrap_tests {
         assert!(wrap.flex_fill);
         assert!(wrap.fill_width);
         assert_eq!(wrap.default_height, None);
+    }
+
+    #[test]
+    fn message_scroller_root_owns_visual_style() {
+        let node = Node {
+            kind: "message-scroller".into(),
+            padding: Some(8.0),
+            gap: Some(4.0),
+            bg: Some("#112233".into()),
+            border: Some("#445566".into()),
+            height: Some(320.0),
+            ..Node::default()
+        };
+        let (wrap, kit_root_visual) = message_scroller_style_split(&node);
+        assert_eq!(wrap.height, Some(320.0));
+        assert!(wrap.fill_width);
+        assert_eq!(wrap.default_height, None);
+        assert!(
+            !wrap.visual,
+            "visual padding/bg/border must stay on Kit MessageScroller root"
+        );
+        assert!(kit_root_visual);
+
+        let mut root = mapping::apply_visual_style(div(), &node);
+        assert!(root.style().padding.is_some());
+        assert!(root.style().background.is_some());
+
+        let omitted = Node {
+            kind: "message-scroller".into(),
+            padding: Some(8.0),
+            ..Node::default()
+        };
+        let (wrap, kit_root_visual) = message_scroller_style_split(&omitted);
+        assert_eq!(wrap.default_height, Some(400.0));
+        assert!(wrap.fill_width);
+        assert!(!wrap.visual);
+        assert!(kit_root_visual);
     }
 
     #[test]

@@ -997,7 +997,8 @@ pub struct Node {
     /// MessageScroller: Kit `jump_button`. Omitted leaves Kit's true.
     #[serde(default, rename = "jump-button")]
     pub jump_button: Option<bool>,
-    /// MessageScroller: Kit `with_jump_button_label`.
+    /// MessageScroller: Kit `with_jump_button_label` (tooltip only).
+    /// The Button visible/accessible name is `jump-button-renderer` `text`.
     #[serde(default, rename = "jump-button-label")]
     pub jump_button_label: Option<String>,
     /// MessageScroller: Kit `with_jump_button_transition` in seconds.
@@ -1034,7 +1035,8 @@ pub struct Node {
     /// MessageScroller: Kit `with_jump_button_style`.
     #[serde(default, rename = "jump-button-style")]
     pub jump_button_style: Option<Box<Node>>,
-    /// MessageScroller: Kit `with_jump_button_renderer` chrome (variant/size/icon/tooltip).
+    /// MessageScroller: Kit `with_jump_button_renderer` chrome.
+    /// `text` is Kit `Button::label` (visible / accessible name).
     #[serde(default, rename = "jump-button-renderer")]
     pub jump_button_renderer: Option<Box<Node>>,
 }
@@ -2141,17 +2143,32 @@ mod tests {
 
         let scroller_styles: Node = serde_json::from_value(json!({
             "type": "message-scroller",
+            "jump-button-label": "Jump tooltip",
             "content-style": {"padding": 8},
             "list-style": {"gap": 4},
             "row-style": {"padding": 2},
             "jump-button-style": {"bg": "#1a1b26"},
             "jump-button-renderer": {
+                "text": "Latest",
                 "variant": "primary",
                 "control-size": "small",
                 "icon": "arrow-down"
             }
         }))
         .unwrap();
+        assert_eq!(
+            scroller_styles.jump_button_label.as_deref(),
+            Some("Jump tooltip")
+        );
+        assert_eq!(
+            scroller_styles
+                .jump_button_renderer
+                .as_ref()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Latest")
+        );
         assert_eq!(
             scroller_styles.content_style.as_ref().unwrap().padding,
             Some(8.0)

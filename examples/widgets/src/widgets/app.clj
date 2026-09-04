@@ -586,9 +586,10 @@
     (ui/button "Append" #(swap! !state update :chat-count inc))
     (ui/label (str chat-count " scroller rows") {:font-size 13}))
    (apply ui/message-scroller
-          {:id "chat" :height 280 :jump-button-label "Latest"
+          {:id "chat" :height 280 :padding 8
+           :jump-button-label "Jump to latest"
            :content-style {:padding 4}
-           :jump-button-renderer {:size :small :icon :arrow-down}}
+           :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}}
           (map chat-message (chat-row chat-count)))))
 
 (defn- docs-panel [_]

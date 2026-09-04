@@ -2138,11 +2138,20 @@
 
 (defn- style-slot
   "Nested Kit style / shimmer / jump-button-renderer map. Named `:size`
-  becomes `:control-size` so pixel `:size` stays numeric."
+  becomes `:control-size` so pixel `:size` stays numeric. `:label` is
+  rewritten to `:text` so a jump-button renderer can use Kit
+  `Button::label` (the scroller `:jump-button-label` is the tooltip)."
   [m]
   (when (map? m)
-    (let [m (apply-control-size m)]
-      (cond-> m
+    (let [m (apply-control-size m)
+          label (:label m)
+          text (cond
+                 (contains? m :text) (:text m)
+                 (keyword? label) (name label)
+                 (some? label) (str label)
+                 :else nil)]
+      (cond-> (dissoc m :label)
+        (some? text) (assoc :text text)
         (keyword? (:variant m)) (update :variant name)
         (keyword? (:icon m)) (update :icon wire-id)
         (keyword? (:align m)) (update :align name)
@@ -2544,15 +2553,23 @@
   `:jump-button` keep Kit true. `:jump-button-transition` is seconds
   (Kit default 0.2). `:bottom-fade` is a hex color. Nested style maps
   `:content-style`, `:list-style`, `:row-style`, and
-  `:jump-button-style` are Kit `with_*_style`. `:jump-button-renderer`
-  is button chrome (`:variant`, `:size`, `:icon`, `:tooltip`) for
-  `with_jump_button_renderer`. `scroll_to_item` / `scroll_to_end` are
-  not wrapped; child-list sync cannot express programmatic navigation
-  to an existing row. Scroller rows paint the static overlay subset
-  plus this chat family (not list / data-table / editor).
+  `:jump-button-style` are Kit `with_*_style`. Ordinary visual keys
+  (`:padding`, `:gap`, `:bg`, `:border`, …) are Kit's MessageScroller
+  root `Styled`, not the host viewport wrapper. `:jump-button-label`
+  is the jump button tooltip. `:jump-button-renderer` is button chrome
+  (`:variant`, `:size`, `:icon`, `:tooltip`, `:label` / `:text`) for
+  `with_jump_button_renderer`; `:label` becomes wire `:text` and is
+  Kit `Button::label` (visible / accessible name). `scroll_to_item` /
+  `scroll_to_end` are not wrapped; child-list sync cannot express
+  programmatic navigation to an existing row. Kit's constructor takes
+  an arbitrary row renderer (`IntoElement`); scroller rows here paint
+  the static overlay subset plus this chat family (not list /
+  data-table / editor) because they cannot re-enter `RootView`.
 
   (ui/message-scroller {:id \"chat\" :height 400
-                        :jump-button-renderer {:variant :primary
+                        :jump-button-label \"Jump tooltip\"
+                        :jump-button-renderer {:label \"Latest\"
+                                              :variant :primary
                                               :size :small
                                               :icon :arrow-down}}
     (ui/message {:id \"m1\"} (ui/bubble \"Hi\")))"

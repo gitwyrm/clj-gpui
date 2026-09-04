@@ -1086,7 +1086,14 @@
       (is (= "primary" (get-in scroller [:jump-button-renderer :variant])))
       (is (= "small" (get-in scroller [:jump-button-renderer :control-size])))
       (is (nil? (get-in scroller [:jump-button-renderer :size])))
-      (is (= "arrow-down" (get-in scroller [:jump-button-renderer :icon]))))))
+      (is (= "arrow-down" (get-in scroller [:jump-button-renderer :icon])))))
+  (testing "jump-button-label is the tooltip; renderer :label is Button.label"
+    (let [n (ui/message-scroller {:id "chat"
+                                  :jump-button-label "Jump tooltip"
+                                  :jump-button-renderer {:label "Latest"}})]
+      (is (= "Jump tooltip" (:jump-button-label n)))
+      (is (= "Latest" (get-in n [:jump-button-renderer :text])))
+      (is (nil? (get-in n [:jump-button-renderer :label]))))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
