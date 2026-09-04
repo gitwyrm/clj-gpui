@@ -1,17 +1,21 @@
 //! Mapping from clj-gpui JSON node fields onto GPUI Kit 0.6 types.
 
 use crate::catalog;
-use gpui::Axis;
+use crate::protocol::Node;
+use gpui::{Axis, FontWeight, Hsla, StyleRefinement, Styled, div, px};
 use gpui_component::{
-    IconName, Placement, Side, Size,
-    button::{ButtonVariants, ToggleVariant},
+    Colorize as _, Disableable as _, IconName, Placement, Selectable as _, Side, Sizable as _,
+    Size,
+    button::{Button, ButtonVariants, ToggleVariant},
     group_box::GroupBoxVariant,
+    shimmer::ShimmerStyle,
     slider::SliderScale,
     tab::TabVariant,
     tag::TagVariant,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
+use std::time::Duration;
 
 pub fn parse_scale(value: Option<&str>) -> Size {
     match value.map(catalog::normalize) {
@@ -23,6 +27,175 @@ pub fn parse_scale(value: Option<&str>) -> Size {
         },
         None => Size::Medium,
     }
+}
+
+/// Named control size without the Medium default `parse_scale(None)` uses.
+///
+/// `AttachmentMedia` must keep `size: None` so `layout()` can inherit the
+/// parent `Attachment` size. Call this instead of `parse_scale` when the
+/// wire field is optional.
+pub fn parse_named_size(value: Option<&str>) -> Option<Size> {
+    value
+        .filter(|name| !name.is_empty())
+        .map(|name| parse_scale(Some(name)))
+}
+
+pub fn parse_hsla(value: &str) -> Option<Hsla> {
+    let value = value.trim();
+    Hsla::parse_hex(value).ok().or_else(|| {
+        if value.starts_with('#') {
+            None
+        } else {
+            Hsla::parse_hex(&format!("#{value}")).ok()
+        }
+    })
+}
+
+/// Kit `Styled` visual keys: gap, padding, type, colors, alignment.
+/// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
+pub fn apply_visual_style<E: Styled>(mut el: E, node: &Node) -> E {
+    if let Some(gap) = node.gap {
+        el = el.gap(px(gap));
+    }
+    if let Some(padding) = node.padding {
+        el = el.p(px(padding));
+    }
+    if let Some(font_size) = node.font_size {
+        el = el.text_size(px(font_size));
+    }
+    if let Some(family) = &node.font_family {
+        el = el.font_family(family.clone());
+    }
+    if let Some(weight) = &node.font_weight {
+        el = match weight.as_str() {
+            "thin" => el.font_weight(FontWeight::THIN),
+            "extralight" | "extra-light" | "ultralight" => el.font_weight(FontWeight::EXTRA_LIGHT),
+            "bold" => el.font_weight(FontWeight::BOLD),
+            "semibold" | "semi-bold" => el.font_weight(FontWeight::SEMIBOLD),
+            "medium" => el.font_weight(FontWeight::MEDIUM),
+            "light" => el.font_weight(FontWeight::LIGHT),
+            _ => el.font_weight(FontWeight::NORMAL),
+        };
+    }
+    if let Some(color) = node.color.as_deref().and_then(parse_hsla) {
+        el = el.text_color(color);
+    }
+    if let Some(bg) = node.bg.as_deref().and_then(parse_hsla) {
+        el = el.bg(bg);
+    }
+    if let Some(border) = node.border.as_deref().and_then(parse_hsla) {
+        el = el.border_1().border_color(border);
+    }
+    if let Some(border) = node.border_bottom.as_deref().and_then(parse_hsla) {
+        el = el.border_b_1().border_color(border);
+    }
+    if node.strikethrough {
+        el = el.line_through();
+    }
+    if node.shadow {
+        el = el.shadow_lg();
+    }
+    match node.align.as_deref() {
+        Some("center") => el = el.items_center(),
+        Some("end") => el = el.items_end(),
+        Some("start") => el = el.items_start(),
+        _ => {}
+    }
+    match node.justify.as_deref() {
+        Some("center") => el = el.justify_center(),
+        Some("end") | Some("right") => el = el.justify_end(),
+        Some("between") => el = el.justify_between(),
+        _ => {}
+    }
+    el
+}
+
+/// Clojure box geometry (`:width` / `:height` / `:size` / `:flex`).
+pub fn apply_box_style<E: Styled>(mut el: E, node: &Node) -> E {
+    if let Some(width) = node.width {
+        el = el.w(px(width));
+    }
+    if let Some(height) = node.height {
+        el = el.h(px(height));
+    }
+    if let Some(size) = node.size {
+        el = el.size(px(size));
+    }
+    if node.flex.unwrap_or(0.0) >= 1.0 {
+        el = el.flex_1().min_w_0().min_h_0();
+    }
+    el
+}
+
+/// Visual + box surface used by first-class Kit nodes (including chat).
+/// Theme fallback that reads `cx.theme()` stays in `renderer`.
+pub fn apply_styled<E: Styled>(el: E, node: &Node) -> E {
+    apply_box_style(apply_visual_style(el, node), node)
+}
+
+/// Build a `StyleRefinement` from a nested Clojure style map.
+pub fn style_refinement(node: Option<&Node>) -> Option<StyleRefinement> {
+    let node = node?;
+    let mut dummy = apply_styled(div(), node);
+    Some(std::mem::take(dummy.style()))
+}
+
+/// Kit `ShimmerStyle` from the existing shimmer option vocabulary.
+pub fn shimmer_style(node: Option<&Node>) -> Option<ShimmerStyle> {
+    let node = node?;
+    let mut style = ShimmerStyle::new();
+    if let Some(secs) = node.duration.filter(|n| n.is_finite() && *n >= 0.0) {
+        style = style.duration(Duration::from_secs_f32(secs));
+    }
+    if let Some(color) = node.highlight_color.as_deref().and_then(parse_hsla) {
+        style = style.highlight_color(color);
+    }
+    if let Some(pixels) = node.spread_px.filter(|n| n.is_finite()) {
+        style = style.spread(px(pixels));
+    } else if let Some(fraction) = node.spread.filter(|n| n.is_finite()) {
+        style = style.spread(fraction);
+    }
+    if node.reverse {
+        style = style.reverse(true);
+    }
+    if node.once {
+        style = style.once(true);
+    }
+    Some(style)
+}
+
+/// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, tooltip).
+pub fn apply_jump_button_renderer(mut button: Button, node: &Node) -> Button {
+    let chrome = button_chrome(
+        node.variant.as_deref(),
+        node.primary,
+        node.outline,
+        node.selected,
+        node.control_size.as_deref(),
+    );
+    button = apply_named_button_variant(button, chrome.variant);
+    if chrome.outline {
+        button = button.outline();
+    }
+    if chrome.selected {
+        button = button.selected(true);
+    }
+    if let Some(size) = chrome.size {
+        button = button.with_size(size);
+    }
+    if node.compact {
+        button = button.compact();
+    }
+    if node.disabled {
+        button = button.disabled(true);
+    }
+    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+        button = button.icon(icon);
+    }
+    if let Some(tooltip) = node.tooltip.clone().filter(|s| !s.is_empty()) {
+        button = button.tooltip(tooltip);
+    }
+    button
 }
 
 pub fn parse_axis(value: Option<&str>) -> Axis {
@@ -338,6 +511,15 @@ mod tests {
         assert_eq!(parse_scale(Some("LARGE")), Size::Large);
         assert_eq!(parse_scale(Some("medium")), Size::Medium);
         assert_eq!(parse_scale(None), Size::Medium);
+    }
+
+    #[test]
+    fn named_size_stays_none_when_omitted() {
+        assert_eq!(parse_named_size(None), None);
+        assert_eq!(parse_named_size(Some("")), None);
+        assert_eq!(parse_named_size(Some("lg")), Some(Size::Large));
+        assert_eq!(parse_named_size(Some("small")), Some(Size::Small));
+        assert_ne!(parse_named_size(None), Some(parse_scale(None)));
     }
 
     #[test]

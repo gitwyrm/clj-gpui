@@ -2136,6 +2136,20 @@
       [b (cons a (drop 2 args))]
       :else (leading-opts args))))
 
+(defn- style-slot
+  "Nested Kit style / shimmer / jump-button-renderer map. Named `:size`
+  becomes `:control-size` so pixel `:size` stays numeric."
+  [m]
+  (when (map? m)
+    (let [m (apply-control-size m)]
+      (cond-> m
+        (keyword? (:variant m)) (update :variant name)
+        (keyword? (:icon m)) (update :icon wire-id)
+        (keyword? (:align m)) (update :align name)
+        (keyword? (:justify m)) (update :justify name)
+        (keyword? (:font-weight m)) (update :font-weight name)
+        (keyword? (:font-family m)) (update :font-family str)))))
+
 (defn- chat-opts
   [opts]
   (let [opts (apply-control-size (or opts {}))]
@@ -2147,7 +2161,15 @@
       (keyword? (:orientation opts)) (update :orientation name)
       (keyword? (:loading-style opts)) (update :loading-style name)
       (keyword? (:role opts)) (update :role name)
-      (some? (:icon opts)) (assoc :icon (wire-id (:icon opts))))))
+      (some? (:icon opts)) (assoc :icon (wire-id (:icon opts)))
+      (some? (:stack-style opts)) (update :stack-style style-slot)
+      (some? (:shimmer-style opts)) (update :shimmer-style style-slot)
+      (some? (:separator-style opts)) (update :separator-style style-slot)
+      (some? (:content-style opts)) (update :content-style style-slot)
+      (some? (:list-style opts)) (update :list-style style-slot)
+      (some? (:row-style opts)) (update :row-style style-slot)
+      (some? (:jump-button-style opts)) (update :jump-button-style style-slot)
+      (some? (:jump-button-renderer opts)) (update :jump-button-renderer style-slot))))
 
 (defn- ensure-slot
   [pred ctor x]
@@ -2206,9 +2228,10 @@
 
 (defn bubble-content
   "Visible bubble surface (padding, radius, colors). Direct children of
-  `ui/bubble` already go here.
+  `ui/bubble` append through Kit `ParentElement` after an explicit
+  content slot, so this node's style is kept.
 
-  (ui/bubble-content \"Hello\")"
+  (ui/bubble-content {:bg \"#1a1b26\"} \"Hello\")"
   [& args]
   (let [[opts children] (text-then-opts args)]
     (assoc (chat-opts opts)
@@ -2271,12 +2294,13 @@
 (defn message
   "Aligned chat row. Kit `Message`. Named `:avatar`, `:header`,
   `:content`, and `:footer` expand to slot nodes; they are not sheet
-  `:footer`. `:alignment` is `:start` (default) or `:end`. Bare
+  `:footer`. `:alignment` is `:start` (default) or `:end`.   Bare
   children wrap in `ui/message-content`. A `ui/bubble` inside content
-  is typed so Ghost still strips header/footer inset.
-  `with_stack_style` is not wrapped.
+  is typed so Ghost still strips header/footer inset. `:stack-style` is
+  a nested style map for Kit `with_stack_style`.
 
   (ui/message {:alignment :end
+               :stack-style {:gap 8}
                :avatar (ui/avatar \"You\")
                :header (ui/message-header \"You\" \"10:25 AM\")
                :footer (ui/message-footer \"Delivered\")}
@@ -2322,27 +2346,62 @@
            :type :message-group
            :children (flatten-children children))))
 
+(defn attachment-media-overlay
+  "Kit `AttachmentMedia::overlay` — an absolute centered layer. Ordinary
+  children of `ui/attachment-media` stay `ParentElement::child`, even
+  when `:src` is set.
+
+  (ui/attachment-media {:src \"preview.png\"}
+    (ui/attachment-media-overlay (ui/icon :loader)))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment-media-overlay
+           :children (flatten-children children))))
+
 (defn attachment-media
   "Attachment preview. `:src` is a Kit image (http URL or file path).
-  With `:src`, children are overlays; without it they are icon children.
+  Ordinary children are always `ParentElement::child`. Kit `.overlay`
+  is `ui/attachment-media-overlay` or the named `:overlay` slot. Named
+  `:size` becomes `:control-size`; omit it so media inherits the parent
+  `ui/attachment` size.
 
-  (ui/attachment-media {:src \"preview.png\"})
+  (ui/attachment-media {:src \"preview.png\" :size :lg})
+  (ui/attachment-media {:src \"preview.png\"
+                        :overlay (ui/icon :loader)})
   (ui/attachment-media (ui/icon :file))"
   [& args]
   (let [[opts children] (leading-opts args)
         src (when-let [s (:src opts)]
               (let [text (str s)]
-                (when (seq text) text)))]
-    (cond-> (assoc (chat-opts (dissoc opts :src))
+                (when (seq text) text)))
+        overlay (:overlay opts)
+        overlays (cond
+                   (nil? overlay) []
+                   (and (sequential? overlay)
+                        (not (string? overlay))
+                        (not (ui-node? overlay)))
+                   (mapv #(ensure-slot (fn [x] (node-type? x "attachment-media-overlay"))
+                                       attachment-media-overlay
+                                       %)
+                         overlay)
+                   :else [(ensure-slot (fn [x] (node-type? x "attachment-media-overlay"))
+                                       attachment-media-overlay
+                                       overlay)])
+        kids (into overlays (flatten-children children))]
+    (cond-> (assoc (chat-opts (dissoc opts :src :overlay))
                    :type :attachment-media
-                   :children (flatten-children children))
+                   :children kids)
       (some? src) (assoc :src src))))
 
 (defn attachment-title
   "Attachment title. In-progress status inherits a loading shimmer from
-  the parent attachment.
+  the parent attachment. `:shimmer-style` is Kit `ShimmerStyle`
+  (`:duration`, `:highlight-color`, `:spread` / `:spread-px`,
+  `:reverse`, `:once`).
 
-  (ui/attachment-title \"report.pdf\")"
+  (ui/attachment-title \"report.pdf\")
+  (ui/attachment-title {:shimmer-style {:duration 1.5}} \"report.pdf\")"
   [& args]
   (let [[opts children] (text-then-opts args)
         opts (chat-opts opts)
@@ -2456,11 +2515,13 @@
   "Conversation status / day separator. `:variant` is `:plain`
   (default), `:separator`, or `:border`. `:loading true` plus
   `:loading-style` `:spinner` (default) or `:shimmer`. `:role :status`
-  takes effect with `:id`. Custom `ShimmerStyle` / separator
-  `StyleRefinement` are not wrapped.
+  takes effect with `:id`. `:shimmer-style` is Kit `ShimmerStyle`.
+  `:separator-style` is a nested style map for the decorative lines.
 
   (ui/marker \"Today\" {:variant :separator})
-  (ui/marker {:variant :plain :loading true} \"Thinking…\")"
+  (ui/marker {:variant :plain :loading true
+              :shimmer-style {:duration 1.2 :reverse true}}
+    \"Thinking…\")"
   [& args]
   (let [[opts children] (text-then-opts args)
         opts (chat-opts opts)
@@ -2481,12 +2542,19 @@
   for prepend (history) or append without `reset`. Index-only keys
   make prepend look like a replace. Omitted `:scrollbar` /
   `:jump-button` keep Kit true. `:jump-button-transition` is seconds
-  (Kit default 0.2). `:bottom-fade` is a hex color. Custom jump-button
-  renderer and `with_*_style` refinements are not wrapped. Scroller
-  rows paint the static overlay subset plus this chat family (not
-  list / data-table / editor).
+  (Kit default 0.2). `:bottom-fade` is a hex color. Nested style maps
+  `:content-style`, `:list-style`, `:row-style`, and
+  `:jump-button-style` are Kit `with_*_style`. `:jump-button-renderer`
+  is button chrome (`:variant`, `:size`, `:icon`, `:tooltip`) for
+  `with_jump_button_renderer`. `scroll_to_item` / `scroll_to_end` are
+  not wrapped; child-list sync cannot express programmatic navigation
+  to an existing row. Scroller rows paint the static overlay subset
+  plus this chat family (not list / data-table / editor).
 
-  (ui/message-scroller {:id \"chat\" :height 400}
+  (ui/message-scroller {:id \"chat\" :height 400
+                        :jump-button-renderer {:variant :primary
+                                              :size :small
+                                              :icon :arrow-down}}
     (ui/message {:id \"m1\"} (ui/bubble \"Hi\")))"
   [& args]
   (let [[opts children] (leading-opts args)]

@@ -35,6 +35,7 @@
   (is (some? (ns-resolve 'gpui.ui 'bubble)))
   (is (some? (ns-resolve 'gpui.ui 'bubble-reactions)))
   (is (some? (ns-resolve 'gpui.ui 'attachment)))
+  (is (some? (ns-resolve 'gpui.ui 'attachment-media-overlay)))
   (is (some? (ns-resolve 'gpui.ui 'marker)))
   (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
   (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
@@ -1030,7 +1031,62 @@
       (is (= "chat" (:id n)))
       (is (= 400 (:height n)))
       (is (false? (:jump-button n)))
-      (is (= ["m1" "m2"] (mapv :id (:children n)))))))
+      (is (= ["m1" "m2"] (mapv :id (:children n))))))
+  (testing "attachment-media size inherit vs override, and overlay vs child"
+    (let [parent (ui/attachment {:size :small}
+                                (ui/attachment-media {:src "a.png" :size :lg})
+                                (ui/attachment-media {:src "b.png"}))]
+      (is (= "small" (:control-size parent)))
+      (is (= "lg" (get-in parent [:children 0 :control-size])))
+      (is (nil? (get-in parent [:children 1 :control-size]))))
+    (let [with-src (ui/attachment-media {:src "preview.png"} (ui/icon :file))
+          overlay (ui/attachment-media {:src "preview.png"
+                                        :overlay (ui/icon :loader)}
+                                       (ui/icon :file))
+          named (ui/attachment-media-overlay (ui/icon :loader))]
+      (is (= :icon (get-in with-src [:children 0 :type])))
+      (is (= :attachment-media-overlay (get-in overlay [:children 0 :type])))
+      (is (= :icon (get-in overlay [:children 1 :type])))
+      (is (= :attachment-media-overlay (:type named)))))
+  (testing "explicit bubble-content style is kept beside a direct child"
+    (let [n (ui/bubble {}
+                       (ui/bubble-content {:bg "#111111" :padding 8} "hello")
+                       "extra")]
+      (is (= :bubble-content (get-in n [:children 0 :type])))
+      (is (= "#111111" (get-in n [:children 0 :bg])))
+      (is (= 8 (get-in n [:children 0 :padding])))
+      (is (= :label (get-in n [:children 1 :type])))
+      (is (= "extra" (get-in n [:children 1 :text])))))
+  (testing "stack, shimmer, separator, and scroller style slots"
+    (let [msg (ui/message {:stack-style {:gap 8 :padding 4 :bg "#1a1b26"}}
+                          (ui/bubble "Hi"))
+          title (ui/attachment-title {:shimmer-style {:duration 1.5 :reverse true}}
+                                     "report.pdf")
+          marker (ui/marker "Today" {:variant :separator
+                                     :separator-style {:color "#7aa2f7"}
+                                     :shimmer-style {:spread 0.4 :once true}})
+          scroller (ui/message-scroller {:id "chat"
+                                         :content-style {:padding 8}
+                                         :list-style {:gap 4}
+                                         :row-style {:padding 2}
+                                         :jump-button-style {:bg "#111111"}
+                                         :jump-button-renderer {:variant :primary
+                                                                :size :small
+                                                                :icon :arrow-down}}
+                                        (ui/message {:id "m1"} (ui/bubble "Hi")))]
+      (is (= 8 (get-in msg [:stack-style :gap])))
+      (is (= "#1a1b26" (get-in msg [:stack-style :bg])))
+      (is (= 1.5 (get-in title [:shimmer-style :duration])))
+      (is (true? (get-in title [:shimmer-style :reverse])))
+      (is (= "#7aa2f7" (get-in marker [:separator-style :color])))
+      (is (= 0.4 (get-in marker [:shimmer-style :spread])))
+      (is (true? (get-in marker [:shimmer-style :once])))
+      (is (= 8 (get-in scroller [:content-style :padding])))
+      (is (= 4 (get-in scroller [:list-style :gap])))
+      (is (= "primary" (get-in scroller [:jump-button-renderer :variant])))
+      (is (= "small" (get-in scroller [:jump-button-renderer :control-size])))
+      (is (nil? (get-in scroller [:jump-button-renderer :size])))
+      (is (= "arrow-down" (get-in scroller [:jump-button-renderer :icon]))))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

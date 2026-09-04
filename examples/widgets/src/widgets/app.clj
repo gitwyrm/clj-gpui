@@ -553,6 +553,7 @@
    (ui/label "Kit Message / Bubble" {:font-size 16 :font-weight :semibold})
    (ui/message-group
     (ui/message {:alignment :start
+                 :stack-style {:gap 6}
                  :avatar (ui/avatar "Ada")
                  :header (ui/message-header "Ada" "10:24 AM")}
                 (ui/bubble "Incoming" {:variant :secondary}))
@@ -560,23 +561,34 @@
                  :avatar (ui/avatar "You")
                  :header (ui/message-header "You" "10:25 AM")
                  :footer (ui/message-footer "Delivered")}
-                (ui/bubble "Outgoing")))
-   (ui/marker "Today" {:variant :separator :id "day"})
+                (ui/bubble {}
+                           (ui/bubble-content {:bg "#1a1b26"} "Outgoing")
+                           "edited")))
+   (ui/marker "Today" {:variant :separator :id "day"
+                       :separator-style {:color "#7aa2f7"}})
    (ui/message {:alignment :start
                 :header (ui/message-header {:content-inset false} "System")}
                (ui/bubble "Ghost system notice" {:variant :ghost}))
    (ui/attachment {:id "file-1" :status :uploading :size :small}
                   (ui/attachment-media (ui/icon :file))
                   (ui/attachment-content
-                   (ui/attachment-title "report.pdf")
+                   (ui/attachment-title {:shimmer-style {:duration 1.2}}
+                                        "report.pdf")
                    (ui/attachment-description "Uploading"))
                   (ui/attachment-actions (ui/button "Cancel" {:compact true})))
+   (ui/attachment {:id "img-1" :size :small}
+                  (ui/attachment-media {:src "https://avatars.githubusercontent.com/u/5518?s=64"
+                                        :size :lg
+                                        :overlay (ui/icon :search)})
+                  (ui/attachment-content (ui/attachment-title "preview.png")))
    (ui/hstack
     {:gap 8 :align :center}
     (ui/button "Append" #(swap! !state update :chat-count inc))
     (ui/label (str chat-count " scroller rows") {:font-size 13}))
    (apply ui/message-scroller
-          {:id "chat" :height 280 :jump-button-label "Latest"}
+          {:id "chat" :height 280 :jump-button-label "Latest"
+           :content-style {:padding 4}
+           :jump-button-renderer {:size :small :icon :arrow-down}}
           (map chat-message (chat-row chat-count)))))
 
 (defn- docs-panel [_]

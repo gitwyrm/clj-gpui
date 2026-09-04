@@ -7,9 +7,9 @@
 use crate::catalog;
 use crate::mapping;
 use crate::protocol::{Cmd, Node};
-use gpui::{AnyElement, Hsla, IntoElement, ParentElement, SharedString, Styled, px};
+use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
 use gpui_component::{
-    Colorize as _, Disableable as _, Icon, Selectable as _, Sizable as _,
+    Disableable as _, Icon, Selectable as _, Sizable as _,
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
         AttachmentMedia, AttachmentStatus, AttachmentTitle,
@@ -51,6 +51,7 @@ pub fn is_chat_kind(kind: &str) -> bool {
             | "bubble-reactions"
             | "attachment"
             | "attachment-media"
+            | "attachment-media-overlay"
             | "attachment-content"
             | "attachment-title"
             | "attachment-description"
@@ -77,6 +78,7 @@ pub fn render_any<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> AnyElem
         "bubble-reactions" => render_bubble_reactions(p, node, path).into_any_element(),
         "attachment" => render_attachment(p, node, path).into_any_element(),
         "attachment-media" => render_attachment_media(p, node, path).into_any_element(),
+        "attachment-media-overlay" => render_media_overlay_inner(p, node, path),
         "attachment-content" => render_attachment_content(p, node, path).into_any_element(),
         "attachment-title" => render_attachment_title(node).into_any_element(),
         "attachment-description" => render_attachment_description(node).into_any_element(),
@@ -129,8 +131,81 @@ pub fn scroller_item_id(node: &Node, index: usize) -> String {
 pub fn node_fingerprint(node: &Node) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{node:?}").hash(&mut hasher);
+    format!("{:?}", strip_callback_ids(node)).hash(&mut hasher);
     hasher.finish()
+}
+
+fn strip_callback_ids(node: &Node) -> Node {
+    let mut n = node.clone();
+    n.on_click = None;
+    n.on_change = None;
+    n.on_release = None;
+    n.on_submit = None;
+    n.on_double_click = None;
+    n.on_blur = None;
+    n.on_escape = None;
+    n.on_close = None;
+    n.on_copied = None;
+    n.on_ok = None;
+    n.on_cancel = None;
+    n.on_confirm = None;
+    n.on_open_change = None;
+    n.children = n.children.iter().map(strip_callback_ids).collect();
+    n.trigger = n.trigger.as_deref().map(strip_callback_ids).map(Box::new);
+    n.footer = n.footer.as_deref().map(strip_callback_ids).map(Box::new);
+    n.stack_style = n
+        .stack_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.shimmer_style = n
+        .shimmer_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.separator_style = n
+        .separator_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.content_style = n
+        .content_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.list_style = n
+        .list_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.row_style = n.row_style.as_deref().map(strip_callback_ids).map(Box::new);
+    n.jump_button_style = n
+        .jump_button_style
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n.jump_button_renderer = n
+        .jump_button_renderer
+        .as_deref()
+        .map(strip_callback_ids)
+        .map(Box::new);
+    n
+}
+
+/// True when rows that already existed in `prev` changed their render fingerprint.
+///
+/// Child-list splice (append/prepend) does not remeasure by itself. Streaming
+/// text, upload status, or reactions on a surviving row still need `remeasure`.
+pub fn scroller_survivors_changed(edit: &ScrollerEdit, prev_fps: &[u64], next_fps: &[u64]) -> bool {
+    match edit {
+        ScrollerEdit::Leave => prev_fps != next_fps,
+        ScrollerEdit::Reset { .. } => false,
+        ScrollerEdit::Append(added) => {
+            let keep = next_fps.len().saturating_sub(*added);
+            prev_fps != next_fps.get(..keep).unwrap_or(&[])
+        }
+        ScrollerEdit::Prepend(added) => prev_fps != next_fps.get(*added..).unwrap_or(&[]),
+    }
 }
 
 pub fn parse_message_alignment(value: Option<&str>) -> Option<MessageAlignment> {
@@ -195,34 +270,8 @@ fn parse_marker_role(value: Option<&str>) -> Option<gpui::Role> {
     }
 }
 
-fn apply_node_style<E: Styled>(mut el: E, node: &Node) -> E {
-    if let Some(gap) = node.gap {
-        el = el.gap(px(gap));
-    }
-    if let Some(padding) = node.padding {
-        el = el.p(px(padding));
-    }
-    if let Some(width) = node.width {
-        el = el.w(px(width));
-    }
-    if let Some(height) = node.height {
-        el = el.h(px(height));
-    }
-    if let Some(color) = node
-        .color
-        .as_deref()
-        .and_then(|s| Hsla::parse_hex(s.trim()).ok())
-    {
-        el = el.text_color(color);
-    }
-    if let Some(bg) = node
-        .bg
-        .as_deref()
-        .and_then(|s| Hsla::parse_hex(s.trim()).ok())
-    {
-        el = el.bg(bg);
-    }
-    el
+fn apply_node_style<E: Styled>(el: E, node: &Node) -> E {
+    mapping::apply_styled(el, node)
 }
 
 fn child_path(path: &str, index: usize) -> String {
@@ -281,6 +330,9 @@ fn render_message<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Message
     let mut msg = Message::new();
     if let Some(alignment) = parse_message_alignment(node.alignment.as_deref()) {
         msg = msg.alignment(alignment);
+    }
+    if let Some(style) = mapping::style_refinement(node.stack_style.as_deref()) {
+        msg = msg.with_stack_style(style);
     }
     let mut avatar_slot = None;
     let mut avatar_el = None;
@@ -435,18 +487,16 @@ fn render_bubble<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Bubble {
     if let Some((child, child_path)) = content_slot {
         bubble = bubble.content(render_bubble_content(p, child, &child_path));
     }
-    if !kids.is_empty() || (!has_content_slot && node.text.is_some()) {
-        let mut content = BubbleContent::new();
-        if kids.is_empty() {
+    if kids.is_empty() {
+        if !has_content_slot {
             if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
-                content = content.child(text);
-            }
-        } else {
-            for (child, child_path) in kids {
-                content = content.child(paint_child(p, child, &child_path));
+                bubble = bubble.child(text);
             }
         }
-        bubble = bubble.content(content);
+    } else {
+        for (child, child_path) in kids {
+            bubble = bubble.child(paint_child(p, child, &child_path));
+        }
     }
     if let Some((child, child_path)) = reactions {
         bubble = bubble.reactions(render_bubble_reactions(p, child, &child_path));
@@ -553,17 +603,42 @@ fn render_attachment<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Atta
 
 fn render_attachment_media<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> AttachmentMedia {
     let mut media = AttachmentMedia::new();
+    if let Some(size) = mapping::parse_named_size(node.control_size.as_deref()) {
+        media = media.with_size(size);
+    }
     if let Some(src) = node.src.clone().filter(|s| !s.is_empty()) {
         media = media.src(src);
-        for (index, child) in node.children.iter().enumerate() {
-            media = media.overlay(paint_child(p, child, &child_path(path, index)));
-        }
-    } else {
-        for (index, child) in node.children.iter().enumerate() {
-            media = media.child(paint_child(p, child, &child_path(path, index)));
+    }
+    for (index, child) in node.children.iter().enumerate() {
+        let child_path = child_path(path, index);
+        if child.kind == "attachment-media-overlay" {
+            media = media.overlay(render_media_overlay_inner(p, child, &child_path));
+        } else {
+            media = media.child(paint_child(p, child, &child_path));
         }
     }
     apply_node_style(media, node)
+}
+
+fn render_media_overlay_inner<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> AnyElement {
+    if node.children.is_empty() {
+        if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+            return text.into_any_element();
+        }
+        return apply_node_style(div(), node).into_any_element();
+    }
+    if node.children.len() == 1 && node.text.is_none() {
+        let child = &node.children[0];
+        return paint_child(p, child, &child_path(path, 0));
+    }
+    let mut wrap = apply_node_style(div(), node);
+    if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+        wrap = wrap.child(text);
+    }
+    for (index, child) in node.children.iter().enumerate() {
+        wrap = wrap.child(paint_child(p, child, &child_path(path, index)));
+    }
+    wrap.into_any_element()
 }
 
 fn extend_attachment_content<P: NodePainter>(
@@ -604,6 +679,9 @@ fn render_attachment_title(node: &Node) -> AttachmentTitle {
     let mut title = AttachmentTitle::new(node.text.clone().unwrap_or_default());
     if node.status.is_some() {
         title = title.status(parse_attachment_status(node.status.as_deref()));
+    }
+    if let Some(style) = mapping::shimmer_style(node.shimmer_style.as_deref()) {
+        title = title.with_shimmer_style(style);
     }
     apply_node_style(title, node)
 }
@@ -651,6 +729,12 @@ fn render_marker<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Marker {
     }
     if let Some(role) = parse_marker_role(node.role.as_deref()) {
         marker = marker.role(role);
+    }
+    if let Some(style) = mapping::shimmer_style(node.shimmer_style.as_deref()) {
+        marker = marker.with_shimmer_style(style);
+    }
+    if let Some(style) = mapping::style_refinement(node.separator_style.as_deref()) {
+        marker = marker.separator_style(style);
     }
     if let Some(name) = node.icon.as_deref().filter(|s| !s.is_empty()) {
         if let Some(icon) = mapping::parse_icon(name) {
@@ -769,5 +853,85 @@ mod tests {
         assert_eq!(scroller_item_id(&named, 3), "m1");
         let anon: Node = serde_json::from_value(json!({"type": "message"})).unwrap();
         assert_eq!(scroller_item_id(&anon, 3), "idx:3");
+    }
+
+    #[test]
+    fn fingerprint_ignores_generated_callback_ids() {
+        let a: Node = serde_json::from_value(json!({
+            "type": "message",
+            "text": "Hi",
+            "children": [{
+                "type": "button",
+                "text": "Copy",
+                "on-click": "cb-1"
+            }]
+        }))
+        .unwrap();
+        let b: Node = serde_json::from_value(json!({
+            "type": "message",
+            "text": "Hi",
+            "children": [{
+                "type": "button",
+                "text": "Copy",
+                "on-click": "cb-99"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(node_fingerprint(&a), node_fingerprint(&b));
+        let changed: Node = serde_json::from_value(json!({
+            "type": "message",
+            "text": "Hello",
+            "children": [{
+                "type": "button",
+                "text": "Copy",
+                "on-click": "cb-99"
+            }]
+        }))
+        .unwrap();
+        assert_ne!(node_fingerprint(&a), node_fingerprint(&changed));
+    }
+
+    #[test]
+    fn append_and_prepend_detect_survivor_fingerprint_changes() {
+        let prev = [1u64, 2];
+        let append_same = [1u64, 2, 3];
+        let append_changed = [1u64, 9, 3];
+        let prepend_same = [0u64, 1, 2];
+        let prepend_changed = [0u64, 8, 2];
+        assert!(!scroller_survivors_changed(
+            &ScrollerEdit::Append(1),
+            &prev,
+            &append_same
+        ));
+        assert!(scroller_survivors_changed(
+            &ScrollerEdit::Append(1),
+            &prev,
+            &append_changed
+        ));
+        assert!(!scroller_survivors_changed(
+            &ScrollerEdit::Prepend(1),
+            &prev,
+            &prepend_same
+        ));
+        assert!(scroller_survivors_changed(
+            &ScrollerEdit::Prepend(1),
+            &prev,
+            &prepend_changed
+        ));
+        assert!(!scroller_survivors_changed(
+            &ScrollerEdit::Reset { count: 3 },
+            &prev,
+            &append_changed
+        ));
+    }
+
+    #[test]
+    fn attachment_media_omitted_size_does_not_use_medium_default() {
+        assert!(mapping::parse_named_size(None).is_none());
+        assert_eq!(mapping::parse_scale(None), gpui_component::Size::Medium);
+        assert_eq!(
+            mapping::parse_named_size(Some("lg")),
+            Some(gpui_component::Size::Large)
+        );
     }
 }

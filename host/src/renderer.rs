@@ -9,7 +9,7 @@ use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
     Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId, PathPromptOptions, Pixels,
-    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, rgb, size,
+    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
@@ -1508,6 +1508,7 @@ impl RootView {
             | "bubble-reactions"
             | "attachment"
             | "attachment-media"
+            | "attachment-media-overlay"
             | "attachment-content"
             | "attachment-title"
             | "attachment-description"
@@ -3827,7 +3828,11 @@ impl RootView {
         } else if let Some(slot) = self.scrollers.get_mut(key) {
             match chat::scroller_edit(&slot.last_ids, &ids) {
                 chat::ScrollerEdit::Leave => {
-                    if slot.last_fps != fps {
+                    if chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Leave,
+                        &slot.last_fps,
+                        &fps,
+                    ) {
                         slot.state.update(cx, |state, cx| state.remeasure(cx));
                     }
                 }
@@ -3835,13 +3840,29 @@ impl RootView {
                     slot.state.update(cx, |state, cx| state.reset(count, cx));
                 }
                 chat::ScrollerEdit::Append(n) => {
+                    let survivor_changed = chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Append(n),
+                        &slot.last_fps,
+                        &fps,
+                    );
                     slot.state.update(cx, |state, cx| {
                         let _ = state.append(n, cx);
+                        if survivor_changed {
+                            state.remeasure(cx);
+                        }
                     });
                 }
                 chat::ScrollerEdit::Prepend(n) => {
+                    let survivor_changed = chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Prepend(n),
+                        &slot.last_fps,
+                        &fps,
+                    );
                     slot.state.update(cx, |state, cx| {
                         let _ = state.prepend(n, cx);
+                        if survivor_changed {
+                            state.remeasure(cx);
+                        }
                     });
                 }
             }
@@ -3883,6 +3904,23 @@ impl RootView {
         }
         if let Some(fade) = node.bottom_fade.as_deref().and_then(extra::parse_hex_color) {
             scroller = scroller.with_bottom_fade(fade);
+        }
+        if let Some(style) = mapping::style_refinement(node.content_style.as_deref()) {
+            scroller = scroller.with_content_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.list_style.as_deref()) {
+            scroller = scroller.with_list_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.row_style.as_deref()) {
+            scroller = scroller.with_row_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.jump_button_style.as_deref()) {
+            scroller = scroller.with_jump_button_style(style);
+        }
+        if let Some(chrome) = node.jump_button_renderer.clone() {
+            scroller = scroller.with_jump_button_renderer(move |button| {
+                mapping::apply_jump_button_renderer(button, &chrome)
+            });
         }
         viewport_sized(scroller, node, 400.0, cx)
     }
@@ -4362,11 +4400,6 @@ mod widget_key_tests {
             "root-0-1"
         );
     }
-}
-
-fn parse_color(value: &str) -> Option<u32> {
-    let value = value.trim().trim_start_matches('#');
-    u32::from_str_radix(value, 16).ok()
 }
 
 /// Step is drag granularity. Clojure's controlled value is accepted as-is
@@ -5179,62 +5212,8 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
 
 /// Kit `Styled` refinements: gap, padding, type, colors, alignment.
 /// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
-fn apply_kit_visual_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
-    if let Some(gap) = node.gap {
-        el = el.gap(px(gap));
-    }
-    if let Some(padding) = node.padding {
-        el = el.p(px(padding));
-    }
-    if let Some(font_size) = node.font_size {
-        el = el.text_size(px(font_size));
-    }
-    if let Some(family) = &node.font_family {
-        el = el.font_family(family.clone());
-    }
-    if let Some(weight) = &node.font_weight {
-        el = match weight.as_str() {
-            "thin" => el.font_weight(gpui::FontWeight::THIN),
-            "extralight" | "extra-light" | "ultralight" => {
-                el.font_weight(gpui::FontWeight::EXTRA_LIGHT)
-            }
-            "bold" => el.font_weight(gpui::FontWeight::BOLD),
-            "semibold" | "semi-bold" => el.font_weight(gpui::FontWeight::SEMIBOLD),
-            "medium" => el.font_weight(gpui::FontWeight::MEDIUM),
-            "light" => el.font_weight(gpui::FontWeight::LIGHT),
-            _ => el.font_weight(gpui::FontWeight::NORMAL),
-        };
-    }
-    if let Some(color) = node.color.as_deref().and_then(parse_color) {
-        el = el.text_color(rgb(color));
-    }
-    if let Some(bg) = node.bg.as_deref().and_then(parse_color) {
-        el = el.bg(rgb(bg));
-    }
-    if let Some(border) = node.border.as_deref().and_then(parse_color) {
-        el = el.border_1().border_color(rgb(border));
-    }
-    if let Some(border) = node.border_bottom.as_deref().and_then(parse_color) {
-        el = el.border_b_1().border_color(rgb(border));
-    }
-    if node.strikethrough {
-        el = el.line_through();
-    }
-    if node.shadow {
-        el = el.shadow_lg();
-    }
-    match node.align.as_deref() {
-        Some("center") => el = el.items_center(),
-        Some("end") => el = el.items_end(),
-        Some("start") => el = el.items_start(),
-        _ => {}
-    }
-    match node.justify.as_deref() {
-        Some("center") => el = el.justify_center(),
-        Some("end") | Some("right") => el = el.justify_end(),
-        Some("between") => el = el.justify_between(),
-        _ => {}
-    }
+fn apply_kit_visual_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
+    let mut el = mapping::apply_visual_style(el, node);
     if node_theme_pref(node).is_some() {
         if node.color.is_none() {
             el = el.text_color(cx.theme().foreground);

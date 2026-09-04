@@ -184,6 +184,11 @@
       (seq (:items item)) (update :items #(mapv sanitize-item %)))
     item))
 
+(def ^:private nested-node-keys
+  [:trigger :footer :stack-style :shimmer-style :separator-style
+   :content-style :list-style :row-style :jump-button-style
+   :jump-button-renderer])
+
 (defn- sanitize
   "Replace Clojure functions in the UI tree with callback ids before JSON."
   [node]
@@ -195,14 +200,15 @@
                            m))
                        node
                        callback-keys)]
-      (-> node
-          (update :children #(mapv sanitize (or % [])))
-          (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
-          (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
-          (cond-> (seq (:links node)) (update :links #(mapv sanitize-item %)))
-          (cond-> (seq (:series node)) (update :series #(mapv sanitize-item %)))
-          (cond-> (some? (:trigger node)) (update :trigger sanitize))
-          (cond-> (some? (:footer node)) (update :footer sanitize))))
+      (reduce (fn [n k]
+                (cond-> n (some? (get n k)) (update k sanitize)))
+              (-> node
+                  (update :children #(mapv sanitize (or % [])))
+                  (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
+                  (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
+                  (cond-> (seq (:links node)) (update :links #(mapv sanitize-item %)))
+                  (cond-> (seq (:series node)) (update :series #(mapv sanitize-item %))))
+              nested-node-keys))
 
     (sequential? node)
     (mapv sanitize node)

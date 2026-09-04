@@ -365,11 +365,15 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/message {:id "m2" :alignment :end}
   (ui/bubble "Outgoing"))
 (ui/attachment {:id "file-1" :status :uploading :on-click open-file!}
+  (ui/attachment-media {:src "preview.png" :size :lg
+                        :overlay (ui/icon :loader)})
   (ui/attachment-title "notes.pdf")
   (ui/attachment-description "Uploading"))
-(ui/marker "Today" {:variant :separator})
+(ui/marker "Today" {:variant :separator
+                    :separator-style {:color "#7aa2f7"}})
 (ui/message-scroller {:id "thread" :height 320
-                      :jump-button-label "Latest"}
+                      :jump-button-label "Latest"
+                      :jump-button-renderer {:size :small :icon :arrow-down}}
   (ui/message {:id "row-1" :alignment :start} (ui/bubble "First"))
   (ui/message {:id "row-2" :alignment :end} (ui/bubble "Second")))
 (ui/button "Save" save! {:tooltip "Write the file"})
