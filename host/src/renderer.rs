@@ -302,6 +302,9 @@ struct NavStackSlot {
     /// Repeated catalog ids are distinct entities (Kit Presence identity is
     /// `("nav-stack", view.entity_id())`).
     entries: Vec<(String, Entity<extra::CljNavPage>)>,
+    /// Last invalid controlled trail we warned about, so a sticky typo
+    /// does not reprint `[host] nav-stack: ignoring …` every frame.
+    last_invalid: Option<Vec<String>>,
     _observe: Subscription,
 }
 
@@ -4183,6 +4186,7 @@ impl RootView {
                 NavStackSlot {
                     state,
                     entries: Vec::new(),
+                    last_invalid: None,
                     _observe: observe,
                 },
             );
@@ -4199,13 +4203,23 @@ impl RootView {
                     });
                 }
             }
-            let op = match extra::nav_desired_ids(node, &catalog_ids) {
-                Some(desired) => {
+            let op = match extra::nav_desired(node, &catalog_ids) {
+                extra::NavDesired::Invalid { trail, unknown } => {
+                    if slot.last_invalid.as_ref() != Some(&trail) {
+                        eprintln!(
+                            "[host] nav-stack: ignoring controlled trail {trail:?}; unknown page id(s) {unknown:?}"
+                        );
+                        slot.last_invalid = Some(trail);
+                    }
+                    extra::NavTrailOp::Leave
+                }
+                desired => {
+                    slot.last_invalid = None;
+                    let resolved = desired.ids(&catalog_ids).expect("valid nav trail");
                     let current: Vec<String> =
                         slot.entries.iter().map(|(id, _)| id.clone()).collect();
-                    extra::nav_trail_sync(&current, &desired)
+                    extra::nav_trail_sync(&current, &resolved)
                 }
-                None => extra::NavTrailOp::Leave,
             };
             apply_nav_trail_op(slot, op, motion, &catalog_by_id, key, &cmd_tx, cx);
         }

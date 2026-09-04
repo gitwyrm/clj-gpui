@@ -198,19 +198,14 @@ pub fn nav_desired(node: &Node, catalog_ids: &[String]) -> NavDesired {
     }
 }
 
-/// Resolved trail ids, or `None` when the controlled trail is invalid.
-///
-/// `None` means leave the native stack unchanged. Warns on invalid trails.
-pub fn nav_desired_ids(node: &Node, catalog_ids: &[String]) -> Option<Vec<String>> {
-    match nav_desired(node, catalog_ids) {
-        NavDesired::Default => Some(catalog_ids.iter().take(1).cloned().collect()),
-        NavDesired::Clear => Some(Vec::new()),
-        NavDesired::Trail(ids) => Some(ids),
-        NavDesired::Invalid { trail, unknown } => {
-            eprintln!(
-                "[host] nav-stack: ignoring controlled trail {trail:?}; unknown page id(s) {unknown:?}"
-            );
-            None
+impl NavDesired {
+    /// Resolved trail ids. `None` for an invalid controlled trail.
+    pub fn ids(self, catalog_ids: &[String]) -> Option<Vec<String>> {
+        match self {
+            Self::Default => Some(catalog_ids.iter().take(1).cloned().collect()),
+            Self::Clear => Some(Vec::new()),
+            Self::Trail(ids) => Some(ids),
+            Self::Invalid { .. } => None,
         }
     }
 }
@@ -3496,7 +3491,7 @@ mod tests {
         };
         assert_eq!(nav_desired(&omitted, &catalog), NavDesired::Default);
         assert_eq!(
-            nav_desired_ids(&omitted, &catalog),
+            nav_desired(&omitted, &catalog).ids(&catalog),
             Some(vec!["home".to_string()])
         );
         let empty = Node {
@@ -3505,7 +3500,10 @@ mod tests {
             ..Node::default()
         };
         assert_eq!(nav_desired(&empty, &catalog), NavDesired::Clear);
-        assert_eq!(nav_desired_ids(&empty, &catalog), Some(Vec::new()));
+        assert_eq!(
+            nav_desired(&empty, &catalog).ids(&catalog),
+            Some(Vec::new())
+        );
         let trail = Node {
             kind: "nav-stack".into(),
             value: Some(json!(["home", "detail"])),
@@ -3550,7 +3548,7 @@ mod tests {
                 unknown: vec!["detial".to_string()],
             }
         );
-        assert_eq!(nav_desired_ids(&partial, &catalog), None);
+        assert_eq!(nav_desired(&partial, &catalog).ids(&catalog), None);
         // Filtering the typo would yield [:home] and nav_trail_sync would Pop.
         let current = vec!["home".to_string(), "detail".to_string()];
         assert_eq!(
@@ -3570,7 +3568,7 @@ mod tests {
                 unknown: vec!["nope".to_string()],
             }
         );
-        assert_eq!(nav_desired_ids(&all_unknown, &catalog), None);
+        assert_eq!(nav_desired(&all_unknown, &catalog).ids(&catalog), None);
         // Filtering an all-unknown trail would yield [] and clear the stack.
         assert_eq!(
             nav_trail_sync(&current, &[]),
