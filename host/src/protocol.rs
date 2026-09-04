@@ -972,6 +972,11 @@ pub struct Node {
     /// NavStack: explicit clip opt-in. Omitted / false does not clip.
     #[serde(default, rename = "overflow-hidden")]
     pub overflow_hidden: bool,
+    /// NavStack: when the next page id equals the nearest forward entry,
+    /// omitted / true calls Kit `forward()` (retained entity). `false`
+    /// forces a fresh `push()` and discards the forward branch.
+    #[serde(default, rename = "reuse-forward")]
+    pub reuse_forward: Option<bool>,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
     #[serde(default)]
     pub spread: Option<f32>,
@@ -2183,6 +2188,7 @@ mod tests {
             "transition-style": "slide",
             "overflow": "hidden",
             "overflow-hidden": true,
+            "reuse-forward": false,
             "on-forward-change": "cb-forward",
             "height": 180,
             "children": [
@@ -2201,6 +2207,7 @@ mod tests {
         assert_eq!(nav.transition_style.as_deref(), Some("slide"));
         assert_eq!(nav.overflow.as_deref(), Some("hidden"));
         assert!(nav.overflow_hidden);
+        assert_eq!(nav.reuse_forward, Some(false));
         assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");

@@ -1232,8 +1232,14 @@
                           (ui/nav-page {:id :home} "Home")
                           (ui/nav-page {:id :detail} "Detail"))]
     (is (fn? (:on-forward-change fwd)))
+    (is (nil? (:reuse-forward fwd)))
     (is (= "home" (get-in fwd [:children 0 :id])))
-    (is (= "detail" (get-in fwd [:children 1 :id])))))
+    (is (= "detail" (get-in fwd [:children 1 :id]))))
+  (let [fresh (ui/nav-stack {:id "nav" :stack [:home :detail]
+                             :reuse-forward false}
+                            (ui/nav-page {:id :home} "Home")
+                            (ui/nav-page {:id :detail} "Detail"))]
+    (is (false? (:reuse-forward fresh)))))
 
 (deftest nav-stack-forward-change-restores-page-ids
   (runtime/reset-callbacks!)

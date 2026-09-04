@@ -65,7 +65,8 @@
            :split-sizes nil
            :chat-count 3
            :trail [:home]
-           :forward []}))
+           :forward []
+           :reuse-forward? true}))
 
 (defn- set-key [k]
   (fn [v]
@@ -228,7 +229,7 @@
    (ui/separator)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail forward]}]
+(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail forward reuse-forward?]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
@@ -357,12 +358,14 @@
     (when (seq forward)
       (ui/button "Forward" #(swap! !state update :trail conj (first forward))))
     (when (> (count trail) 1)
-      (ui/button "Pop to root" #(swap! !state assoc :trail [(first trail)]))))
+      (ui/button "Pop to root" #(swap! !state assoc :trail [(first trail)])))
+    (ui/switch reuse-forward? (set-key :reuse-forward?) "Reuse forward"))
    (ui/nav-stack {:id "gallery-nav"
                   :stack trail
                   :transition 0.22
                   :transition-style :slide
                   :overflow :hidden
+                  :reuse-forward reuse-forward?
                   :on-forward-change #(swap! !state assoc :forward (vec %))
                   :height 180
                   :border "#3b4261"}

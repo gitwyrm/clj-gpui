@@ -4225,7 +4225,7 @@ impl RootView {
                     });
                 }
             }
-            let op = match extra::nav_desired(node, &catalog_ids) {
+            let steps = match extra::nav_desired(node, &catalog_ids) {
                 extra::NavDesired::Invalid { trail, unknown } => {
                     if slot.last_invalid.as_ref() != Some(&trail) {
                         eprintln!(
@@ -4233,7 +4233,7 @@ impl RootView {
                         );
                         slot.last_invalid = Some(trail);
                     }
-                    extra::NavTrailOp::Leave
+                    Vec::new()
                 }
                 desired => {
                     slot.last_invalid = None;
@@ -4242,10 +4242,15 @@ impl RootView {
                         slot.entries.iter().map(|(id, _)| id.clone()).collect();
                     let forward: Vec<String> =
                         slot.forward.iter().map(|(id, _)| id.clone()).collect();
-                    extra::nav_trail_sync(&current, &resolved, &forward)
+                    extra::nav_trail_sync(
+                        &current,
+                        &resolved,
+                        &forward,
+                        extra::nav_reuse_forward(node.reuse_forward),
+                    )
                 }
             };
-            apply_nav_trail_op(slot, op, motion, &catalog_by_id, key, &cmd_tx, cx);
+            apply_nav_trail_plan(slot, steps, motion, &catalog_by_id, key, &cmd_tx, cx);
             notify_nav_forward_change(slot, node.on_forward_change.clone(), &cmd_tx, window, cx);
         }
         let slot = self.nav_stacks.get(key).expect("nav-stack slot");
@@ -5213,18 +5218,37 @@ fn spawn_clj_nav_page(
     cx.new(|_| extra::CljNavPage::new(live, path, cmd_tx))
 }
 
-fn apply_nav_trail_op(
+fn apply_nav_trail_plan(
     slot: &mut NavStackSlot,
-    op: extra::NavTrailOp,
+    steps: Vec<extra::NavTrailStep>,
     motion: gpui::base::NavMotion,
     catalog: &HashMap<String, Node>,
     key: &str,
     cmd_tx: &mpsc::Sender<Cmd>,
     cx: &mut Context<RootView>,
 ) {
-    match op {
-        extra::NavTrailOp::Leave => {}
-        extra::NavTrailOp::Push(id) => {
+    let last = steps.len().saturating_sub(1);
+    for (i, step) in steps.into_iter().enumerate() {
+        let step_motion = if i == last {
+            motion
+        } else {
+            gpui::base::NavMotion::Immediate
+        };
+        apply_nav_trail_step(slot, step, step_motion, catalog, key, cmd_tx, cx);
+    }
+}
+
+fn apply_nav_trail_step(
+    slot: &mut NavStackSlot,
+    step: extra::NavTrailStep,
+    motion: gpui::base::NavMotion,
+    catalog: &HashMap<String, Node>,
+    key: &str,
+    cmd_tx: &mpsc::Sender<Cmd>,
+    cx: &mut Context<RootView>,
+) {
+    match step {
+        extra::NavTrailStep::Push(id) => {
             let Some(template) = catalog.get(&id) else {
                 return;
             };
@@ -5241,7 +5265,7 @@ fn apply_nav_trail_op(
             slot.entries.push((id, page));
             slot.forward.clear();
         }
-        extra::NavTrailOp::Pop => {
+        extra::NavTrailStep::Pop => {
             slot.state.update(cx, |stack, cx| {
                 let _ = stack.pop(motion, cx);
             });
@@ -5249,7 +5273,7 @@ fn apply_nav_trail_op(
                 slot.forward.push(entry);
             }
         }
-        extra::NavTrailOp::Forward => {
+        extra::NavTrailStep::Forward => {
             let Some(entry) = slot.forward.pop() else {
                 return;
             };
@@ -5258,7 +5282,7 @@ fn apply_nav_trail_op(
             });
             slot.entries.push(entry);
         }
-        extra::NavTrailOp::PopToRoot => {
+        extra::NavTrailStep::PopToRoot => {
             slot.state.update(cx, |stack, cx| {
                 let _ = stack.pop_to_root(motion, cx);
             });
@@ -5268,7 +5292,7 @@ fn apply_nav_trail_op(
                 }
             }
         }
-        extra::NavTrailOp::Replace(id) => {
+        extra::NavTrailStep::Replace(id) => {
             let Some(template) = catalog.get(&id) else {
                 return;
             };
@@ -5288,7 +5312,7 @@ fn apply_nav_trail_op(
                 slot.entries.push((id, page));
             }
         }
-        extra::NavTrailOp::Rebuild(new_ids) => {
+        extra::NavTrailStep::Rebuild(new_ids) => {
             let views: Vec<(String, Entity<extra::CljNavPage>)> = new_ids
                 .into_iter()
                 .enumerate()

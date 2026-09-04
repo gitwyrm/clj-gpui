@@ -2656,25 +2656,32 @@
   stack is the first page id. An empty `:stack []` clears the stack.
   An explicit trail that names an unknown page id is rejected (the
   native stack is left unchanged); only `[]` means clear.
-  Clojure owns the trail; the host diffs and calls Kit `push` /
-  `pop` / `forward` / `pop_to_root` / `replace` / `clear`. Re-adding
-  a popped id that matches the nearest Kit `forward_views()` entry
-  restores that retained page (`forward`) instead of spawning a new
-  entity. Any other one-step grow is `push` and clears the forward
-  branch. Setting the trail to just the root from depth > 2 is one
-  `pop_to_root` transition (popped pages join forward, nearest first).
-  Restoring more than one forward page in one swap rebuilds.
-  `:on-forward-change` receives Kit `forward_views()` as a vector of
-  original page ids, nearest first (the id `forward` would restore).
-  Empty after first mount is not sent; a later Push/Rebuild that
-  clears forward still notifies `[]`. Catalog page ids should be
-  unique (duplicate templates share a lookup key; the last wins).
-  Repeated ids on the active trail are valid and create distinct
-  entities. `:transition` is seconds (Kit `Transition` only);
-  omitted is an immediate swap. `:motion :immediate` forces Immediate
-  even when a transition is set. `:transition-style :slide` opts
-  into the showcase slide `item` renderer; omitted keeps Kit's
-  default unchanged `NavPage` renderer. `:overflow :hidden` or
+  Clojure owns the trail; the host preserves the longest matching
+  active prefix and applies a plan of Kit `push` / `pop` /
+  `forward` / `pop_to_root` / `replace`. Rebuild (`clear` +
+  immediate pushes) is last resort: empty current, explicit `[]`,
+  or a root id that cannot be `replace`d. Multi-step pops keep
+  popped entities on the forward branch (Kit order). Restoring
+  that same trail is the same number of `forward` calls, not a
+  rebuild. Growing by an id that matches the nearest Kit
+  `forward_views()` entry restores that retained page (`forward`)
+  unless `:reuse-forward false`, which forces a fresh `push` and
+  discards the remainder of the forward branch — the same Kit
+  operation you would call yourself. Omitted / true keeps
+  automatic `forward` as the convenient default. Setting the trail
+  to just the root from depth > 2 is one `pop_to_root` transition
+  (popped pages join forward, nearest first). `:on-forward-change`
+  receives Kit `forward_views()` as a vector of original page ids,
+  nearest first (the id `forward` would restore). Empty after first
+  mount is not sent; a later Push/Rebuild that clears forward still
+  notifies `[]`. Catalog page ids should be unique (duplicate
+  templates share a lookup key; the last wins). Repeated ids on
+  the active trail are valid and create distinct entities.
+  `:transition` is seconds (Kit `Transition` only); omitted is an
+  immediate swap. `:motion :immediate` forces Immediate even when
+  a transition is set. `:transition-style :slide` opts into the
+  showcase slide `item` renderer; omitted keeps Kit's default
+  unchanged `NavPage` renderer. `:overflow :hidden` or
   `:overflow-hidden true` clips; omitted does not. Custom `item`
   rendering beyond `:slide` is remaining and must include the
   complete `NavPage` context (index, phase, operation, eased
