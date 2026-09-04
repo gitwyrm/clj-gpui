@@ -1,7 +1,7 @@
 //! Mapping from clj-gpui JSON node fields onto GPUI Kit 0.6 types.
 
 use crate::catalog;
-use crate::protocol::Node;
+use crate::protocol::{Node, StyledKeys};
 use gpui::{Axis, FontWeight, Hsla, StyleRefinement, Styled, div, px};
 use gpui_component::{
     Colorize as _, Disableable as _, IconName, Placement, Selectable as _, Side, Sizable as _,
@@ -133,32 +133,32 @@ pub fn apply_styled<E: Styled>(el: E, node: &Node) -> E {
     apply_box_style(apply_visual_style(el, node), node)
 }
 
-/// True when `node` carries any key `apply_styled` reads.
-pub fn has_styled_keys(node: &Node) -> bool {
-    node.gap.is_some()
-        || node.padding.is_some()
-        || node.font_size.is_some()
-        || node.font_family.is_some()
-        || node.font_weight.is_some()
-        || node.color.is_some()
-        || node.bg.is_some()
-        || node.border.is_some()
-        || node.border_bottom.is_some()
-        || node.strikethrough
-        || node.shadow
-        || node.align.is_some()
-        || node.justify.is_some()
-        || node.width.is_some()
-        || node.height.is_some()
-        || node.size.is_some()
-        || node.flex.is_some()
+/// True when `style` carries any key `apply_styled` reads.
+pub fn has_styled_keys(style: &StyledKeys) -> bool {
+    style.gap.is_some()
+        || style.padding.is_some()
+        || style.font_size.is_some()
+        || style.font_family.is_some()
+        || style.font_weight.is_some()
+        || style.color.is_some()
+        || style.bg.is_some()
+        || style.border.is_some()
+        || style.border_bottom.is_some()
+        || style.strikethrough
+        || style.shadow
+        || style.align.is_some()
+        || style.justify.is_some()
+        || style.width.is_some()
+        || style.height.is_some()
+        || style.size.is_some()
+        || style.flex.is_some()
 }
 
 /// Overlay `over` onto `base` for the Styled vocabulary only.
 /// Set keys on `over` win; omitted keys keep `base`. Bools are or-merged
 /// because the wire cannot distinguish omitted `false` from explicit.
-pub fn overlay_styled(base: &Node, over: &Node) -> Node {
-    Node {
+pub fn overlay_styled(base: &StyledKeys, over: &StyledKeys) -> StyledKeys {
+    StyledKeys {
         gap: over.gap.or(base.gap),
         padding: over.padding.or(base.padding),
         font_size: over.font_size.or(base.font_size),
@@ -185,8 +185,11 @@ pub fn overlay_styled(base: &Node, over: &Node) -> Node {
         height: over.height.or(base.height),
         size: over.size.or(base.size),
         flex: over.flex.or(base.flex),
-        ..Node::default()
     }
+}
+
+pub fn apply_styled_keys<E: Styled>(el: E, style: &StyledKeys) -> E {
+    apply_styled(el, &style.to_node())
 }
 
 /// Build a `StyleRefinement` from a nested Clojure style map.
@@ -772,19 +775,19 @@ mod tests {
 
     #[test]
     fn overlay_styled_merges_visual_and_box_keys() {
-        let base = Node {
+        let base = StyledKeys {
             padding: Some(8.0),
             color: Some("#eeeeee".into()),
-            ..Node::default()
+            ..StyledKeys::default()
         };
-        let over = Node {
+        let over = StyledKeys {
             padding: Some(4.0),
             bg: Some("#111111".into()),
-            ..Node::default()
+            ..StyledKeys::default()
         };
         assert!(has_styled_keys(&base));
         assert!(has_styled_keys(&over));
-        assert!(!has_styled_keys(&Node::default()));
+        assert!(!has_styled_keys(&StyledKeys::default()));
         let merged = overlay_styled(&base, &over);
         assert_eq!(merged.padding, Some(4.0));
         assert_eq!(merged.color.as_deref(), Some("#eeeeee"));

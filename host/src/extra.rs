@@ -7,6 +7,7 @@
 use crate::mapping;
 use crate::protocol::{
     self, ChartLabelLine, Cmd, Item, NavItemCase, NavItemSpec, NavItemWire, NavScalar, Node,
+    StyledKeys,
 };
 use chrono::NaiveDate;
 use gpui::{
@@ -476,7 +477,7 @@ fn nav_item_implicit_case(spec: &NavItemSpec) -> Option<NavItemCase> {
 pub struct NavPagePaint {
     pub left: Option<f32>,
     pub opacity: Option<f32>,
-    pub style: Node,
+    pub style: StyledKeys,
 }
 
 /// Live `phase` / `operation` / `index` / eased `progress` → Styled keys.
@@ -649,7 +650,7 @@ pub fn nav_stack_item(page: gpui::base::NavPage, spec: &NavItemSpec) -> AnyEleme
         page.progress(),
         spec,
     );
-    let mut page = mapping::apply_styled(page, &paint.style);
+    let mut page = mapping::apply_styled_keys(page, &paint.style);
     if let Some(left) = paint.left {
         page = page.left(relative(left));
     }
@@ -4524,9 +4525,9 @@ mod tests {
         use gpui::base::NavOperation::Push;
         use gpui::base::motion::PresencePhase::{Entering, Present};
         let spec = NavItemSpec {
-            style: Node {
+            style: StyledKeys {
                 bg: Some("#111111".into()),
-                ..Node::default()
+                ..StyledKeys::default()
             },
             cases: vec![
                 NavItemCase {
@@ -4572,16 +4573,16 @@ mod tests {
         use gpui::base::NavOperation::Push;
         use gpui::base::motion::PresencePhase::{Entering, Present};
         let spec = NavItemSpec {
-            style: Node {
+            style: StyledKeys {
                 padding: Some(8.0),
                 color: Some("#eeeeee".into()),
-                ..Node::default()
+                ..StyledKeys::default()
             },
             cases: vec![NavItemCase {
                 phase: Some("entering".into()),
-                style: Node {
+                style: StyledKeys {
                     bg: Some("#111111".into()),
-                    ..Node::default()
+                    ..StyledKeys::default()
                 },
                 ..NavItemCase::default()
             }],

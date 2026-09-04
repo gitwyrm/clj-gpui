@@ -23,6 +23,57 @@ impl NavScalar {
     }
 }
 
+/// Styled vocabulary shared with ordinary clj-gpui nodes (`apply_styled`).
+/// Flattened onto a NavStack item spec / match arm so recipes do not grow
+/// a second paint path. Not a full `Node` (that would recurse through
+/// `Node.item`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct StyledKeys {
+    pub gap: Option<f32>,
+    pub padding: Option<f32>,
+    pub font_size: Option<f32>,
+    pub font_family: Option<String>,
+    pub font_weight: Option<String>,
+    pub color: Option<String>,
+    pub bg: Option<String>,
+    pub border: Option<String>,
+    pub border_bottom: Option<String>,
+    pub strikethrough: bool,
+    pub shadow: bool,
+    pub align: Option<String>,
+    pub justify: Option<String>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub size: Option<f32>,
+    pub flex: Option<f32>,
+}
+
+impl StyledKeys {
+    pub fn to_node(&self) -> Node {
+        Node {
+            gap: self.gap,
+            padding: self.padding,
+            font_size: self.font_size,
+            font_family: self.font_family.clone(),
+            font_weight: self.font_weight.clone(),
+            color: self.color.clone(),
+            bg: self.bg.clone(),
+            border: self.border.clone(),
+            border_bottom: self.border_bottom.clone(),
+            strikethrough: self.strikethrough,
+            shadow: self.shadow,
+            align: self.align.clone(),
+            justify: self.justify.clone(),
+            width: self.width,
+            height: self.height,
+            size: self.size,
+            flex: self.flex,
+            ..Node::default()
+        }
+    }
+}
+
 /// One Kit `item` match arm. Omitted `phase` / `operation` / `index` match
 /// any. `operation` is a name (`push` / `pop` / `replace` / `none`) or an
 /// array of names. `none` is a settled page (`operation()` is `None`).
@@ -41,7 +92,7 @@ pub struct NavItemCase {
     #[serde(default)]
     pub opacity: Option<NavScalar>,
     #[serde(flatten)]
-    pub style: Node,
+    pub style: StyledKeys,
 }
 
 /// Host-side Kit `NavStack::item` recipe. Styled keys on the spec apply to
@@ -63,7 +114,7 @@ pub struct NavItemSpec {
     #[serde(default, rename = "match")]
     pub cases: Vec<NavItemCase>,
     #[serde(flatten)]
-    pub style: Node,
+    pub style: StyledKeys,
 }
 
 /// Wire `item`: `"slide"`, `false` (dropped Clojure fn), a match-arm array,
