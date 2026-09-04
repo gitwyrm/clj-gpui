@@ -3593,7 +3593,7 @@ mod tests {
         );
         assert_eq!(
             plan(&["h", "a", "b"], &["h", "c"], &[], true),
-            vec![Pop, Push("c".into())]
+            vec![PopToRoot, Push("c".into())]
         );
         assert_eq!(
             plan(&["h", "a", "b", "c"], &["h", "x"], &[], true),
