@@ -200,11 +200,13 @@
                 {:trigger (ui/button "Popover")
                  :on-open-change (set-key :popover?)}
                 (ui/label "Anchored content.")
-                (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost}))
+                (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost})))
+   (ui/hstack
+    {:gap 8 :align :center}
     (ui/hover-card {:id "profile"
-                    :trigger (ui/link "https://github.com/huacnlee" "@huacnlee")
-                    :open-delay 0.2
-                    :placement :top-center
+                    :trigger (ui/button "@huacnlee")
+                    :open-delay 0.15
+                    :placement :bottom-center
                     :on-open-change (set-key :hover-card?)}
                    (ui/hstack
                     {:gap 8 :align :center :padding 8}
@@ -215,6 +217,9 @@
                      {:gap 2}
                      (ui/label "Jason Lee" {:font-weight :semibold})
                      (ui/label "GPUI Kit author"))))
+    (ui/label (if hover-card? "card open" "hover the button")))
+   (ui/hstack
+    {:gap 8 :align :center}
     (ui/dropdown-menu
      [{:id :copy :label "Copy"
        :on-click #(swap! !state assoc :batch-shift? true)}
