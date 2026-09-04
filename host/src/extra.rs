@@ -905,6 +905,27 @@ pub fn combobox_live_sync(
     }
 }
 
+/// Controlled Combobox `:query` is Kit `ComboboxState::query` / `set_query`.
+///
+/// Three cases:
+/// - `None` (omitted / JSON null): leave the native search text. Clojure
+///   is not driving the query.
+/// - `Some("clj")`: programmatically set the filter.
+/// - `Some("")`: programmatically clear the filter. This is not the
+///   same as `None` — the next tree re-applies empty.
+///
+/// Kit `ComboboxEvent` has only Change / Confirm — no query event — so
+/// this is programmatic: Clojure cannot echo typing the way
+/// `Command::on_query` can. `set_selected_values` clears the query;
+/// apply this after that write so a controlled filter survives a
+/// selection sync.
+pub fn should_set_combobox_query(current: &str, desired: Option<&str>) -> bool {
+    match desired {
+        Some(query) => current != query,
+        None => false,
+    }
+}
+
 /// One selectable row in a Select dropdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectLeaf {
@@ -2884,6 +2905,23 @@ mod tests {
         assert_eq!(
             combobox_live_sync(fp, combobox_fingerprint(&renamed), &sel, &sel),
             ComboboxLiveSync::Rebuild
+        );
+    }
+
+    #[test]
+    fn combobox_query_is_programmatic_and_omitted_leaves_native() {
+        // None = release control. Some("clj") = set. Some("") = clear.
+        assert!(!should_set_combobox_query("clj", None));
+        assert!(!should_set_combobox_query("clj", Some("clj")));
+        assert!(should_set_combobox_query("clj", Some("rs")));
+        assert!(
+            should_set_combobox_query("clj", Some("")),
+            "empty string clears a native or controlled query"
+        );
+        assert!(should_set_combobox_query("", Some("clj")));
+        assert!(
+            !should_set_combobox_query("", Some("")),
+            "empty controlled query is a no-op when native is already empty"
         );
     }
 

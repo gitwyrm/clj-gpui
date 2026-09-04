@@ -223,6 +223,7 @@ impl SearchableListItem for ComboOpt {
     }
 }
 
+#[derive(Clone)]
 enum ComboboxStateHandle {
     Flat(Entity<ComboboxState<SearchableVec<ComboOpt>>>),
     Grouped(Entity<ComboboxState<SearchableVec<SelectGroup<ComboOpt>>>>),
@@ -2112,6 +2113,7 @@ impl RootView {
             if same_kind && slot.searchable == node.searchable && slot.multiple == node.multiple {
                 slot.on_change = node.on_change.clone();
                 slot.on_confirm = node.on_confirm.clone();
+                let query = node.query.as_deref();
                 if grouped {
                     match extra::combobox_live_sync(
                         slot.fingerprint,
@@ -2119,17 +2121,15 @@ impl RootView {
                         &slot.selected,
                         &selected,
                     ) {
-                        extra::ComboboxLiveSync::Leave => return,
+                        extra::ComboboxLiveSync::Leave => {
+                            let handle = slot.state.clone();
+                            sync_combobox_handle(&handle, None, query, window, cx);
+                            return;
+                        }
                         extra::ComboboxLiveSync::SetValues => {
                             slot.selected = selected.clone();
-                            match &slot.state {
-                                ComboboxStateHandle::Flat(state) => {
-                                    apply_combobox_selected_values(state, &selected, window, cx);
-                                }
-                                ComboboxStateHandle::Grouped(state) => {
-                                    apply_combobox_selected_values(state, &selected, window, cx);
-                                }
-                            }
+                            let handle = slot.state.clone();
+                            sync_combobox_handle(&handle, Some(&selected), query, window, cx);
                             return;
                         }
                         extra::ComboboxLiveSync::Rebuild => {
@@ -2164,6 +2164,7 @@ impl RootView {
                                 }
                             });
                         }
+                        apply_combobox_query(&state, query, window, cx);
                     }
                     return;
                 }
@@ -2195,6 +2196,7 @@ impl RootView {
             subscribe_combobox(&state, key_owned, window, cx);
             ComboboxStateHandle::Flat(state)
         };
+        sync_combobox_handle(&handle, None, node.query.as_deref(), window, cx);
         self.comboboxes.insert(
             key.to_string(),
             ComboboxSlot {
@@ -5318,6 +5320,48 @@ fn apply_combobox_selected_values<D>(
     state.update(cx, |state, cx| {
         state.set_selected_values(selected, window, cx);
     });
+}
+
+fn apply_combobox_query<D>(
+    state: &Entity<ComboboxState<D>>,
+    query: Option<&str>,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) where
+    D: SearchableListDelegate + 'static,
+    <D::Item as SearchableListItem>::Value: PartialEq + Clone,
+{
+    let Some(desired) = query else {
+        return;
+    };
+    state.update(cx, |state, cx| {
+        if extra::should_set_combobox_query(state.query(cx).as_ref(), Some(desired)) {
+            state.set_query(desired.to_string(), window, cx);
+        }
+    });
+}
+
+fn sync_combobox_handle(
+    handle: &ComboboxStateHandle,
+    set_selected: Option<&[SharedString]>,
+    query: Option<&str>,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    match handle {
+        ComboboxStateHandle::Flat(state) => {
+            if let Some(selected) = set_selected {
+                apply_combobox_selected_values(state, selected, window, cx);
+            }
+            apply_combobox_query(state, query, window, cx);
+        }
+        ComboboxStateHandle::Grouped(state) => {
+            if let Some(selected) = set_selected {
+                apply_combobox_selected_values(state, selected, window, cx);
+            }
+            apply_combobox_query(state, query, window, cx);
+        }
+    }
 }
 
 fn subscribe_combobox<D>(

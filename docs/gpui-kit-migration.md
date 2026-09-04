@@ -341,7 +341,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | Kit 0.6 | Clojure | Notes |
 |---|---|---|
 | declarative `Table` | `ui/table` | Reserved name. Wrap once DataTable is stable. |
-| `Combobox` | `ui/combobox` | Nested `:items` are Kit `SelectGroup` / `SearchableGroup` sections. Chrome (`cleanable`, `menu_width`, `menu_max_h`, `search_placeholder`, `icon`, `check_icon`, `appearance`, `focus_ring`, string `empty`) is forwarded. Remaining: `render_trigger`, `footer`, `ComboboxState::query` / `set_query`. |
+| `Combobox` | `ui/combobox` | Nested `:items` are Kit `SelectGroup` / `SearchableGroup` sections. Chrome (`cleanable`, `menu_width`, `menu_max_h`, `search_placeholder`, `icon`, `check_icon`, `appearance`, `focus_ring`, string `empty`) is forwarded. `:query` is `ComboboxState::query` / `set_query` (programmatic; omitted / `nil` leaves native typing; `""` clears; Kit has no query event). Remaining: `render_trigger`, `footer`. |
 | `Rating`, `Stepper`, `Pagination` | `ui/rating`, `ui/stepper`, `ui/pagination` | Straightforward controlled widgets. |
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
 | `HoverCard`, `AvatarGroup` | `ui/hover-card`, `ui/avatar-group` | Hover-driven card; overlapping avatars. `FocusTrap` still unwrapped. |

@@ -921,7 +921,11 @@ pub struct Node {
     /// Command: Kit `Command::bordered`. Omitted is Kit true.
     #[serde(default)]
     pub bordered: Option<bool>,
-    /// Command: Kit `CommandState` search text. Omitted leaves the native query.
+    /// Command / Combobox: Kit search text (`CommandState` /
+    /// `ComboboxState` `query` / `set_query`). Omitted / JSON null leaves
+    /// the native query. Combobox `""` is a controlled clear (`set_query`
+    /// empty), not a release. Combobox has no query event (unlike
+    /// Command `on_query`).
     #[serde(default)]
     pub query: Option<String>,
     /// Select / Combobox: Kit `search_placeholder`.
@@ -1604,6 +1608,7 @@ mod tests {
             "appearance": false,
             "icon": "search",
             "check-icon": "check",
+            "query": "clj",
             "options": [
                 {
                     "label": "clj",
@@ -1622,8 +1627,37 @@ mod tests {
         assert_eq!(combo.appearance, Some(false));
         assert_eq!(combo.icon.as_deref(), Some("search"));
         assert_eq!(combo.check_icon.as_deref(), Some("check"));
+        assert_eq!(combo.query.as_deref(), Some("clj"));
         assert_eq!(combo.collection()[0].label_or_id(), "clj");
         assert_eq!(combo.collection()[0].items[0].id_or_label(), "clj");
+
+        let omitted: Node = serde_json::from_value(json!({
+            "type": "combobox",
+            "value": "clj"
+        }))
+        .unwrap();
+        assert!(omitted.query.is_none(), "omitted query is uncontrolled");
+
+        let null_query: Node = serde_json::from_value(json!({
+            "type": "combobox",
+            "query": null
+        }))
+        .unwrap();
+        assert!(
+            null_query.query.is_none(),
+            "JSON null is the same as omit: leave native query"
+        );
+
+        let cleared: Node = serde_json::from_value(json!({
+            "type": "combobox",
+            "query": ""
+        }))
+        .unwrap();
+        assert_eq!(
+            cleared.query.as_deref(),
+            Some(""),
+            "empty string is a controlled clear, not a release"
+        );
     }
 
     #[test]
