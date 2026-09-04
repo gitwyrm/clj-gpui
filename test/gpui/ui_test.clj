@@ -978,12 +978,29 @@
       (is (false? (:appearance n)))
       (is (false? (:focus-ring n)))
       (is (= "clj" (:query n))))
-    (is (nil? (:query (ui/combobox :clj {:options [:clj]})))
-        "omitted :query stays off the node")
-    (is (nil? (:query (ui/combobox :clj {:options [:clj] :query nil}))))
+    (let [plain (ui/combobox :clj {:options [:clj]})
+          released (ui/combobox :clj {:options [:clj] :query nil})
+          cleared (ui/combobox :clj {:options [:clj] :query ""})]
+      (is (not (contains? plain :query))
+          "omitted :query stays off the node")
+      (is (contains? released :query)
+          "explicit nil keeps the key (JSON null), unlike omit")
+      (is (nil? (:query released)))
+      (is (= "" (:query cleared))
+          "empty string is a controlled clear, not a release"))
     (let [exported (runtime/export-tree
-                    (ui/combobox :clj {:options [:clj] :query "rs"}))]
-      (is (= "rs" (:query exported)))))
+                    (ui/combobox :clj {:options [:clj] :query "rs"}))
+          omitted (runtime/export-tree
+                   (ui/combobox :clj {:options [:clj]}))
+          released (runtime/export-tree
+                    (ui/combobox :clj {:options [:clj] :query nil}))
+          cleared (runtime/export-tree
+                   (ui/combobox :clj {:options [:clj] :query ""}))]
+      (is (= "rs" (:query exported)))
+      (is (not (contains? omitted :query)))
+      (is (contains? released :query))
+      (is (nil? (:query released)))
+      (is (= "" (:query cleared)))))
   (testing "group titles that share a wire id do not shadow leaf callbacks"
     (let [opts [{:label "clj" :items [{:id :clj :label "Clojure"}]}
                 {:label "rs" :items [{:id :rs :label "Rust"}]}]

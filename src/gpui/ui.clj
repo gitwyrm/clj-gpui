@@ -996,10 +996,12 @@
   Kit accepts arbitrary `IntoElement`), `:icon` (trigger chevron),
   `:check-icon` (selected-row mark), `:appearance`, `:focus-ring`
   (Kit `FocusableExt`; omit = Kit true). `:query` is programmatic
-  search text (`ComboboxState::query` / `set_query`). Omitted leaves
-  the native query. Kit `ComboboxEvent` has no query variant, so there
-  is no `:on-query` (unlike `ui/command`). Custom `render_trigger` /
-  `footer` and empty as `IntoElement` are not wrapped.
+  search text (`ComboboxState::query` / `set_query`):
+  omitted or `nil` releases control and leaves the native query;
+  `\"clj\"` sets it; `\"\"` clears it. Kit `ComboboxEvent` has no
+  query variant, so there is no `:on-query` (unlike `ui/command`).
+  Custom `render_trigger` / `footer` and empty as `IntoElement` are
+  not wrapped.
 
   A single-select pick can emit Kit `Change` then `Confirm` for one
   user action. The host sends `:on-change` then `:on-confirm` as one
@@ -1013,10 +1015,12 @@
   fingerprint change so query text and matched sections agree. Kit
   `set_selected_values` clears the search query, so an unrelated atom
   rerender with the same options and ids must not wipe in-progress
-  typing. A present `:query` is applied after that write so a
-  controlled filter survives a selection sync. A native `Change`
-  updates the host cache first: Clojure echoing those same ids is a
-  no-op; a different Clojure value still overrides native state.
+  typing. A present `:query` (including `\"\"`) is applied after that
+  write so a controlled filter survives a selection sync. `nil` /
+  omitted is not present: native typing is left alone. A native
+  `Change` updates the host cache first: Clojure echoing those same
+  ids is a no-op; a different Clojure value still overrides native
+  state.
 
   (ui/combobox selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]

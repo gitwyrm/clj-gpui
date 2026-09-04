@@ -599,7 +599,7 @@
                   :flex 1
                   :on-change (set-key :combo)})
     (ui/button "Filter clj" #(swap! !state assoc :combo-query "clj"))
-    (ui/button "Clear query" #(swap! !state assoc :combo-query nil))
+    (ui/button "Clear query" #(swap! !state assoc :combo-query ""))
     (ui/combobox combo-multi
                  {:id "combo-multi"
                   :options [{:id :clj :label "Clojure"}
