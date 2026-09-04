@@ -30,6 +30,13 @@
   (is (some? (ns-resolve 'gpui.ui 'table-row)))
   (is (some? (ns-resolve 'gpui.ui 'table-head)))
   (is (some? (ns-resolve 'gpui.ui 'table-cell)))
+  (is (some? (ns-resolve 'gpui.ui 'message)))
+  (is (some? (ns-resolve 'gpui.ui 'message-group)))
+  (is (some? (ns-resolve 'gpui.ui 'bubble)))
+  (is (some? (ns-resolve 'gpui.ui 'bubble-reactions)))
+  (is (some? (ns-resolve 'gpui.ui 'attachment)))
+  (is (some? (ns-resolve 'gpui.ui 'marker)))
+  (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
   (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
@@ -968,6 +975,62 @@
       (is (= :resizable (:type n)))
       (is (= :vertical (:orientation n)))
       (is (= 2 (count (:children n)))))))
+
+(deftest chat-message-bubble-constructors
+  (testing "named message slots expand to children, not sheet footer"
+    (let [n (ui/message {:alignment :end
+                         :avatar (ui/avatar "You")
+                         :header (ui/message-header "You" "10:25 AM")
+                         :footer (ui/message-footer "Delivered")}
+                        (ui/bubble "Outgoing"))]
+      (is (= :message (:type n)))
+      (is (= "end" (:alignment n)))
+      (is (nil? (:footer n)) "message :footer is a child, not the sheet footer field")
+      (is (= :message-avatar (get-in n [:children 0 :type])))
+      (is (= :avatar (get-in n [:children 0 :children 0 :type])))
+      (is (= :message-header (get-in n [:children 1 :type])))
+      (is (= ["You" "10:25 AM"] (mapv :text (get-in n [:children 1 :children]))))
+      (is (= :message-content (get-in n [:children 2 :type])))
+      (is (= :bubble (get-in n [:children 2 :children 0 :type])))
+      (is (= "Outgoing" (get-in n [:children 2 :children 0 :children 0 :text])))
+      (is (= :message-footer (get-in n [:children 3 :type])))))
+  (testing "bubble variants and reactions"
+    (let [n (ui/bubble "Incoming" {:variant :secondary
+                                   :reactions (ui/bubble-reactions "👍")})]
+      (is (= :bubble (:type n)))
+      (is (= "secondary" (:variant n)))
+      (is (= :bubble-reactions (get-in n [:children 1 :type])))
+      (is (= "👍" (get-in n [:children 1 :children 0 :text]))))
+    (is (= "ghost" (:variant (ui/bubble {:variant :ghost} "System")))))
+  (testing "attachment status and marker separator"
+    (let [n (ui/attachment {:id "file-1" :status :uploading :orientation :vertical}
+                           (ui/attachment-media {:src "preview.png"})
+                           (ui/attachment-content
+                            (ui/attachment-title "report.pdf")
+                            (ui/attachment-description "Uploading"))
+                           (ui/attachment-actions (ui/button "Cancel")))]
+      (is (= :attachment (:type n)))
+      (is (= "uploading" (:status n)))
+      (is (= "vertical" (:orientation n)))
+      (is (= :attachment-media (get-in n [:children 0 :type])))
+      (is (= "preview.png" (get-in n [:children 0 :src])))
+      (is (= "report.pdf" (get-in n [:children 1 :children 0 :text])))
+      (is (= :attachment-actions (get-in n [:children 2 :type]))))
+    (let [n (ui/marker "Today" {:variant :separator :id "day" :role :status})]
+      (is (= :marker (:type n)))
+      (is (= "Today" (:text n)))
+      (is (= "separator" (:variant n)))
+      (is (= "status" (:role n)))
+      (is (empty? (:children n)))))
+  (testing "message-scroller keeps row ids"
+    (let [n (ui/message-scroller {:id "chat" :height 400 :jump-button false}
+                                 (ui/message {:id "m1"} (ui/bubble "Hi"))
+                                 (ui/message {:id "m2"} (ui/bubble "There")))]
+      (is (= :message-scroller (:type n)))
+      (is (= "chat" (:id n)))
+      (is (= 400 (:height n)))
+      (is (false? (:jump-button n)))
+      (is (= ["m1" "m2"] (mapv :id (:children n)))))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

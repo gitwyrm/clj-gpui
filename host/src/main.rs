@@ -1,5 +1,6 @@
 mod bridge;
 mod catalog;
+mod chat;
 mod extra;
 mod mapping;
 mod overlay;

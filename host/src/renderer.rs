@@ -1,4 +1,5 @@
 use crate::catalog;
+use crate::chat;
 use crate::extra;
 use crate::mapping;
 use crate::overlay;
@@ -36,6 +37,7 @@ use gpui_component::{
     link::Link,
     list::{List, ListEvent, ListState},
     menu::{ContextMenuExt as _, DropdownMenu as _},
+    message_scroller::{MessageScroller, MessageScrollerState},
     notification::Notification,
     pagination::Pagination,
     popover::Popover,
@@ -221,6 +223,14 @@ struct ComboboxSlot {
     coalesce: protocol::ComboboxActivationCoalesce,
 }
 
+struct MessageScrollerSlot {
+    state: Entity<MessageScrollerState>,
+    items: Rc<RefCell<Vec<Node>>>,
+    last_ids: Vec<String>,
+    last_fps: Vec<u64>,
+    _observe: Subscription,
+}
+
 struct ListSlot {
     state: Entity<ListState<RowListDelegate>>,
     fingerprint: u64,
@@ -378,6 +388,7 @@ pub struct RootView {
     editors: HashMap<String, TextControlSlot<EditorState>>,
     textareas: HashMap<String, TextControlSlot<TextareaState>>,
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
+    scrollers: HashMap<String, MessageScrollerSlot>,
     docks: HashMap<String, DockSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
     used_resizables: HashSet<String>,
@@ -404,6 +415,7 @@ pub struct RootView {
     used_editors: HashSet<String>,
     used_textareas: HashSet<String>,
     used_vlists: HashSet<String>,
+    used_scrollers: HashSet<String>,
     used_docks: HashSet<String>,
     _appearance: Subscription,
     _window_bounds: Subscription,
@@ -413,6 +425,22 @@ pub struct RootView {
     applied_title: String,
     applied_window_size: Option<(i32, i32)>,
     native_window_id: Option<u32>,
+}
+
+struct RenderPaint<'v, 'w, 'cx, 'a> {
+    view: &'v mut RootView,
+    window: &'w mut Window,
+    cx: &'cx mut Context<'a, RootView>,
+}
+
+impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
+    fn paint_node(&mut self, node: &Node, path: &str) -> AnyElement {
+        self.view.render_node(node, path, self.window, self.cx)
+    }
+
+    fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
+        Some(self.view.cmd_tx.clone())
+    }
 }
 
 impl RootView {
@@ -519,6 +547,7 @@ impl RootView {
             editors: HashMap::new(),
             textareas: HashMap::new(),
             vlists: HashMap::new(),
+            scrollers: HashMap::new(),
             docks: HashMap::new(),
             resizables: HashMap::new(),
             used_resizables: HashSet::new(),
@@ -545,6 +574,7 @@ impl RootView {
             used_editors: HashSet::new(),
             used_textareas: HashSet::new(),
             used_vlists: HashSet::new(),
+            used_scrollers: HashSet::new(),
             used_docks: HashSet::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
@@ -1465,6 +1495,35 @@ impl RootView {
             ),
             "dock" => self.render_dock(node, &key, window, cx),
             "resizable" => self.render_resizable(node, path, &key, window, cx),
+            "message-scroller" => self.render_message_scroller(node, path, &key, window, cx),
+            "message"
+            | "message-group"
+            | "message-avatar"
+            | "message-header"
+            | "message-content"
+            | "message-footer"
+            | "bubble"
+            | "bubble-content"
+            | "bubble-group"
+            | "bubble-reactions"
+            | "attachment"
+            | "attachment-media"
+            | "attachment-content"
+            | "attachment-title"
+            | "attachment-description"
+            | "attachment-actions"
+            | "attachment-group"
+            | "marker"
+            | "marker-icon"
+            | "marker-content" => chat::render_any(
+                &mut RenderPaint {
+                    view: self,
+                    window,
+                    cx,
+                },
+                node,
+                path,
+            ),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
@@ -3735,6 +3794,99 @@ impl RootView {
         state
     }
 
+    fn render_message_scroller(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_scrollers.insert(key.to_string());
+        let children = node.children.clone();
+        let ids: Vec<String> = children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| chat::scroller_item_id(child, index))
+            .collect();
+        let fps: Vec<u64> = children.iter().map(chat::node_fingerprint).collect();
+        if !self.scrollers.contains_key(key) {
+            let item_count = children.len();
+            let state = cx.new(|cx| MessageScrollerState::new(item_count, cx));
+            let observe = cx.observe(&state, |_, _, cx| cx.notify());
+            self.scrollers.insert(
+                key.to_string(),
+                MessageScrollerSlot {
+                    state,
+                    items: Rc::new(RefCell::new(children)),
+                    last_ids: ids,
+                    last_fps: fps,
+                    _observe: observe,
+                },
+            );
+        } else if let Some(slot) = self.scrollers.get_mut(key) {
+            match chat::scroller_edit(&slot.last_ids, &ids) {
+                chat::ScrollerEdit::Leave => {
+                    if slot.last_fps != fps {
+                        slot.state.update(cx, |state, cx| state.remeasure(cx));
+                    }
+                }
+                chat::ScrollerEdit::Reset { count } => {
+                    slot.state.update(cx, |state, cx| state.reset(count, cx));
+                }
+                chat::ScrollerEdit::Append(n) => {
+                    slot.state.update(cx, |state, cx| {
+                        let _ = state.append(n, cx);
+                    });
+                }
+                chat::ScrollerEdit::Prepend(n) => {
+                    slot.state.update(cx, |state, cx| {
+                        let _ = state.prepend(n, cx);
+                    });
+                }
+            }
+            *slot.items.borrow_mut() = children;
+            slot.last_ids = ids;
+            slot.last_fps = fps;
+        }
+        let slot = self.scrollers.get(key).expect("scroller slot");
+        let items = slot.items.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let row_path = path.to_string();
+        let mut scroller = MessageScroller::new(
+            SharedString::from(key.to_string()),
+            slot.state.clone(),
+            move |index, _, _| {
+                let tree = items.borrow();
+                match tree.get(index) {
+                    Some(row) => {
+                        overlay::paint_scroller_tree(row, &format!("{row_path}.{index}"), &cmd_tx)
+                    }
+                    None => div().into_any_element(),
+                }
+            },
+        );
+        if node.scrollbar == Some(false) {
+            scroller = scroller.scrollbar(false);
+        }
+        if node.jump_button == Some(false) {
+            scroller = scroller.jump_button(false);
+        }
+        if let Some(label) = node.jump_button_label.clone() {
+            scroller = scroller.with_jump_button_label(label);
+        }
+        if let Some(secs) = node
+            .jump_button_transition
+            .filter(|n| n.is_finite() && *n >= 0.0)
+        {
+            scroller = scroller.with_jump_button_transition(Duration::from_secs_f32(secs));
+        }
+        if let Some(fade) = node.bottom_fade.as_deref().and_then(extra::parse_hex_color) {
+            scroller = scroller.with_bottom_fade(fade);
+        }
+        viewport_sized(scroller, node, 400.0, cx)
+    }
+
     fn render_virtual_list(
         &mut self,
         node: &Node,
@@ -4079,6 +4231,7 @@ impl Render for RootView {
         self.used_editors.clear();
         self.used_textareas.clear();
         self.used_vlists.clear();
+        self.used_scrollers.clear();
         self.used_docks.clear();
         self.used_resizables.clear();
         let tree = self.tree.clone();
@@ -4128,6 +4281,8 @@ impl Render for RootView {
         self.textareas.retain(|key, _| used_textareas.contains(key));
         let used_vlists = std::mem::take(&mut self.used_vlists);
         self.vlists.retain(|key, _| used_vlists.contains(key));
+        let used_scrollers = std::mem::take(&mut self.used_scrollers);
+        self.scrollers.retain(|key, _| used_scrollers.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
         self.docks.retain(|key, _| used_docks.contains(key));
         let used_resizables = std::mem::take(&mut self.used_resizables);

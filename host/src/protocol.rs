@@ -983,6 +983,36 @@ pub struct Node {
     /// Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise linear.
     #[serde(default)]
     pub scale: Option<String>,
+    /// Message header/footer: Kit `content_inset`. Omitted inherits from a
+    /// ghost bubble (Kit strips inset). Not sheet `footer`.
+    #[serde(default, rename = "content-inset")]
+    pub content_inset: Option<bool>,
+    /// Attachment lifecycle: `pending`, `uploading`, `processing`, `failed`,
+    /// `complete` (default).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// MessageScroller: Kit `scrollbar`. Omitted leaves Kit's true.
+    #[serde(default)]
+    pub scrollbar: Option<bool>,
+    /// MessageScroller: Kit `jump_button`. Omitted leaves Kit's true.
+    #[serde(default, rename = "jump-button")]
+    pub jump_button: Option<bool>,
+    /// MessageScroller: Kit `with_jump_button_label`.
+    #[serde(default, rename = "jump-button-label")]
+    pub jump_button_label: Option<String>,
+    /// MessageScroller: Kit `with_jump_button_transition` in seconds.
+    /// Omitted leaves Kit's 200ms. Zero disables the transition.
+    #[serde(default, rename = "jump-button-transition")]
+    pub jump_button_transition: Option<f32>,
+    /// MessageScroller: Kit `with_bottom_fade` hex color.
+    #[serde(default, rename = "bottom-fade")]
+    pub bottom_fade: Option<String>,
+    /// Marker: Kit `MarkerLoadingStyle` (`spinner` default, `shimmer`).
+    #[serde(default, rename = "loading-style")]
+    pub loading_style: Option<String>,
+    /// Marker: Kit `role` (`status`, `alert`, `log`). Takes effect with `id`.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 impl Node {
@@ -1974,6 +2004,70 @@ mod tests {
         assert!(group.ellipsis);
         assert_eq!(group.children.len(), 2);
         assert_eq!(PROTOCOL_VERSION, 10);
+
+        let message: Node = serde_json::from_value(json!({
+            "type": "message",
+            "id": "m1",
+            "alignment": "end",
+            "children": [
+                {"type": "message-header", "text": "You", "content-inset": false},
+                {"type": "message-content", "children": [
+                    {"type": "bubble", "variant": "ghost", "text": "Hi"}
+                ]},
+                {"type": "message-footer", "text": "Delivered"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(message.kind, "message");
+        assert_eq!(message.alignment.as_deref(), Some("end"));
+        assert_eq!(message.children[0].content_inset, Some(false));
+        assert_eq!(
+            message.children[1].children[0].variant.as_deref(),
+            Some("ghost")
+        );
+
+        let attachment: Node = serde_json::from_value(json!({
+            "type": "attachment",
+            "id": "file-1",
+            "status": "uploading",
+            "orientation": "vertical",
+            "on-click": "cb-att"
+        }))
+        .unwrap();
+        assert_eq!(attachment.status.as_deref(), Some("uploading"));
+        assert_eq!(attachment.on_click.as_deref(), Some("cb-att"));
+
+        let scroller: Node = serde_json::from_value(json!({
+            "type": "message-scroller",
+            "id": "chat",
+            "scrollbar": false,
+            "jump-button": false,
+            "jump-button-label": "Latest",
+            "jump-button-transition": 0.0,
+            "bottom-fade": "#1a1b26",
+            "height": 400
+        }))
+        .unwrap();
+        assert_eq!(scroller.kind, "message-scroller");
+        assert_eq!(scroller.scrollbar, Some(false));
+        assert_eq!(scroller.jump_button, Some(false));
+        assert_eq!(scroller.jump_button_label.as_deref(), Some("Latest"));
+        assert_eq!(scroller.jump_button_transition, Some(0.0));
+        assert_eq!(scroller.bottom_fade.as_deref(), Some("#1a1b26"));
+
+        let marker: Node = serde_json::from_value(json!({
+            "type": "marker",
+            "text": "Today",
+            "variant": "separator",
+            "loading": true,
+            "loading-style": "shimmer",
+            "role": "status",
+            "id": "day"
+        }))
+        .unwrap();
+        assert_eq!(marker.loading_style.as_deref(), Some("shimmer"));
+        assert_eq!(marker.role.as_deref(), Some("status"));
+        assert!(marker.loading);
     }
 
     #[test]
