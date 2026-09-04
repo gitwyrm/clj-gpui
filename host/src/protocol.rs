@@ -523,18 +523,35 @@ pub fn slider_event_calls(
     calls
 }
 
-/// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
+/// Parent selection payload for menus / NativeMenu / Command.
+///
+/// A one-element path is the leaf id (flat item). Nested submenu /
+/// Command-group leaves send the full semantic path so duplicate leaf
+/// ids (`file/open` vs `project/open`) round-trip through controlled
+/// `:selected` / `:on-select`.
+pub fn menu_selection_payload(item_path: &[String]) -> Value {
+    match item_path {
+        [id] => json!(id),
+        path => json!(path),
+    }
+}
+
+/// Menu row: item `:on-click` (0-arg) then menu `:on-change` (leaf id
+/// or nested path; see [`menu_selection_payload`]).
 pub fn menu_selection_calls(
     item_click: Option<String>,
     on_change: Option<String>,
-    item_id: impl Into<String>,
+    item_path: &[String],
 ) -> Vec<CallbackCall> {
     let mut calls = Vec::new();
     if let Some(id) = item_click {
         calls.push(CallbackCall::fire(id));
     }
     if let Some(id) = on_change {
-        calls.push(CallbackCall::with_value(id, json!(item_id.into())));
+        calls.push(CallbackCall::with_value(
+            id,
+            menu_selection_payload(item_path),
+        ));
     }
     calls
 }
@@ -1737,9 +1754,27 @@ mod tests {
         assert_eq!(cancel[0].id, "cb-cancel");
         assert_eq!(cancel[1].id, "cb-close");
 
-        let menu = menu_selection_calls(Some("cb-item".into()), Some("cb-menu".into()), "copy");
+        let menu = menu_selection_calls(
+            Some("cb-item".into()),
+            Some("cb-menu".into()),
+            &["copy".into()],
+        );
         assert_eq!(menu[0], CallbackCall::fire("cb-item"));
         assert_eq!(menu[1], CallbackCall::with_value("cb-menu", json!("copy")));
+        let nested = menu_selection_calls(
+            None,
+            Some("cb-menu".into()),
+            &["project".into(), "open".into()],
+        );
+        assert_eq!(
+            nested[0],
+            CallbackCall::with_value("cb-menu", json!(["project", "open"]))
+        );
+        assert_eq!(menu_selection_payload(&["open".into()]), json!("open"));
+        assert_eq!(
+            menu_selection_payload(&["project".into(), "open".into()]),
+            json!(["project", "open"])
+        );
 
         let table = table_activation_calls(Some("cb-12".into()), Some("cb-13".into()), "ada");
         assert_eq!(

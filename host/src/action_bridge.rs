@@ -80,6 +80,7 @@ fn collect_leaf_actions(items: &[Item], slot: &str, prefix: &[String], out: &mut
 /// and icons are copied as they are now. Selecting an item dispatches
 /// `CljAction { slot, item_path }` so Clojure remains the owner of toggled
 /// state. Nested submenus append their identity to `item_path`.
+/// Disabled wins over checked when Kit cannot represent both (no icon).
 pub fn fill_native_menu(items: &[Item], slot: &str) -> NativeMenu {
     fill_native_menu_at(items, slot, &[])
 }
@@ -108,17 +109,43 @@ fn push_native_item(menu: NativeMenu, item: &Item, slot: &str, prefix: &[String]
     path.push(item.id_or_label());
     let action = CljAction::new(slot, path).boxed();
     let label = item.label_or_id();
+    let icon = item.icon.as_deref().and_then(mapping::parse_icon);
+    match (native_leaf_kind(item), icon) {
+        (NativeLeafKind::IconDisabled, Some(icon)) => {
+            menu.menu_with_icon_disabled(label, icon, true, action)
+        }
+        (NativeLeafKind::Icon, Some(icon)) => menu.menu_with_icon(label, icon, action),
+        (NativeLeafKind::Disabled, _) => menu.menu_with_disabled(label, true, action),
+        (NativeLeafKind::Check, _) => menu.menu_with_check(label, true, action),
+        (NativeLeafKind::Plain, _)
+        | (NativeLeafKind::IconDisabled, None)
+        | (NativeLeafKind::Icon, None) => menu.menu(label, action),
+    }
+}
+
+/// Kit public NativeMenu builders cannot combine a check mark with an
+/// icon or with disabled. Prefer behavior over decoration: disabled
+/// wins over checked when no icon is present (the check mark is
+/// dropped). An icon still wins over both, including icon+disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeLeafKind {
+    IconDisabled,
+    Icon,
+    Disabled,
+    Check,
+    Plain,
+}
+
+pub(crate) fn native_leaf_kind(item: &Item) -> NativeLeafKind {
+    let has_icon = item.icon.as_deref().and_then(mapping::parse_icon).is_some();
     let disabled = item.disabled;
     let checked = item.checked.unwrap_or(false);
-    let icon = item.icon.as_deref().and_then(mapping::parse_icon);
-    // Kit's public NativeMenu builders cannot combine check with icon or
-    // with disabled. Prefer icon, then check, then disabled.
-    match icon {
-        Some(icon) if disabled => menu.menu_with_icon_disabled(label, icon, true, action),
-        Some(icon) => menu.menu_with_icon(label, icon, action),
-        None if checked => menu.menu_with_check(label, true, action),
-        None if disabled => menu.menu_with_disabled(label, true, action),
-        None => menu.menu(label, action),
+    match (has_icon, disabled, checked) {
+        (true, true, _) => NativeLeafKind::IconDisabled,
+        (true, false, _) => NativeLeafKind::Icon,
+        (false, true, _) => NativeLeafKind::Disabled,
+        (false, false, true) => NativeLeafKind::Check,
+        (false, false, false) => NativeLeafKind::Plain,
     }
 }
 
@@ -263,6 +290,23 @@ pub fn command_item_path(items: &[Item], index: IndexPath) -> Option<Vec<String>
     None
 }
 
+/// Whether a controlled Command `:selected` should override native highlight.
+///
+/// After Clojure `:on-select` fires, `last_emitted_path` latches the path
+/// we sent so a lagging Clojure tree does not yank the highlight back.
+/// If no `:on-select` was installed, the latch stays empty and the host
+/// always restores the Clojure-owned value (native highlight is not an
+/// echo that will ever arrive).
+pub fn should_apply_command_selected_path(
+    last_emitted_path: Option<&[String]>,
+    current_path: Option<&[String]>,
+) -> bool {
+    match last_emitted_path {
+        Some(emitted) if current_path == Some(emitted) => false,
+        _ => true,
+    }
+}
+
 /// Controlled Command highlight from node `value`.
 ///
 /// `None` is omitted (leave native highlight). An empty vec is JSON `null`
@@ -292,7 +336,8 @@ pub fn command_value_path(value: Option<&Value>) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Item;
+    use crate::protocol::{Item, menu_selection_payload};
+    use serde_json::json;
 
     fn item(id: &str, label: &str) -> Item {
         Item {
@@ -492,11 +537,72 @@ mod tests {
             command_item_path(&items, IndexPath::new(0).section(1)).as_deref(),
             Some(&["project".to_string(), "open".to_string()][..])
         );
+        let echoed = menu_selection_payload(&["project".into(), "open".into()]);
+        assert_eq!(echoed, json!(["project", "open"]));
+        let selected = command_value_path(Some(&echoed)).unwrap();
+        assert_eq!(
+            command_index_path(&items, &selected),
+            Some(IndexPath::new(0).section(1)),
+            "echoing the grouped payload as :selected must stay on project/open"
+        );
+        assert_eq!(
+            command_index_path(&items, &["open".into()]),
+            Some(IndexPath::new(0).section(0)),
+            "a one-element echo would jump to the first grouped open"
+        );
+    }
+
+    #[test]
+    fn command_select_sync_restores_controlled_value_without_on_select() {
+        let file = vec!["file".to_string(), "open".to_string()];
+        let project = vec!["project".to_string(), "open".to_string()];
+        assert!(
+            should_apply_command_selected_path(None, Some(project.as_slice())),
+            "no :on-select means no latch; Clojure :selected must restore"
+        );
+        assert!(
+            !should_apply_command_selected_path(Some(project.as_slice()), Some(project.as_slice())),
+            "an emitted :on-select waits for the Clojure echo"
+        );
+        assert!(should_apply_command_selected_path(
+            Some(project.as_slice()),
+            Some(file.as_slice())
+        ));
+    }
+
+    #[test]
+    fn native_leaf_disabled_wins_over_checked_when_no_icon() {
+        let mut checked_disabled = item("wrap", "Word wrap");
+        checked_disabled.checked = Some(true);
+        checked_disabled.disabled = true;
+        assert_eq!(
+            native_leaf_kind(&checked_disabled),
+            NativeLeafKind::Disabled,
+            "Kit cannot combine check+disabled; keep the leaf inert"
+        );
+        let mut checked = item("wrap", "Word wrap");
+        checked.checked = Some(true);
+        assert_eq!(native_leaf_kind(&checked), NativeLeafKind::Check);
+        let mut icon_disabled = item("copy", "Copy");
+        icon_disabled.icon = Some("copy".into());
+        icon_disabled.disabled = true;
+        icon_disabled.checked = Some(true);
+        assert_eq!(
+            native_leaf_kind(&icon_disabled),
+            NativeLeafKind::IconDisabled
+        );
+        let mut icon = item("copy", "Copy");
+        icon.icon = Some("copy".into());
+        icon.checked = Some(true);
+        assert_eq!(native_leaf_kind(&icon), NativeLeafKind::Icon);
+        assert_eq!(
+            native_leaf_kind(&item("copy", "Copy")),
+            NativeLeafKind::Plain
+        );
     }
 
     #[test]
     fn command_value_path_reads_omitted_null_string_and_array() {
-        use serde_json::json;
         assert_eq!(command_value_path(None), None);
         assert_eq!(command_value_path(Some(&json!(null))), Some(vec![]));
         assert_eq!(

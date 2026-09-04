@@ -498,34 +498,30 @@ impl QueuedAction {
                 let Some(item) = item_at_path(&node.items, item_path) else {
                     return Vec::new();
                 };
-                protocol::menu_selection_calls(
-                    item.on_click.clone(),
-                    node.on_change,
-                    item.id_or_label(),
-                )
+                protocol::menu_selection_calls(item.on_click.clone(), node.on_change, item_path)
             }
             Self::CommandSelect { item_path, .. } => {
-                let Some(item) = item_at_path(&node.items, item_path) else {
+                if item_at_path(&node.items, item_path).is_none() {
                     return Vec::new();
-                };
+                }
                 node.on_select
                     .map(|id| {
                         vec![protocol::CallbackCall::with_value(
                             id,
-                            json!(item.id_or_label()),
+                            protocol::menu_selection_payload(item_path),
                         )]
                     })
                     .unwrap_or_default()
             }
             Self::CommandConfirm { item_path, .. } => {
-                let Some(item) = item_at_path(&node.items, item_path) else {
+                if item_at_path(&node.items, item_path).is_none() {
                     return Vec::new();
-                };
+                }
                 node.on_confirm
                     .map(|id| {
                         vec![protocol::CallbackCall::with_value(
                             id,
-                            json!(item.id_or_label()),
+                            protocol::menu_selection_payload(item_path),
                         )]
                     })
                     .unwrap_or_default()
@@ -1758,22 +1754,30 @@ mod tests {
             key: "edit-menu".into(),
             item_path: vec!["copy".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-copy", "cb-menu"]);
+        let copy = queue.next(&tree).unwrap();
+        assert_eq!(ids(copy.clone()), vec!["cb-copy", "cb-menu"]);
+        assert_eq!(copy[1].value, Some(json!("copy")));
         queue.push(QueuedAction::CljSelect {
             key: "edit-menu".into(),
             item_path: vec!["share".into(), "link".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-link", "cb-menu"]);
+        let link = queue.next(&tree).unwrap();
+        assert_eq!(ids(link.clone()), vec!["cb-link", "cb-menu"]);
+        assert_eq!(link[1].value, Some(json!(["share", "link"])));
         queue.push(QueuedAction::CljSelect {
             key: "palette".into(),
             item_path: vec!["Edit".into(), "find".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-cmd"]);
+        let cmd = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd.clone()), vec!["cb-cmd"]);
+        assert_eq!(cmd[0].value, Some(json!(["Edit", "find"])));
         queue.push(QueuedAction::CommandSelect {
             key: "palette".into(),
             item_path: vec!["Edit".into(), "find".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-sel"]);
+        let sel = queue.next(&tree).unwrap();
+        assert_eq!(ids(sel.clone()), vec!["cb-sel"]);
+        assert_eq!(sel[0].value, Some(json!(["Edit", "find"])));
         queue.push(QueuedAction::CljSelect {
             key: "palette".into(),
             item_path: vec!["Edit".into(), "find".into()],
@@ -1782,10 +1786,10 @@ mod tests {
             key: "palette".into(),
             item_path: vec!["Edit".into(), "find".into()],
         });
-        assert_eq!(
-            ids(queue.next(&tree).unwrap()),
-            vec!["cb-cmd", "cb-confirm"]
-        );
+        let confirm = queue.next(&tree).unwrap();
+        assert_eq!(ids(confirm.clone()), vec!["cb-cmd", "cb-confirm"]);
+        assert_eq!(confirm[0].value, Some(json!(["Edit", "find"])));
+        assert_eq!(confirm[1].value, Some(json!(["Edit", "find"])));
         queue.push(QueuedAction::CommandQuery {
             key: "palette".into(),
             query: "fi".into(),
@@ -1823,7 +1827,7 @@ mod tests {
     #[test]
     fn clj_select_uses_exact_path_when_leaf_ids_collide() {
         let tree = node(json!({"type": "window", "children": [
-            {"type": "native-menu", "id": "os-menu",
+            {"type": "native-menu", "id": "os-menu", "on-change": "cb-os",
              "items": [
                 {"id": "file", "label": "File", "items": [
                     {"id": "open", "label": "Open file", "on-click": "cb-file-open"}
@@ -1833,6 +1837,7 @@ mod tests {
                 ]}
              ]},
             {"type": "command", "id": "palette", "on-change": "cb-cmd",
+             "on-select": "cb-sel", "on-confirm": "cb-confirm",
              "items": [
                 {"id": "file", "label": "File", "items": [
                     {"id": "open", "label": "Open file", "on-click": "cb-file-cmd"}
@@ -1850,28 +1855,44 @@ mod tests {
             key: "os-menu".into(),
             item_path: vec!["project".into(), "open".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-project-open"]);
+        let os_project = queue.next(&tree).unwrap();
+        assert_eq!(ids(os_project.clone()), vec!["cb-project-open", "cb-os"]);
+        assert_eq!(os_project[1].value, Some(json!(["project", "open"])));
         queue.push(QueuedAction::CljSelect {
             key: "os-menu".into(),
             item_path: vec!["file".into(), "open".into()],
         });
-        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-file-open"]);
+        let os_file = queue.next(&tree).unwrap();
+        assert_eq!(ids(os_file.clone()), vec!["cb-file-open", "cb-os"]);
+        assert_eq!(os_file[1].value, Some(json!(["file", "open"])));
         queue.push(QueuedAction::CljSelect {
             key: "palette".into(),
             item_path: vec!["project".into(), "open".into()],
         });
-        assert_eq!(
-            ids(queue.next(&tree).unwrap()),
-            vec!["cb-project-cmd", "cb-cmd"]
-        );
+        let cmd_project = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd_project.clone()), vec!["cb-project-cmd", "cb-cmd"]);
+        assert_eq!(cmd_project[1].value, Some(json!(["project", "open"])));
         queue.push(QueuedAction::CljSelect {
             key: "palette".into(),
             item_path: vec!["file".into(), "open".into()],
         });
-        assert_eq!(
-            ids(queue.next(&tree).unwrap()),
-            vec!["cb-file-cmd", "cb-cmd"]
-        );
+        let cmd_file = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd_file.clone()), vec!["cb-file-cmd", "cb-cmd"]);
+        assert_eq!(cmd_file[1].value, Some(json!(["file", "open"])));
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let sel = queue.next(&tree).unwrap();
+        assert_eq!(ids(sel.clone()), vec!["cb-sel"]);
+        assert_eq!(sel[0].value, Some(json!(["project", "open"])));
+        queue.push(QueuedAction::CommandConfirm {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let confirm = queue.next(&tree).unwrap();
+        assert_eq!(ids(confirm.clone()), vec!["cb-confirm"]);
+        assert_eq!(confirm[0].value, Some(json!(["project", "open"])));
         queue.push(QueuedAction::CljSelect {
             key: "os-menu".into(),
             item_path: vec!["open".into()],
@@ -1879,6 +1900,30 @@ mod tests {
         assert!(
             queue.next(&tree).is_none(),
             "a one-element path must not depth-first the first duplicate leaf"
+        );
+    }
+
+    #[test]
+    fn command_select_without_on_select_emits_nothing() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project"}
+                ]}
+            ]
+        }]}));
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        assert!(
+            queue.next(&tree).is_none(),
+            "no Clojure :on-select means no callback and no echo to wait for"
         );
     }
 

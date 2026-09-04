@@ -247,6 +247,9 @@ struct CommandSlot {
     suppress_select: bool,
     pending_select: Option<Vec<String>>,
     last_emitted_query: Option<String>,
+    /// Last path sent to Clojure `:on-select`. Empty unless that callback
+    /// exists and actually fired, so a controlled `:selected` without
+    /// `:on-select` can still restore native highlight.
     last_emitted_path: Option<Vec<String>>,
     programmatic_query: Option<String>,
 }
@@ -2829,12 +2832,14 @@ impl RootView {
                 if current_ix != desired_ix {
                     let current_path =
                         current_ix.and_then(|ix| action_bridge::command_item_path(&node.items, ix));
-                    let waiting = self
+                    let last_emitted = self
                         .commands
                         .get(key)
-                        .and_then(|slot| slot.last_emitted_path.clone())
-                        == current_path;
-                    if !waiting {
+                        .and_then(|slot| slot.last_emitted_path.as_deref());
+                    if action_bridge::should_apply_command_selected_path(
+                        last_emitted,
+                        current_path.as_deref(),
+                    ) {
                         if let Some(slot) = self.commands.get_mut(key) {
                             slot.suppress_select = true;
                         }
@@ -2899,7 +2904,7 @@ impl RootView {
         if let Some(h) = node.menu_max_h.filter(|h| *h > 0.0) {
             command = command.max_h(px(h));
         }
-        {
+        if node.on_select.is_some() {
             let entity = entity.clone();
             let key = key.to_string();
             let items = node.items.clone();

@@ -290,7 +290,7 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
             ("copy".into(), Value::Null, true),
             ("menu".into(), json!("copy"), true),
             ("link".into(), Value::Null, true),
-            ("menu".into(), json!("link"), true),
+            ("menu".into(), json!(["share", "link"]), true),
             ("context".into(), json!("inspect"), false),
             ("wrap".into(), Value::Null, true),
             ("native".into(), json!("wrap"), true),

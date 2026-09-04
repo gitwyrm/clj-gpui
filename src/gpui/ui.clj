@@ -1360,11 +1360,13 @@
       (some? trigger) (assoc :trigger trigger))))
 
 (defn dropdown-menu
-  "Button that opens a popup menu. `on-change` receives the original item id.
+  "Button that opens a popup menu.
 
-  Item `:on-click` (0-arg) runs before the menu `:on-change` for the same
-  selection. Both use the same callback generation; the host then fetches
-  one tree.
+  `:on-change` receives the original leaf id for a flat item, or a path
+  vector `[submenu-id leaf-id]` for a nested item so duplicate leaves
+  stay distinct. Item `:on-click` (0-arg) runs before the menu
+  `:on-change` for the same selection. Both use the same callback
+  generation; the host then fetches one tree.
 
   (ui/dropdown-menu [{:id :copy :label \"Copy\"} :- {:id :paste :label \"Paste\"}]
                     {:on-change handle!}
@@ -1389,9 +1391,10 @@
             opts))))
 
 (defn dropdown-button
-  "Split action button plus menu. Kit `DropdownButton`. `on-change`
-  receives the original item id, same batch as `ui/dropdown-menu`
-  (item `:on-click` then menu `:on-change`). The action half is `:trigger`
+  "Split action button plus menu. Kit `DropdownButton`. `:on-change`
+  receives the original leaf id, or a path vector for a nested item,
+  same batch as `ui/dropdown-menu` (item `:on-click` then menu
+  `:on-change`). The action half is `:trigger`
   (a button, or a string wrapped as one). Its `:on-click` fires when that
   half is pressed. Omit the trigger for a menu-only split (Kit-valid).
   Outer `:variant` / `:size` / `:outline` / `:selected` / `:disabled`
@@ -1427,10 +1430,11 @@
        (some? trigger) (assoc :trigger trigger)))))
 
 (defn context-menu
-  "Right-click menu around a child. `on-change` receives the original item id.
+  "Right-click menu around a child.
 
-  Same selection batch as `dropdown-menu`: item `:on-click` then menu
-  `:on-change`, one tree fetch.
+  `:on-change` receives the original leaf id, or a path vector for a
+  nested item (same contract as `dropdown-menu`). Same selection batch:
+  item `:on-click` then menu `:on-change`, one tree fetch.
 
   The host is a flex column. Wrapping a `:flex 1` list/table/tree keeps
   leftover height (a block wrapper would collapse those viewports). Put
@@ -1476,11 +1480,15 @@
   The OS menu remaining visible is not tracked (Kit has no dismiss
   callback). `:position [x y]` is window logical pixels; omitted uses
   the current mouse position. Item `:on-click` then menu `:on-change`
-  is one batch, same as `ui/dropdown-menu`. Nested `:items` are
-  submenus. `-` / `:-` is a separator.
+  is one batch, same as `ui/dropdown-menu`. Parent `:on-change` receives
+  the original leaf id, or a path vector `[submenu-id leaf-id]` when
+  the leaf is nested, so duplicate submenu leaves stay distinct.
+  Nested `:items` are submenus. `-` / `:-` is a separator.
 
   Kit's public NativeMenu builders cannot combine a check mark with an
-  icon or with disabled. When both are set, icon (then check) wins.
+  icon or with disabled. Icon (including icon+disabled) wins over a
+  check. When there is no icon, disabled wins over checked — the check
+  mark is dropped so the OS row stays inert.
 
   (ui/native-menu
     [{:id :copy :label \"Copy\"} :- {:id :wrap :label \"Word wrap\" :checked wrap?}]
@@ -1506,15 +1514,20 @@
   Clojure owns the entries (ids, labels, groups, disabled/checked,
   icons, keywords). Confirm dispatches the same generic host Action as
   `ui/native-menu` (`slot` + `item_path`), then Clojure's `:on-change`
-  receives the original leaf id. Kit `on_confirm` is a separate route:
-  `:on-confirm` fires after that Action, same leaf id, in one batch
-  with `:on-change`. `:on-select` is highlight only (arrows / hover),
-  not confirmation.
+  receives the original leaf id, or a path vector `[group-id leaf-id]`
+  for a grouped leaf so duplicate ids round-trip through controlled
+  `:selected`. Kit `on_confirm` is a separate route: `:on-confirm`
+  fires after that Action, same payload, in one batch with
+  `:on-change`. `:on-select` is highlight only (arrows / hover),
+  not confirmation; the host installs it only when this callback is
+  present.
 
   Nested `:items` are Kit `CommandGroup` sections. Group titles are
-  not selectable and are not in the callback id map. Duplicate leaf
-  ids under two groups stay distinct on the Action path (group
-  identity then leaf). `-` / `:-` is a top-level separator. Search is
+  not selectable. Group identities are in the parent-callback id map
+  so a path vector can restore both segments (first-wins if a group
+  wire id collides with a leaf). Duplicate leaf ids under two groups
+  stay distinct on the Action path (group identity then leaf).
+  `-` / `:-` is a top-level separator. Search is
   on by default. `:filterable false` keeps the query field but skips
   local filtering (`:on-query` still fires). `:query` is programmatic
   search text (`CommandState::query` / `set_query`). `:selected` /
@@ -1552,7 +1565,7 @@
          selected (:value opts)
          opts (with-id-callbacks
                 (dissoc opts :value)
-                (selectable-option-leaves raw)
+                (flatten-tree-items raw)
                 [:on-change :on-select :on-confirm])]
      (cond-> (merge {:type :command
                      :items (menu-items raw)}

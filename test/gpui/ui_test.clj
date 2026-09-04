@@ -722,6 +722,43 @@
       (is (fn? (:on-change cmd)))
       (is (fn? (:on-select cmd)))
       (is (fn? (:on-confirm cmd))))
+    (let [items [{:id :file :label "File" :items [{:id :open :label "Open file"}]}
+                 {:id :project :label "Project" :items [{:id :open :label "Open project"}]}]
+          !selected (atom nil)
+          cmd (ui/command items {:selected @!selected
+                                 :on-select #(reset! !selected %)
+                                 :on-change #(reset! !selected %)
+                                 :on-confirm #(reset! !selected %)})]
+      ((:on-select cmd) ["project" "open"])
+      (is (= [:project :open] @!selected))
+      (let [echo (ui/command items {:selected @!selected
+                                    :on-select #(reset! !selected %)})]
+        (is (= ["project" "open"] (:value echo))
+            "echoing the grouped payload as :selected must stay a path"))
+      ((:on-change cmd) ["file" "open"])
+      (is (= [:file :open] @!selected))
+      ((:on-confirm cmd) "copy")
+      (is (= "copy" @!selected)
+          "unknown wire ids stay as received"))
+    (let [!got (atom nil)
+          n (ui/native-menu
+             [{:id :file :label "File" :items [{:id :open :label "Open file"}]}
+              {:id :project :label "Project" :items [{:id :open :label "Open project"}]}]
+             {:on-change #(reset! !got %)})]
+      ((:on-change n) ["project" "open"])
+      (is (= [:project :open] @!got))
+      ((:on-change n) "copy")
+      (is (= "copy" @!got)))
+    (let [!got (atom nil)
+          n (ui/dropdown-menu
+             [{:id :share :label "Share"
+               :items [{:id :link :label "Copy link"}]}]
+             {:on-change #(reset! !got %)}
+             (ui/button "Edit"))]
+      ((:on-change n) ["share" "link"])
+      (is (= [:share :link] @!got))
+      ((:on-change n) "copy")
+      (is (= "copy" @!got)))
     (let [bar (ui/status-bar {:left (ui/label "Ln 1")
                               :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
                              (ui/label "Ready"))]
