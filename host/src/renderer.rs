@@ -17,7 +17,7 @@ use gpui_component::{
     alert::Alert,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
+    button::{Button, ButtonVariants as _, DropdownButton, Toggle, ToggleVariants as _},
     checkbox::Checkbox,
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
@@ -50,7 +50,7 @@ use gpui_component::{
     shimmer::ShimmerText,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
-    slider::{Slider, SliderEvent, SliderState, SliderValue},
+    slider::{Slider, SliderEvent, SliderScale, SliderState, SliderValue},
     spinner::Spinner,
     stepper::{Stepper, StepperItem},
     switch::Switch,
@@ -120,6 +120,7 @@ struct SliderSlot {
     min: f32,
     max: f32,
     step: f32,
+    scale: SliderScale,
     on_change: Option<String>,
     /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
     /// track width changes we must re-render or they disagree by a few px.
@@ -1010,18 +1011,17 @@ impl RootView {
         // the wrapper re-renders when the laid-out size changes.
         let (lo, hi) = slider_range(node.min, node.max);
         let step = slider_step(node.step);
-        let value = slider_controlled_value(node.number_value(), lo, hi);
+        let scale = slider_effective_scale(node, lo, hi);
+        let value = slider_wanted_value(node, lo, hi);
 
         if let Some(slot) = self.sliders.get_mut(key) {
             if (slot.min - lo).abs() <= f32::EPSILON
                 && (slot.max - hi).abs() <= f32::EPSILON
                 && (slot.step - step).abs() <= f32::EPSILON
+                && slot.scale == scale
             {
                 slot.on_change = node.on_change.clone();
-                let current = match slot.state.read(cx).value() {
-                    SliderValue::Single(v) => v,
-                    SliderValue::Range(_, end) => end,
-                };
+                let current = slot.state.read(cx).value();
                 // `set_value` notifies without emitting Change, so applying
                 // Clojure's current value cannot loop. Step is drag granularity
                 // only; a 40→42 update with step 5 must still land on 42.
@@ -1034,22 +1034,17 @@ impl RootView {
             }
         }
 
-        let state = cx.new(|_cx| {
-            SliderState::new()
-                .min(lo)
-                .max(hi)
-                .step(step)
-                .default_value(value)
-        });
+        let mut builder = SliderState::new().min(lo).max(hi).step(step);
+        if scale.is_logarithmic() {
+            builder = builder.scale(SliderScale::Logarithmic);
+        }
+        let state = cx.new(|_cx| builder.default_value(value));
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
             let SliderEvent::Change(changed) = event else {
                 return;
             };
-            let number = match changed {
-                SliderValue::Single(v) => *v,
-                SliderValue::Range(_, end) => *end,
-            };
+            let payload = slider_event_payload(*changed);
             let Some(id) = this
                 .sliders
                 .get(&key_owned)
@@ -1057,7 +1052,7 @@ impl RootView {
             else {
                 return;
             };
-            this.emit_value(id, json!(number));
+            this.emit_value(id, payload);
         })
         .detach();
         self.sliders.insert(
@@ -1067,6 +1062,7 @@ impl RootView {
                 min: lo,
                 max: hi,
                 step,
+                scale,
                 on_change: node.on_change.clone(),
                 bar_px: None,
                 settle: 0,
@@ -1292,6 +1288,7 @@ impl RootView {
             "popover" => self.render_popover(node, &key, cx),
             "hover-card" => self.render_hover_card(node, path, &key, window, cx),
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
+            "dropdown-button" => self.render_dropdown_button(node, path, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
@@ -1457,6 +1454,9 @@ impl RootView {
         };
         if node.disabled {
             slider = slider.disabled(true);
+        }
+        if node.reverse {
+            slider = slider.reverse();
         }
         let mut inner = node.clone();
         inner.flex = None;
@@ -2371,6 +2371,73 @@ impl RootView {
                 overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
             })
             .into_any_element()
+    }
+
+    fn render_dropdown_button(
+        &self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = node.items.clone();
+        let emit = Self::action_emitter(cx);
+        let key = key.to_string();
+        let mut dropdown = apply_dropdown_button_chrome(DropdownButton::new(eid(&key)), node);
+        if let Some(trigger) = node.trigger.as_deref() {
+            let mut button = overlay::trigger_button(Some(trigger), &key);
+            if trigger.compact || node.compact {
+                button = button.compact();
+            }
+            if trigger.loading || node.loading {
+                button = button.loading(true);
+            }
+            if let Some(text) = trigger.tooltip.clone().filter(|s| !s.is_empty()) {
+                button = button.tooltip(text);
+            }
+            if trigger.on_click.is_some() {
+                let emit = emit.clone();
+                let click_key = overlay::node_key(trigger, &format!("{path}-trigger"));
+                button = button.on_click(move |_, _, cx| {
+                    emit(
+                        overlay::QueuedAction::ButtonClick {
+                            key: click_key.clone(),
+                        },
+                        cx,
+                    );
+                });
+            }
+            dropdown = dropdown.button(button);
+        }
+        let emit_menu = emit.clone();
+        let menu_key = key.clone();
+        dropdown = if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+            dropdown.dropdown_menu_with_anchor(anchor, move |menu, window, cx| {
+                overlay::fill_popup_menu(
+                    menu,
+                    &items,
+                    &menu_key,
+                    &[],
+                    emit_menu.clone(),
+                    window,
+                    cx,
+                )
+            })
+        } else {
+            dropdown.dropdown_menu(move |menu, window, cx| {
+                overlay::fill_popup_menu(
+                    menu,
+                    &items,
+                    &menu_key,
+                    &[],
+                    emit_menu.clone(),
+                    window,
+                    cx,
+                )
+            })
+        };
+        apply_style(dropdown, node, cx).into_any_element()
     }
 
     fn render_context_menu(
@@ -4062,7 +4129,58 @@ fn slider_controlled_value(raw: Option<f32>, min: f32, max: f32) -> f32 {
     raw.unwrap_or(min).clamp(min, max)
 }
 
-fn slider_value_changed(current: f32, wanted: f32) -> bool {
+fn slider_json_number(value: &Value) -> Option<f32> {
+    match value {
+        Value::Number(n) => n.as_f64().map(|n| n as f32),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn slider_range_thumbs(start: f32, end: f32, min: f32, max: f32) -> SliderValue {
+    let start = start.clamp(min, max);
+    let end = end.clamp(min, max);
+    if start <= end {
+        SliderValue::Range(start, end)
+    } else {
+        SliderValue::Range(end, start)
+    }
+}
+
+/// Kit panics on logarithmic scale when `min <= 0` or `min >= max`.
+fn slider_effective_scale(node: &Node, min: f32, max: f32) -> SliderScale {
+    let requested = mapping::parse_slider_scale(node.scale.as_deref());
+    if requested.is_logarithmic() && min > 0.0 && min < max {
+        SliderScale::Logarithmic
+    } else {
+        SliderScale::Linear
+    }
+}
+
+fn slider_wanted_value(node: &Node, min: f32, max: f32) -> SliderValue {
+    match &node.value {
+        Some(Value::Array(items)) if items.len() >= 2 => slider_range_thumbs(
+            slider_json_number(&items[0]).unwrap_or(min),
+            slider_json_number(&items[1]).unwrap_or(max),
+            min,
+            max,
+        ),
+        _ if node.range => {
+            let end = node.number_value().unwrap_or(max).clamp(min, max);
+            SliderValue::Range(min, end.max(min))
+        }
+        _ => SliderValue::Single(slider_controlled_value(node.number_value(), min, max)),
+    }
+}
+
+fn slider_event_payload(value: SliderValue) -> Value {
+    match value {
+        SliderValue::Single(v) => json!(v),
+        SliderValue::Range(start, end) => json!([start, end]),
+    }
+}
+
+fn slider_value_changed(current: SliderValue, wanted: SliderValue) -> bool {
     current != wanted
 }
 
@@ -4132,6 +4250,28 @@ fn apply_button_variant(button: Button, node: &Node) -> Button {
         _ if node.primary => button.primary(),
         _ => button,
     }
+}
+
+fn apply_dropdown_button_chrome(mut dropdown: DropdownButton, node: &Node) -> DropdownButton {
+    match node.variant.as_deref() {
+        Some("primary") => dropdown = dropdown.primary(),
+        Some("ghost") => dropdown = dropdown.ghost(),
+        Some("text") => dropdown = dropdown.text(),
+        Some("danger") => dropdown = dropdown.danger(),
+        Some("outline") => dropdown = dropdown.outline(),
+        _ if node.primary => dropdown = dropdown.primary(),
+        _ => {}
+    }
+    if node.outline && node.variant.as_deref() != Some("outline") {
+        dropdown = dropdown.outline();
+    }
+    if node.disabled {
+        dropdown = dropdown.disabled(true);
+    }
+    if node.control_size.is_some() {
+        dropdown = dropdown.with_size(mapping::parse_scale(node.control_size.as_deref()));
+    }
+    dropdown
 }
 
 fn select_opts(node: &Node) -> Vec<SelectOpt> {
@@ -5210,34 +5350,45 @@ mod select_control_tests {
 
 #[cfg(test)]
 mod slider_control_tests {
-    use super::{slider_controlled_value, slider_range, slider_step, slider_value_changed};
+    use super::{
+        Node, SliderScale, SliderValue, slider_controlled_value, slider_effective_scale,
+        slider_event_payload, slider_range, slider_range_thumbs, slider_step, slider_value_changed,
+        slider_wanted_value,
+    };
+    use serde_json::json;
 
     #[test]
     fn controlled_value_ignores_step_when_syncing() {
         let (lo, hi) = slider_range(Some(0.0), Some(100.0));
         assert_eq!(slider_step(Some(5.0)), 5.0);
-        let wanted = slider_controlled_value(Some(42.0), lo, hi);
-        assert_eq!(wanted, 42.0);
+        let wanted = SliderValue::Single(slider_controlled_value(Some(42.0), lo, hi));
+        assert_eq!(wanted, SliderValue::Single(42.0));
         assert!(
-            slider_value_changed(40.0, wanted),
+            slider_value_changed(SliderValue::Single(40.0), wanted),
             "40 → 42 with step 5 must update the host entity"
         );
     }
 
     #[test]
     fn unchanged_value_does_not_need_set_value() {
-        assert!(!slider_value_changed(40.0, 40.0));
-        assert!(slider_value_changed(40.0, 40.1));
+        assert!(!slider_value_changed(
+            SliderValue::Single(40.0),
+            SliderValue::Single(40.0)
+        ));
+        assert!(slider_value_changed(
+            SliderValue::Single(40.0),
+            SliderValue::Single(40.1)
+        ));
     }
 
     #[test]
     fn tiny_range_controlled_value_is_applied() {
         let (lo, hi) = slider_range(Some(0.0), Some(0.0001));
         assert_eq!((lo, hi), (0.0, 0.0001));
-        let wanted = slider_controlled_value(Some(0.00005), lo, hi);
-        assert_eq!(wanted, 0.00005);
+        let wanted = SliderValue::Single(slider_controlled_value(Some(0.00005), lo, hi));
+        assert_eq!(wanted, SliderValue::Single(0.00005));
         assert!(
-            slider_value_changed(0.0, wanted),
+            slider_value_changed(SliderValue::Single(0.0), wanted),
             "0 → 5e-5 on a 0..1e-4 slider must update the host entity"
         );
         assert!(!slider_value_changed(wanted, wanted));
@@ -5251,6 +5402,84 @@ mod slider_control_tests {
         assert_eq!(slider_controlled_value(None, 10.0, 20.0), 10.0);
         assert_eq!(slider_step(Some(0.0)), 1.0);
         assert_eq!(slider_step(None), 1.0);
+    }
+
+    #[test]
+    fn range_thumbs_clamp_and_swap() {
+        assert_eq!(
+            slider_range_thumbs(20.0, 70.0, 0.0, 100.0),
+            SliderValue::Range(20.0, 70.0)
+        );
+        assert_eq!(
+            slider_range_thumbs(90.0, 10.0, 0.0, 100.0),
+            SliderValue::Range(10.0, 90.0)
+        );
+        assert_eq!(
+            slider_range_thumbs(-5.0, 150.0, 0.0, 100.0),
+            SliderValue::Range(0.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn array_value_is_range_without_range_flag() {
+        let node = Node {
+            value: Some(json!([20, 70])),
+            ..Node::default()
+        };
+        assert_eq!(
+            slider_wanted_value(&node, 0.0, 100.0),
+            SliderValue::Range(20.0, 70.0)
+        );
+        assert_eq!(
+            slider_event_payload(SliderValue::Range(20.0, 70.0)),
+            json!([20.0, 70.0])
+        );
+    }
+
+    #[test]
+    fn range_flag_with_scalar_uses_min_to_value() {
+        let node = Node {
+            range: true,
+            value: Some(json!(40)),
+            ..Node::default()
+        };
+        assert_eq!(
+            slider_wanted_value(&node, 0.0, 100.0),
+            SliderValue::Range(0.0, 40.0)
+        );
+        let omitted = Node {
+            range: true,
+            ..Node::default()
+        };
+        assert_eq!(
+            slider_wanted_value(&omitted, 10.0, 80.0),
+            SliderValue::Range(10.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn logarithmic_needs_positive_min() {
+        let log = Node {
+            scale: Some("logarithmic".into()),
+            ..Node::default()
+        };
+        assert_eq!(
+            slider_effective_scale(&log, 0.25, 4.0),
+            SliderScale::Logarithmic
+        );
+        assert_eq!(
+            slider_effective_scale(&log, 0.0, 100.0),
+            SliderScale::Linear
+        );
+        assert_eq!(
+            slider_effective_scale(&log, 10.0, 10.0),
+            SliderScale::Linear
+        );
+        let linear = Node::default();
+        assert_eq!(
+            slider_effective_scale(&linear, 0.25, 4.0),
+            SliderScale::Linear
+        );
     }
 }
 

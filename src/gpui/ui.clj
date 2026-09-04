@@ -645,19 +645,39 @@
                     :options (option-items raw)}
                    opts))))
 
-(defn slider
-  "Numeric slider. `on-change` receives a number.
+(defn- slider-value
+  [value]
+  (cond
+    (and (sequential? value) (not (string? value))) (vec value)
+    (some? value) value
+    :else 0))
 
-  (ui/slider volume {:min 0 :max 100 :on-change #(swap! !state assoc :vol %)})"
+(defn- slider-opts
+  [opts]
+  (let [opts (apply-control-size (or opts {}))]
+    (cond-> opts
+      (keyword? (:scale opts)) (update :scale name))))
+
+(defn slider
+  "Numeric slider. A single value sends a number; a two-number vector is
+  Kit range thumbs and `:on-change` receives `[start end]`. `:range true`
+  with a scalar is `min`..value. `:scale :logarithmic` (`:log`) needs
+  `min > 0` (otherwise the host keeps linear so Kit does not assert).
+  `:reverse` fills from the thumb to max on a single slider (ignored for
+  range). Named `:size` becomes `:control-size`.
+
+  (ui/slider volume {:min 0 :max 100 :on-change #(swap! !state assoc :vol %)})
+  (ui/slider [20 70] {:min 0 :max 100 :on-change set-span!})
+  (ui/slider zoom {:min 0.25 :max 4 :step 0.05 :scale :logarithmic})"
   ([value]
-   {:type :slider :value (or value 0)})
+   {:type :slider :value (slider-value value)})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge-widget {:type :slider :value (or value 0)} on-change-or-opts)
-     {:type :slider :value (or value 0) :on-change on-change-or-opts}))
+     (merge {:type :slider :value (slider-value value)} (slider-opts on-change-or-opts))
+     {:type :slider :value (slider-value value) :on-change on-change-or-opts}))
   ([value on-change opts]
-   (merge-widget {:type :slider :value (or value 0) :on-change on-change}
-                 opts)))
+   (merge {:type :slider :value (slider-value value) :on-change on-change}
+          (slider-opts opts))))
 
 (defn progress
   "Determinate progress bar. `value` is 0–100.
@@ -1082,7 +1102,7 @@
     :else (option-item x)))
 
 (defn menu-items
-  "Normalize popup-menu / context-menu / dropdown-menu rows."
+  "Normalize popup-menu / context-menu / dropdown-menu / dropdown-button rows."
   [xs]
   (into [] (keep menu-item) xs))
 
@@ -1272,6 +1292,41 @@
              :items (menu-items raw)
              :trigger trigger}
             opts))))
+
+(defn dropdown-button
+  "Split action button plus menu. Kit `DropdownButton`. `on-change`
+  receives the original item id, same batch as `ui/dropdown-menu`
+  (item `:on-click` then menu `:on-change`). The action half is `:trigger`
+  (a button, or a string wrapped as one). Its `:on-click` fires when that
+  half is pressed. Omit the trigger for a menu-only split (Kit-valid).
+  Outer `:variant` / `:size` / `:outline` / `:disabled` apply to both
+  halves. `:placement` (or `:anchor`) is the menu `Anchor` (Kit default
+  `top-right`).
+
+  (ui/dropdown-button [{:id :csv :label \"CSV\"} {:id :pdf :label \"PDF\"}]
+                      {:on-change handle! :variant :primary}
+                      (ui/button \"Export\" export!))"
+  ([items]
+   (dropdown-button items nil nil))
+  ([items trigger]
+   (dropdown-button items nil trigger))
+  ([items opts trigger]
+   (let [raw (or items [])
+         opts (with-nested-option-callback
+                (-> (or opts {})
+                    (dissoc :items :trigger)
+                    rewrite-anchor
+                    apply-control-size)
+                raw)
+         trigger (cond
+                   (ui-node? trigger) trigger
+                   (string? trigger) (button trigger)
+                   (some? trigger) (button (str trigger))
+                   :else nil)]
+     (cond-> (merge {:type :dropdown-button
+                     :items (menu-items raw)}
+                    opts)
+       (some? trigger) (assoc :trigger trigger)))))
 
 (defn context-menu
   "Right-click menu around a child. `on-change` receives the original item id.

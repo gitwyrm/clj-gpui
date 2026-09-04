@@ -23,6 +23,7 @@
   (is (some? (ns-resolve 'gpui.ui 'shimmer)))
   (is (some? (ns-resolve 'gpui.ui 'hover-card)))
   (is (some? (ns-resolve 'gpui.ui 'avatar-group)))
+  (is (some? (ns-resolve 'gpui.ui 'dropdown-button)))
   (is (some? (ns-resolve 'gpui.ui 'table-header)))
   (is (some? (ns-resolve 'gpui.ui 'table-body)))
   (is (some? (ns-resolve 'gpui.ui 'table-footer)))
@@ -145,7 +146,12 @@
       (is (= 0 (:min n)))
       (is (= 100 (:max n)))
       (is (= 5 (:step n))))
-    (is (= 42 (:value (ui/slider 42 {:min 0 :max 100 :step 5})))))
+    (is (= 42 (:value (ui/slider 42 {:min 0 :max 100 :step 5}))))
+    (let [n (ui/slider [20 70] {:min 0 :max 100 :scale :logarithmic :reverse true})]
+      (is (= [20 70] (:value n)))
+      (is (= "logarithmic" (:scale n)))
+      (is (true? (:reverse n))))
+    (is (true? (:range (ui/slider 40 {:range true})))))
   (testing "select options"
     (let [n (ui/select :clj {:options [{:id :clj :label "Clojure"} "Rust"]
                              :placeholder "Lang"})]
@@ -625,7 +631,22 @@
       (is (= "paste" (get-in drop [:items 2 :items 0 :id])))
       (is (= :button (get-in drop [:trigger :type])))
       (is (= :context-menu (:type ctx)))
-      (is (= :label (get-in ctx [:children 0 :type])))))
+      (is (= :label (get-in ctx [:children 0 :type]))))
+    (let [split (ui/dropdown-button [{:id :csv :label "CSV"} :- {:id :pdf :label "PDF"}]
+                                    {:on-change (fn [_]) :variant :primary :size :small
+                                     :anchor :bottom-left}
+                                    (ui/button "Export" (fn [])))]
+      (is (= :dropdown-button (:type split)))
+      (is (= :button (get-in split [:trigger :type])))
+      (is (= "Export" (get-in split [:trigger :text])))
+      (is (fn? (get-in split [:trigger :on-click])))
+      (is (= :primary (:variant split)))
+      (is (= "small" (:control-size split)))
+      (is (= "bottom-left" (:placement split)))
+      (is (nil? (:anchor split)))
+      (is (true? (get-in split [:items 1 :separator])))
+      (is (fn? (:on-change split))))
+    (is (nil? (:trigger (ui/dropdown-button [{:id :csv :label "CSV"}])))))
   (testing "context-menu wraps a flex data-table"
     (let [tbl (ui/data-table {:columns [{:id :n :label "N"}]
                               :rows [{:id :a :cells ["A"]}]

@@ -683,7 +683,7 @@ pub struct Node {
     /// Date display format, or markdown vs `html`.
     #[serde(default)]
     pub format: Option<String>,
-    /// Date picker range mode.
+    /// Date picker range mode. Slider: two thumbs (`true` or a 2-number `value`).
     #[serde(default)]
     pub range: bool,
     /// Sheet footer node.
@@ -821,7 +821,7 @@ pub struct Node {
     /// ShimmerText absolute highlight half-width in pixels. Wins over `spread` when both set.
     #[serde(default, rename = "spread-px")]
     pub spread_px: Option<f32>,
-    /// ShimmerText right-to-left sweep. Kit default false.
+    /// ShimmerText right-to-left sweep. Slider: fill from thumb to max (single only).
     #[serde(default)]
     pub reverse: bool,
     /// ShimmerText single sweep instead of a loop. Kit default false.
@@ -848,6 +848,10 @@ pub struct Node {
     /// AvatarGroup max visible avatars. Kit default 3. Omitted leaves Kit's default.
     #[serde(default)]
     pub limit: Option<f32>,
+    /// Slider scale: `linear` (default / omitted) or `logarithmic` (`log`).
+    /// Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise linear.
+    #[serde(default)]
+    pub scale: Option<String>,
 }
 
 impl Node {
@@ -1053,6 +1057,21 @@ mod tests {
         assert_eq!(slider.min, Some(0.0));
         assert_eq!(slider.max, Some(100.0));
         assert_eq!(slider.step, Some(0.5));
+
+        let range: Node = serde_json::from_value(json!({
+            "type": "slider",
+            "value": [20, 70],
+            "range": true,
+            "scale": "logarithmic",
+            "reverse": true,
+            "min": 0.25,
+            "max": 4
+        }))
+        .unwrap();
+        assert_eq!(range.value, Some(json!([20, 70])));
+        assert!(range.range);
+        assert_eq!(range.scale.as_deref(), Some("logarithmic"));
+        assert!(range.reverse);
 
         let select: Node = serde_json::from_value(json!({
             "type": "select",
@@ -1694,6 +1713,24 @@ mod tests {
         .unwrap();
         assert!(node.items[1].is_separator());
         assert_eq!(node.items[2].items[0].id_or_label(), "paste");
+
+        let split: Node = serde_json::from_value(json!({
+            "type": "dropdown-button",
+            "items": [{"id": "csv", "label": "CSV"}],
+            "trigger": {"type": "button", "text": "Export"},
+            "variant": "primary",
+            "placement": "bottom-left"
+        }))
+        .unwrap();
+        assert_eq!(split.kind, "dropdown-button");
+        assert_eq!(split.items[0].id_or_label(), "csv");
+        assert_eq!(
+            split.trigger.as_ref().unwrap().text.as_deref(),
+            Some("Export")
+        );
+        assert_eq!(split.variant.as_deref(), Some("primary"));
+        assert_eq!(split.placement.as_deref(), Some("bottom-left"));
+        assert_eq!(PROTOCOL_VERSION, 10);
     }
 
     #[test]

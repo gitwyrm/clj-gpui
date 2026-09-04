@@ -365,9 +365,10 @@ impl QueuedAction {
                 Self::ButtonClick { .. } => node.kind == "button",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => node.kind == "popover",
-                Self::MenuSelect { .. } => {
-                    node.kind == "dropdown-menu" || node.kind == "context-menu"
-                }
+                Self::MenuSelect { .. } => matches!(
+                    node.kind.as_str(),
+                    "dropdown-menu" | "context-menu" | "dropdown-button"
+                ),
             };
             if found.is_none() && kind_matches && node_key(node, path) == *key {
                 found = Some(node.clone());
@@ -1501,6 +1502,30 @@ mod tests {
             key: "ask/content/1".into(),
         });
         assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-retry"]);
+    }
+
+    #[test]
+    fn dropdown_button_menu_and_trigger_resolve() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "dropdown-button",
+            "id": "export",
+            "on-change": "cb-menu",
+            "items": [{"id": "csv", "label": "CSV", "on-click": "cb-csv"}],
+            "trigger": {"type": "button", "text": "Export", "on-click": "cb-action"}
+        }]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::MenuSelect {
+            key: "export".into(),
+            item_path: vec!["csv".into()],
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-csv", "cb-menu"]);
+        queue.push(QueuedAction::ButtonClick {
+            key: "root-0-trigger".into(),
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-action"]);
     }
 
     #[test]

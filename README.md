@@ -246,6 +246,9 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/radio-group selected {:options [{:id :light :label "Light"} :dark]
                           :on-change set-mode! :orientation :horizontal})
 (ui/slider volume {:min 0 :max 100 :on-change set-volume!})
+(ui/slider [20 70] {:min 0 :max 100 :on-change set-span!})
+(ui/slider zoom {:min 0.25 :max 4 :step 0.05 :scale :logarithmic :on-change set-zoom!})
+(ui/slider left {:min 0 :max 100 :reverse true :on-change set-left!})
 (ui/progress 45)
 (ui/progress-circle 45 {:size :large :color "#3366ff"} (ui/label "45"))
 (ui/progress-circle nil {:loading true})
@@ -290,6 +293,9 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/dropdown-menu [{:id :copy :label "Copy"} :- {:id :paste :label "Paste"}]
                   {:on-change handle!}
                   (ui/button "Edit"))
+(ui/dropdown-button [{:id :csv :label "CSV"} {:id :pdf :label "PDF"}]
+                    {:on-change handle! :variant :primary}
+                    (ui/button "Export" export!))
 (ui/context-menu items {:on-change handle!} (ui/data-table {:columns cols :rows rows :flex 1}))
 (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
 (ui/data-table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]

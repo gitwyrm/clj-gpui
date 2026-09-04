@@ -4,13 +4,10 @@ use crate::catalog;
 use gpui::Axis;
 use gpui_component::{
     IconName, Placement, Side, Size, button::ToggleVariant, group_box::GroupBoxVariant,
-    tab::TabVariant, tag::TagVariant,
+    slider::SliderScale, tab::TabVariant, tag::TagVariant,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
-
-#[cfg(test)]
-use gpui_component::slider::SliderScale;
 
 pub fn parse_scale(value: Option<&str>) -> Size {
     match value.map(catalog::normalize) {
@@ -138,8 +135,9 @@ pub fn parse_toggle_variant(value: Option<&str>) -> ToggleVariant {
     }
 }
 
-/// Logarithmic scale is category C (deferred). Kept for mapping tests.
-#[cfg(test)]
+/// Slider scale. Omitted / unknown is linear. `log` is an alias of
+/// `logarithmic`. The host still refuses log when `min <= 0` so Kit
+/// does not assert.
 pub fn parse_slider_scale(value: Option<&str>) -> SliderScale {
     match value.map(catalog::normalize) {
         Some(name) if name == "logarithmic" || name == "log" => SliderScale::Logarithmic,
@@ -287,6 +285,8 @@ mod tests {
             parse_slider_scale(Some("logarithmic")),
             SliderScale::Logarithmic
         );
+        assert_eq!(parse_slider_scale(Some("log")), SliderScale::Logarithmic);
+        assert_eq!(parse_slider_scale(Some("linear")), SliderScale::Linear);
         assert_eq!(parse_slider_scale(None), SliderScale::Linear);
     }
 
