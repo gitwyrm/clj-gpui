@@ -178,12 +178,14 @@
                             :cleanable true
                             :title-prefix "Lang: "
                             :menu-width 280
-                            :empty "No languages"})]
+                            :empty "No languages"
+                            :focus-ring false})]
       (is (true? (:searchable n)))
       (is (true? (:cleanable n)))
       (is (= "Lang: " (:title-prefix n)))
       (is (= 280 (:menu-width n)))
       (is (= "No languages" (:empty n)))
+      (is (false? (:focus-ring n)))
       (is (= "Lisp" (get-in n [:options 0 :label])))
       (is (= "clj" (get-in n [:options 0 :items 0 :id])))
       (is (= "ClojureScript (cljs)" (get-in n [:options 0 :items 1 :display])))

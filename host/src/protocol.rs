@@ -448,7 +448,9 @@ pub struct Item {
     pub text: Option<String>,
     #[serde(default)]
     pub disabled: bool,
-    /// Select `SelectItem::display_title`. Omitted falls back to `label`.
+    /// Select string form of `SelectItem::display_title`. Kit's API is
+    /// `Option<AnyElement>`; custom display widgets are not wrapped yet.
+    /// Omitted falls back to `label`.
     #[serde(default)]
     pub display: Option<String>,
     #[serde(default)]
@@ -760,9 +762,14 @@ pub struct Node {
     /// Select: Kit `Select::search_placeholder`.
     #[serde(default, rename = "search-placeholder")]
     pub search_placeholder: Option<String>,
-    /// Select: Kit `Select::empty` copy when the list has no rows.
+    /// Select: string form of Kit `Select::empty` when the list has no
+    /// rows. Kit accepts arbitrary `IntoElement`; custom empty widgets
+    /// are not wrapped yet.
     #[serde(default)]
     pub empty: Option<String>,
+    /// Select: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
+    #[serde(default, rename = "focus-ring")]
+    pub focus_ring: Option<bool>,
     #[serde(default)]
     pub multiple: bool,
     #[serde(default)]
@@ -1216,6 +1223,7 @@ mod tests {
         assert_eq!(select.collection()[0].id_or_label(), "clj");
         assert_eq!(select.collection()[1].label_or_id(), "Rust");
         assert!(select.searchable);
+        assert_eq!(select.focus_ring, None);
 
         let grouped: Node = serde_json::from_value(json!({
             "type": "select",
@@ -1227,6 +1235,7 @@ mod tests {
             "menu-max-h": 240,
             "search-placeholder": "Filter…",
             "empty": "No languages",
+            "focus-ring": false,
             "options": [
                 {
                     "label": "Lisp",
@@ -1252,6 +1261,7 @@ mod tests {
         assert_eq!(grouped.menu_max_h, Some(240.0));
         assert_eq!(grouped.search_placeholder.as_deref(), Some("Filter…"));
         assert_eq!(grouped.empty.as_deref(), Some("No languages"));
+        assert_eq!(grouped.focus_ring, Some(false));
         assert_eq!(grouped.collection().len(), 2);
         assert_eq!(grouped.collection()[0].label_or_id(), "Lisp");
         assert_eq!(

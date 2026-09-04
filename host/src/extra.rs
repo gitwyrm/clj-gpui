@@ -402,13 +402,35 @@ pub fn select_fingerprint(items: &[Item]) -> u64 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectSlotSync {
+    /// Option identity changed. Recreate `SelectState` so the search
+    /// input and `matched_items` agree — do not call Kit `set_items`
+    /// on a live searchable state (that installs an unfiltered
+    /// delegate while leaving the query text).
     pub set_items: bool,
     pub set_selected: bool,
 }
 
-/// Skip `set_items` / `set_selected_index` when the collection and
-/// controlled id are unchanged so an open searchable query survives
-/// an unrelated Clojure rerender.
+/// How a live Select slot should apply Clojure's next tree.
+///
+/// Unrelated rerenders ([`SelectLiveSync::Leave`]) must not touch Kit
+/// state, including after a native Confirm whose echo matches the
+/// cached id (`set_selected_value` would clear an in-progress query).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectLiveSync {
+    Leave,
+    /// Controlled id changed against the same collection. Use Kit
+    /// `SelectState::set_selected_value` (or `set_selected_index(None)`
+    /// when clearing). Never feed a full-list [`select_index`] into a
+    /// filtered `SearchableVec` — matched row/section indexes can
+    /// differ from the unfiltered collection.
+    SetValue,
+    /// Option fingerprint changed. Recreate the `SelectState` entity.
+    Rebuild,
+}
+
+/// Skip Kit updates when the collection and controlled id are
+/// unchanged so an open searchable query survives an unrelated
+/// Clojure rerender.
 pub fn select_slot_sync(
     prev_fingerprint: u64,
     next_fingerprint: u64,
@@ -422,8 +444,31 @@ pub fn select_slot_sync(
     }
 }
 
-/// Kit `IndexPath` for a controlled select value. Flat lists stay
-/// section 0; grouped lists use section+row from [`select_sections`].
+pub fn select_live_sync(
+    prev_fingerprint: u64,
+    next_fingerprint: u64,
+    prev_selected: Option<&str>,
+    next_selected: Option<&str>,
+) -> SelectLiveSync {
+    let sync = select_slot_sync(
+        prev_fingerprint,
+        next_fingerprint,
+        prev_selected,
+        next_selected,
+    );
+    if sync.set_items {
+        SelectLiveSync::Rebuild
+    } else if sync.set_selected {
+        SelectLiveSync::SetValue
+    } else {
+        SelectLiveSync::Leave
+    }
+}
+
+/// Full-list Kit `IndexPath` for `SelectState::new` only (no live query).
+/// Flat lists stay section 0; grouped lists use section+row from
+/// [`select_sections`]. Do not pass this into a filtered delegate —
+/// see [`SelectLiveSync::SetValue`].
 pub fn select_index(items: &[Item], selected: Option<&str>) -> Option<gpui_component::IndexPath> {
     let id = selected?;
     if select_is_grouped(items) {
@@ -468,6 +513,39 @@ pub fn select_group_search_ids(sections: &[SelectSection], query: &str) -> Vec<S
         }
     }
     ids
+}
+
+/// Kit `SearchableVec<SelectGroup<_>>::perform_search` section+row for
+/// `id` under `query`. Empty sections from a title-only hit still occupy
+/// a section index, matching Kit.
+#[cfg(test)]
+fn select_group_matched_index(
+    sections: &[SelectSection],
+    id: &str,
+    query: &str,
+) -> Option<(usize, usize)> {
+    let q = query.to_lowercase();
+    let mut section_ix = 0usize;
+    for section in sections {
+        let title_hit = section.title.to_lowercase().contains(&q);
+        let item_hit = section
+            .items
+            .iter()
+            .any(|item| item.label.to_lowercase().contains(&q));
+        if !title_hit && !item_hit {
+            continue;
+        }
+        if let Some(row) = section
+            .items
+            .iter()
+            .filter(|item| item.label.to_lowercase().contains(&q))
+            .position(|item| item.id == id)
+        {
+            return Some((section_ix, row));
+        }
+        section_ix += 1;
+    }
+    None
 }
 
 pub fn date_from_value(value: &Option<Value>, range: bool) -> Date {
@@ -2244,6 +2322,11 @@ mod tests {
         let sync = select_slot_sync(fp, fp, Some("clj"), Some("clj"));
         assert!(!sync.set_items);
         assert!(!sync.set_selected);
+        assert_eq!(
+            select_live_sync(fp, fp, Some("clj"), Some("clj")),
+            SelectLiveSync::Leave,
+            "native Confirm cache matching a Clojure echo must not clear the query"
+        );
         let renamed = vec![select_group(
             "Lisp",
             vec![Item {
@@ -2256,9 +2339,23 @@ mod tests {
             select_slot_sync(fp, select_fingerprint(&renamed), Some("clj"), Some("clj"));
         assert!(items_changed.set_items);
         assert!(items_changed.set_selected);
+        assert_eq!(
+            select_live_sync(fp, select_fingerprint(&renamed), Some("clj"), Some("clj")),
+            SelectLiveSync::Rebuild,
+            "a real collection change must rebuild so query text and matched_items agree"
+        );
         let sel_only = select_slot_sync(fp, fp, Some("clj"), Some("rs"));
         assert!(!sel_only.set_items);
         assert!(sel_only.set_selected);
+        assert_eq!(
+            select_live_sync(fp, fp, Some("clj"), Some("rs")),
+            SelectLiveSync::SetValue
+        );
+        assert_eq!(
+            select_live_sync(fp, fp, Some("clj"), None),
+            SelectLiveSync::SetValue,
+            "clearing uses set_selected_index(None), not a full-list path"
+        );
         let display = vec![select_group(
             "Lisp",
             vec![Item {
@@ -2269,6 +2366,63 @@ mod tests {
             }],
         )];
         assert_ne!(fp, select_fingerprint(&display));
+    }
+
+    #[test]
+    fn select_full_list_index_differs_from_filtered_matched_items() {
+        let flat = vec![
+            select_item("clj", "Clojure"),
+            select_item("rs", "Rust"),
+            select_item("go", "Go"),
+        ];
+        let full = select_index(&flat, Some("go")).unwrap();
+        assert_eq!(full.section, 0);
+        assert_eq!(full.row, 2, "full-list Go is row 2");
+        let q = "go";
+        let filtered_row = flat
+            .iter()
+            .filter(|item| item.label_or_id().to_lowercase().contains(q))
+            .position(|item| item.id_or_label() == "go");
+        assert_eq!(filtered_row, Some(0));
+        assert_ne!(
+            full.row, 0,
+            "feeding select_index into a filtered SearchableVec would miss Go"
+        );
+        let fp = select_fingerprint(&flat);
+        assert_eq!(
+            select_live_sync(fp, fp, Some("clj"), Some("go")),
+            SelectLiveSync::SetValue,
+            "controlled sync must look up by value, not this IndexPath"
+        );
+
+        let grouped = vec![
+            select_group(
+                "Lisp",
+                vec![
+                    select_item("clj", "Clojure"),
+                    select_item("cljs", "ClojureScript"),
+                ],
+            ),
+            select_group(
+                "Systems",
+                vec![select_item("rs", "Rust"), select_item("go", "Go")],
+            ),
+        ];
+        let full_go = select_index(&grouped, Some("go")).unwrap();
+        assert_eq!(full_go.section, 1);
+        assert_eq!(full_go.row, 1);
+        let sections = select_sections(&grouped);
+        assert_eq!(
+            select_group_matched_index(&sections, "go", "go"),
+            Some((0, 0)),
+            "filtered Systems/Go is section 0 row 0"
+        );
+        assert_ne!((full_go.section, full_go.row), (0, 0));
+        let gfp = select_fingerprint(&grouped);
+        assert_eq!(
+            select_live_sync(gfp, gfp, Some("clj"), Some("go")),
+            SelectLiveSync::SetValue
+        );
     }
 
     #[test]

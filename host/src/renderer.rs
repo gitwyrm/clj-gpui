@@ -11,8 +11,8 @@ use gpui::{
     SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, rgb, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root, Sizable as _,
-    WindowExt as _,
+    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
+    Sizable as _, WindowExt as _,
     accordion::Accordion,
     alert::Alert,
     badge::Badge,
@@ -44,7 +44,7 @@ use gpui_component::{
     rating::Rating,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
-    searchable_list::SearchableListItem,
+    searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState},
     separator::Separator,
     shimmer::ShimmerText,
@@ -1149,7 +1149,6 @@ impl RootView {
         let grouped = extra::select_is_grouped(node.collection());
         let fingerprint = extra::select_fingerprint(node.collection());
         let selected = node.string_value().map(SharedString::from);
-        let selected_index = extra::select_index(node.collection(), node.string_value().as_deref());
 
         if let Some(slot) = self.selects.get_mut(key) {
             let same_kind = match &slot.state {
@@ -1158,50 +1157,50 @@ impl RootView {
             };
             if same_kind && slot.searchable == node.searchable {
                 slot.on_change = node.on_change.clone();
-                let sync = extra::select_slot_sync(
+                match extra::select_live_sync(
                     slot.fingerprint,
                     fingerprint,
                     slot.selected.as_deref(),
                     selected.as_deref(),
-                );
-                if sync.set_items {
-                    slot.fingerprint = fingerprint;
-                }
-                if sync.set_selected {
-                    slot.selected = selected.clone();
-                }
-                if sync.set_items || sync.set_selected {
-                    match &slot.state {
-                        SelectStateHandle::Flat(state) => {
-                            let state = state.clone();
-                            let items = select_flat_vec(node);
-                            state.update(cx, |state, cx| {
-                                if sync.set_items {
-                                    state.set_items(items, window, cx);
-                                }
-                                if sync.set_selected {
-                                    state.set_selected_index(selected_index, window, cx);
-                                }
-                            });
+                ) {
+                    extra::SelectLiveSync::Leave => return,
+                    extra::SelectLiveSync::SetValue => {
+                        slot.selected = selected.clone();
+                        match &slot.state {
+                            SelectStateHandle::Flat(state) => {
+                                let state = state.clone();
+                                state.update(cx, |state, cx| {
+                                    apply_select_controlled_value(
+                                        state,
+                                        selected.as_ref(),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }
+                            SelectStateHandle::Grouped(state) => {
+                                let state = state.clone();
+                                state.update(cx, |state, cx| {
+                                    apply_select_controlled_value(
+                                        state,
+                                        selected.as_ref(),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }
                         }
-                        SelectStateHandle::Grouped(state) => {
-                            let state = state.clone();
-                            let items = select_group_vec(node);
-                            state.update(cx, |state, cx| {
-                                if sync.set_items {
-                                    state.set_items(items, window, cx);
-                                }
-                                if sync.set_selected {
-                                    state.set_selected_index(selected_index, window, cx);
-                                }
-                            });
-                        }
+                        return;
+                    }
+                    extra::SelectLiveSync::Rebuild => {
+                        // Fall through and recreate so query text cannot
+                        // stay attached to a fresh unfiltered SearchableVec.
                     }
                 }
-                return;
             }
         }
 
+        let selected_index = extra::select_index(node.collection(), node.string_value().as_deref());
         let searchable = node.searchable;
         let key_owned = key.to_string();
         let handle = if grouped {
@@ -4403,6 +4402,21 @@ fn select_group_vec(node: &Node) -> SearchableVec<SelectGroup<SelectOpt>> {
     )
 }
 
+fn apply_select_controlled_value<D>(
+    state: &mut SelectState<D>,
+    selected: Option<&SharedString>,
+    window: &mut Window,
+    cx: &mut Context<SelectState<D>>,
+) where
+    D: SearchableListDelegate + 'static,
+    D::Item: SearchableListItem<Value = SharedString>,
+{
+    match selected {
+        Some(id) => state.set_selected_value(id, window, cx),
+        None => state.set_selected_index(None, window, cx),
+    }
+}
+
 fn emit_select_confirm(this: &mut RootView, key: &str, value: Option<&SharedString>) {
     let Some(id) = this
         .selects
@@ -4449,6 +4463,9 @@ where
     }
     if let Some(appearance) = node.appearance {
         select = select.appearance(appearance);
+    }
+    if let Some(enabled) = node.focus_ring {
+        select = select.focus_ring(enabled);
     }
     if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
         select = select.icon(Icon::new(name));

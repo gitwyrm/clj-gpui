@@ -888,12 +888,22 @@
 
   Nested `:items` are Kit `SelectGroup` sections (`IndexPath` section+row
   on the host). A group is `{ :label \"Lisp\" :items [{:id :clj :label \"Clojure\"}] }`.
-  Option `:display` is Kit `SelectItem::display_title` (trigger copy);
-  omitted, the trigger uses `:label`. `:disabled` greys a row.
+  Option `:display` is the string form of Kit `SelectItem::display_title`
+  (trigger copy); Kit's API is `Option<AnyElement>`. Omitted, the trigger
+  uses `:label`. `:disabled` greys a row.
+
+  A controlled value change uses Kit `set_selected_value` so a live
+  search query is not indexed with a full-list `IndexPath`. Native
+  Confirm updates the host cache first: Clojure echoing that id is a
+  no-op and does not clear in-progress typing. Replacing the option
+  collection rebuilds `SelectState` so query text and matched rows
+  agree; an unrelated rerender with the same options and id does not.
 
   Kit Select chrome: `:cleanable`, `:title-prefix`, `:menu-width` /
-  `:menu-max-h` (px), `:search-placeholder`, `:empty`, `:icon`,
-  `:appearance`, `:accessibility-label`.
+  `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
+  Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
+  `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
+  `:accessibility-label`. Custom row/section `render` is not wrapped.
 
   (ui/select selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
@@ -906,7 +916,8 @@
                         {:id :cljs :label \"ClojureScript\" :display \"ClojureScript (cljs)\"}]}
                {:label \"Systems\"
                 :items [{:id :rs :label \"Rust\"}]}]
-     :searchable true})"
+     :searchable true
+     :focus-ring false})"
   ([value]
    {:type :select :value (wire-id value) :options []})
   ([value opts]
