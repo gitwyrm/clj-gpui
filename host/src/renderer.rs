@@ -1,3 +1,4 @@
+use crate::action_bridge;
 use crate::catalog;
 use crate::chat;
 use crate::extra;
@@ -24,6 +25,7 @@ use gpui_component::{
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     combobox::{Combobox, ComboboxEvent, ComboboxState},
+    command::{Command as KitCommand, CommandState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
@@ -55,6 +57,7 @@ use gpui_component::{
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderScale, SliderState, SliderValue},
     spinner::Spinner,
+    status_bar::StatusBar,
     stepper::{Stepper, StepperItem},
     switch::Switch,
     tab::{Tab, TabBar},
@@ -237,6 +240,10 @@ struct ComboboxSlot {
     on_change: Option<String>,
     on_confirm: Option<String>,
     coalesce: protocol::ComboboxActivationCoalesce,
+}
+
+struct CommandSlot {
+    state: Entity<CommandState>,
 }
 
 struct MessageScrollerSlot {
@@ -425,6 +432,7 @@ pub struct RootView {
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
     comboboxes: HashMap<String, ComboboxSlot>,
+    commands: HashMap<String, CommandSlot>,
     lists: HashMap<String, ListSlot>,
     tables: HashMap<String, TableSlot>,
     trees: HashMap<String, TreeSlot>,
@@ -453,6 +461,7 @@ pub struct RootView {
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
     used_comboboxes: HashSet<String>,
+    used_commands: HashSet<String>,
     used_lists: HashSet<String>,
     used_tables: HashSet<String>,
     used_trees: HashSet<String>,
@@ -465,6 +474,7 @@ pub struct RootView {
     used_scrollers: HashSet<String>,
     used_docks: HashSet<String>,
     used_nav_stacks: HashSet<String>,
+    native_menu_open: HashMap<String, bool>,
     _appearance: Subscription,
     _window_bounds: Subscription,
     _keystrokes: Subscription,
@@ -586,6 +596,7 @@ impl RootView {
             sliders: HashMap::new(),
             selects: HashMap::new(),
             comboboxes: HashMap::new(),
+            commands: HashMap::new(),
             lists: HashMap::new(),
             tables: HashMap::new(),
             trees: HashMap::new(),
@@ -614,6 +625,7 @@ impl RootView {
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
             used_comboboxes: HashSet::new(),
+            used_commands: HashSet::new(),
             used_lists: HashSet::new(),
             used_tables: HashSet::new(),
             used_trees: HashSet::new(),
@@ -626,6 +638,7 @@ impl RootView {
             used_scrollers: HashSet::new(),
             used_docks: HashSet::new(),
             used_nav_stacks: HashSet::new(),
+            native_menu_open: HashMap::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
             _keystrokes: keystrokes,
@@ -837,6 +850,14 @@ impl RootView {
                 this.flush_callback_queue();
             });
         })
+    }
+
+    fn handle_clj_action(&mut self, action: &action_bridge::CljAction) {
+        self.callback_queue.push(overlay::QueuedAction::CljSelect {
+            key: action.slot.clone(),
+            item: action.item.clone(),
+        });
+        self.flush_callback_queue();
     }
 
     fn flush_callback_queue(&mut self) {
@@ -1496,6 +1517,9 @@ impl RootView {
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
             "dropdown-button" => self.render_dropdown_button(node, path, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
+            "native-menu" => div().into_any_element(),
+            "command" => self.render_command(node, &key, window, cx),
+            "status-bar" => self.render_status_bar(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
             "table" => self.render_table(node, path, window, cx),
@@ -2719,6 +2743,95 @@ impl RootView {
         .into_any_element()
     }
 
+    fn command_slot(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<CommandState> {
+        self.used_commands.insert(key.to_string());
+        if let Some(slot) = self.commands.get(key) {
+            return slot.state.clone();
+        }
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        self.commands.insert(
+            key.to_string(),
+            CommandSlot {
+                state: state.clone(),
+            },
+        );
+        state
+    }
+
+    fn render_command(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.command_slot(key, window, cx);
+        let emit = Self::action_emitter(cx);
+        let mut command =
+            action_bridge::apply_command_entries(KitCommand::new(&state), &node.items, key);
+        command = command.searchable(node.searchable);
+        command = command.filterable(node.filterable.unwrap_or(true));
+        if let Some(placeholder) = node.placeholder.clone().filter(|s| !s.is_empty()) {
+            command = command.placeholder(placeholder);
+        }
+        if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
+            command = command.empty(move |_, _, _| empty.clone());
+        }
+        if let Some(h) = node.menu_max_h.or(node.height).filter(|h| *h > 0.0) {
+            command = command.max_h(px(h));
+        }
+        if node.on_query.is_some() {
+            let emit = emit.clone();
+            let key = key.to_string();
+            command = command.on_query(move |query, _, cx| {
+                emit(
+                    overlay::QueuedAction::CommandQuery {
+                        key: key.clone(),
+                        query: query.to_string(),
+                    },
+                    cx,
+                );
+            });
+        }
+        if node.on_cancel.is_some() {
+            let emit = emit.clone();
+            let key = key.to_string();
+            command = command.on_cancel(move |_, cx| {
+                emit(
+                    overlay::QueuedAction::CommandCancel { key: key.clone() },
+                    cx,
+                );
+            });
+        }
+        let _ = emit;
+        apply_style(command, node, cx).into_any_element()
+    }
+
+    fn render_status_bar(
+        &mut self,
+        node: &Node,
+        path: &str,
+        _key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut bar = StatusBar::new();
+        for (index, child) in node.left.iter().enumerate() {
+            bar = bar.left(self.render_node(child, &format!("{path}-left-{index}"), window, cx));
+        }
+        for (index, child) in node.right.iter().enumerate() {
+            bar = bar.right(self.render_node(child, &format!("{path}-right-{index}"), window, cx));
+        }
+        apply_style(bar, node, cx)
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
     fn render_list(
         &mut self,
         node: &Node,
@@ -3034,6 +3147,38 @@ impl RootView {
             },
         );
         state
+    }
+
+    fn sync_native_menus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let menus = self
+            .tree
+            .as_ref()
+            .map(overlay::collect_native_menus)
+            .unwrap_or_default();
+        let mut to_show = Vec::new();
+        let mut live_keys = HashSet::new();
+        for (key, node) in menus {
+            let open = node.open.unwrap_or(false);
+            let was = self.native_menu_open.get(&key).copied().unwrap_or(false);
+            if action_bridge::native_menu_should_show(was, open) {
+                to_show.push((key.clone(), node));
+            }
+            live_keys.insert(key.clone());
+            self.native_menu_open.insert(key, open);
+        }
+        self.native_menu_open
+            .retain(|key, _| live_keys.contains(key));
+        if to_show.is_empty() {
+            return;
+        }
+        let emit = Self::action_emitter(cx);
+        window.on_next_frame(move |window, cx| {
+            for (key, node) in to_show {
+                let position = action_bridge::native_menu_position(&node, window);
+                action_bridge::fill_native_menu(&node.items, &key).show(position, window, cx);
+                emit(overlay::QueuedAction::PopoverOpen { key, open: false }, cx);
+            }
+        });
     }
 
     fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4435,7 +4580,11 @@ impl RootView {
             .into_iter()
             .enumerate()
             .filter_map(|(index, child)| {
-                if child.kind == "dialog" || child.kind == "sheet" || child.kind == "notification" {
+                if child.kind == "dialog"
+                    || child.kind == "sheet"
+                    || child.kind == "notification"
+                    || child.kind == "native-menu"
+                {
                     None
                 } else {
                     Some(self.render_node(&child, &format!("{path}-{index}"), window, cx))
@@ -4489,6 +4638,7 @@ impl Render for RootView {
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_comboboxes.clear();
+        self.used_commands.clear();
         self.used_lists.clear();
         self.used_tables.clear();
         self.used_trees.clear();
@@ -4531,6 +4681,8 @@ impl Render for RootView {
         let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
         self.comboboxes
             .retain(|key, _| used_comboboxes.contains(key));
+        let used_commands = std::mem::take(&mut self.used_commands);
+        self.commands.retain(|key, _| used_commands.contains(key));
         let used_lists = std::mem::take(&mut self.used_lists);
         self.lists.retain(|key, _| used_lists.contains(key));
         let used_tables = std::mem::take(&mut self.used_tables);
@@ -4563,6 +4715,7 @@ impl Render for RootView {
         self.sync_dialogs(window, cx);
         self.sync_sheet(window, cx);
         self.sync_notifications(window, cx);
+        self.sync_native_menus(window, cx);
 
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
@@ -5964,6 +6117,12 @@ pub fn open_window(
         },
         |window, cx| {
             let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, window, cx));
+            let weak = view.downgrade();
+            cx.on_action(move |action: &action_bridge::CljAction, app| {
+                let _ = weak.update(app, |this, _cx| {
+                    this.handle_clj_action(action);
+                });
+            });
             let root = cx.new(|cx| Root::new(view, window, cx));
             window.on_window_should_close(cx, |_, cx| {
                 quit_host(cx);

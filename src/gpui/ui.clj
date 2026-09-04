@@ -285,10 +285,11 @@
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
   `:label` / `:text`, `:disabled`, `:display` (select trigger copy),
-  `:on-click`, and `:content`. Nested `:items` are menu submenus, tree
+  `:on-click`, and `:content`.   Nested `:items` are menu submenus, tree
   children, or Select `SelectGroup` sections. Chart items also keep
   `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
-  `:outer-radius`, and `:label-lines`."
+  `:outer-radius`, and `:label-lines`. Command items may set
+  `:keywords`."
   [x]
   (cond
     (nil? x) nil
@@ -336,6 +337,10 @@
         (some? (:source x)) (assoc :source (wire-id (:source x)))
         (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
+        (seq (:keywords x)) (assoc :keywords
+                                   (mapv (fn [k]
+                                           (if (keyword? k) (wire-id k) (str k)))
+                                         (:keywords x)))
         (seq (:items x)) (assoc :items (option-items (:items x)))
         (number? value) (assoc :value value)
         (and (sequential? value) (not (string? value))) (assoc :value (vec value))
@@ -1191,7 +1196,8 @@
     :else (option-item x)))
 
 (defn menu-items
-  "Normalize popup-menu / context-menu / dropdown-menu / dropdown-button rows."
+  "Normalize popup-menu / context-menu / dropdown-menu / dropdown-button /
+  native-menu / command rows."
   [xs]
   (into [] (keep menu-item) xs))
 
@@ -1446,6 +1452,125 @@
              :items (menu-items raw)
              :children (flatten-children [child])}
             opts))))
+
+(defn native-menu
+  "OS-native popup menu. Kit `NativeMenu`.
+
+  Clojure owns the semantic tree: item ids, labels, order, nesting,
+  disabled/checked, icons, and what selecting an item means. The host
+  materializes that tree into Kit `NativeMenu` when `:open?` becomes
+  true (a presentation snapshot). Selecting an item reports its
+  semantic id; Clojure updates state; the next open rebuilds from that
+  state. The host does not own checked/toggled menu state.
+
+  Kit requires a GPUI `Action` per row. The host attaches a generic
+  Action with a stable menu slot plus item id, then resolves the live
+  Clojure callback when that Action is dispatched. It does not capture
+  a generated `cb-N` (an unrelated `export-tree` while the OS menu is
+  open must not stale the Action).
+
+  `:open?` is a show request. The host shows once on the false→true
+  edge, then sends `:on-open-change false` so Clojure can consume it.
+  The OS menu remaining visible is not tracked (Kit has no dismiss
+  callback). `:position [x y]` is window logical pixels; omitted uses
+  the current mouse position. Item `:on-click` then menu `:on-change`
+  is one batch, same as `ui/dropdown-menu`. Nested `:items` are
+  submenus. `-` / `:-` is a separator.
+
+  Kit's public NativeMenu builders cannot combine a check mark with an
+  icon or with disabled. When both are set, icon (then check) wins.
+
+  (ui/native-menu
+    [{:id :copy :label \"Copy\"} :- {:id :wrap :label \"Word wrap\" :checked wrap?}]
+    {:id \"edit-menu\" :open? open? :position [120 40]
+     :on-change handle! :on-open-change #(reset! !open? %)})"
+  ([items]
+   (native-menu items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (with-nested-option-callback
+                (-> (or opts {})
+                    (dissoc :items)
+                    rewrite-open
+                    apply-control-size)
+                raw)]
+     (merge {:type :native-menu
+             :items (menu-items raw)}
+            opts))))
+
+(defn command
+  "Command palette. Kit `Command` with host-held `CommandState`.
+
+  Clojure owns the entries (ids, labels, groups, disabled/checked,
+  icons, keywords). Confirm dispatches the same generic host Action as
+  `ui/native-menu` (`slot` + item id), then Clojure's `:on-change`
+  receives the original item id. Do not also attach a second confirm
+  handler for the same pick — Kit would run Action then `on_confirm`.
+
+  Nested `:items` are Kit `CommandGroup` sections. Group titles are
+  not selectable and are not in the callback id map. `-` / `:-` is a
+  top-level separator. Search is on by default. `:filterable false`
+  keeps the query field but skips local filtering (`:on-query` still
+  fires). `:on-query` receives the search string. `:on-cancel` is
+  0-arg (empty-query Escape). String `:empty` is the string form of
+  Kit `Command::empty`; custom empty/header/footer `AnyElement` and
+  `CommandItem::child` are not wrapped.
+
+  (ui/command
+    [{:id :copy :label \"Copy\" :icon :copy :keywords [:duplicate]}
+     :-
+     {:label \"Edit\" :items [{:id :find :label \"Find\"}]}]
+    {:id \"palette\" :placeholder \"Type a command…\"
+     :on-change handle! :on-query #(reset! !q %)})"
+  ([items]
+   (command items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (if (map? opts) opts {:on-change opts})
+         searchable (if (contains? opts :searchable)
+                      (boolean (:searchable opts))
+                      true)
+         opts (with-id-callbacks
+                (-> (or opts {})
+                    (dissoc :items)
+                    (assoc :searchable searchable)
+                    apply-control-size)
+                (selectable-option-leaves raw)
+                [:on-change])]
+     (merge {:type :command
+             :items (menu-items raw)}
+            opts))))
+
+(defn- slot-children
+  "One widget or a sequence of widgets for StatusBar `:left` / `:right`."
+  [x]
+  (cond
+    (nil? x) []
+    (false? x) []
+    (ui-node? x) [x]
+    (sequential? x) (flatten-children x)
+    :else (flatten-children [x])))
+
+(defn status-bar
+  "Horizontal status bar. Kit `StatusBar`. No Action bridge.
+
+  `:left` / `:right` pin widgets to each end. Children are the center
+  region (centered when both ends are set). Each slot is any clj-gpui
+  widget, or a sequence of them.
+
+  (ui/status-bar {:left (ui/label \"Ln 1, Col 1\")
+                  :right [(ui/kbd \"ctrl-s\") (ui/label \"UTF-8\")]}
+    (ui/label \"Ready\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        left (slot-children (:left opts))
+        right (slot-children (:right opts))
+        opts (-> opts (dissoc :left :right) apply-control-size)]
+    (cond-> (merge {:type :status-bar
+                    :children (flatten-children children)}
+                   opts)
+      (seq left) (assoc :left left)
+      (seq right) (assoc :right right))))
 
 (defn list
   "Virtualized list of `{id, label}` rows. `value` / `:selected` is the

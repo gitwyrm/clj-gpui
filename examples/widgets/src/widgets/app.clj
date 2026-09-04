@@ -67,7 +67,11 @@
            :trail [:home]
            :forward []
            :reuse-forward? true
-           :replace-generation 0}))
+           :replace-generation 0
+           :native-menu? false
+           :wrap? false
+           :command-pick nil
+           :command-query ""}))
 
 (defn- set-key [k]
   (fn [v]
@@ -230,7 +234,7 @@
    (ui/separator)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail forward reuse-forward? replace-generation]}]
+(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail forward reuse-forward? replace-generation native-menu? wrap? command-pick command-query]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
@@ -238,6 +242,10 @@
                   " · hover " (pr-str hover-card?)
                   " · close-hit " (pr-str close-hit)
                   " · dialog-open " (pr-str dialog-open)
+                  " · native " (pr-str native-menu?)
+                  " · wrap " (pr-str wrap?)
+                  " · command " (pr-str command-pick)
+                  " · query " (pr-str command-query)
                   " · shift " (pr-str batch-shift?)
                   " · toast-hit " (pr-str toast-hit)))
    (when batch-shift?
@@ -302,6 +310,43 @@
      {:id :delete :label "Delete"}]
     {:on-change (set-key :menu)}
     (ui/label "Right-click this label."))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button "Native menu" #(swap! !state assoc :native-menu? true))
+    (ui/label (if native-menu? "show requested" "closed")))
+   (ui/native-menu
+    [{:id :copy :label "Copy" :icon :copy}
+     :-
+     {:id :wrap :label "Word wrap" :checked wrap?}
+     {:id :share :label "Share"
+      :items [{:id :email :label "Email"}
+              {:id :link :label "Copy link"}]}]
+    {:id "gallery-native"
+     :open? native-menu?
+     :position [24 160]
+     :on-change (fn [id]
+                  (swap! !state (fn [s]
+                                  (cond-> (assoc s :menu id)
+                                    (= id :wrap) (update :wrap? not)))))
+     :on-open-change (set-key :native-menu?)})
+   (ui/command
+    [{:id :copy :label "Copy" :icon :copy :keywords [:duplicate]}
+     {:id :wrap :label "Word wrap" :checked wrap?}
+     :-
+     {:label "Edit"
+      :items [{:id :find :label "Find" :keywords [:search]}
+              {:id :replace :label "Replace"}]}]
+    {:id "gallery-command"
+     :placeholder "Type a command…"
+     :height 220
+     :on-change (fn [id]
+                  (swap! !state (fn [s]
+                                  (cond-> (assoc s :menu id :command-pick id)
+                                    (= id :wrap) (update :wrap? not)))))
+     :on-query (set-key :command-query)})
+   (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
+                   :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
+                  (ui/label (or (some-> command-pick name) "Ready")))
    (ui/dialog dialog?
               {:title (str "Confirm · tick " tick)
                :variant :confirm

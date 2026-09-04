@@ -166,7 +166,7 @@
 (def ^:private callback-keys
   [:on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
-   :on-open-change :on-forward-change])
+   :on-open-change :on-forward-change :on-query])
 
 (declare sanitize)
 
@@ -187,7 +187,7 @@
 (def ^:private nested-node-keys
   [:trigger :footer :stack-style :shimmer-style :separator-style
    :content-style :list-style :row-style :jump-button-style
-   :jump-button-renderer])
+   :jump-button-renderer :left :right])
 
 (defn- sanitize
   "Replace Clojure functions in the UI tree with callback ids before JSON."

@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, `ui/avatar-group`, `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, `ui/message-scroller`, and `ui/nav-stack` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, `ui/avatar-group`, `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, `ui/message-scroller`, `ui/nav-stack`, `ui/native-menu`, `ui/command`, and `ui/status-bar` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -304,6 +304,18 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
                     {:on-change handle! :variant :primary :selected true}
                     (ui/button "Export" export!))
 (ui/context-menu items {:on-change handle!} (ui/data-table {:columns cols :rows rows :flex 1}))
+(ui/native-menu
+  [{:id :copy :label "Copy"} :- {:id :wrap :label "Word wrap" :checked wrap?}]
+  {:id "edit-menu" :open? open? :position [120 40]
+   :on-change handle! :on-open-change #(reset! !open? %)})
+(ui/command
+  [{:id :copy :label "Copy" :icon :copy :keywords [:duplicate]}
+   :-
+   {:label "Edit" :items [{:id :find :label "Find"}]}]
+  {:id "palette" :placeholder "Type a command…"
+   :on-change handle! :on-query #(reset! !q %)})
+(ui/status-bar {:left (ui/label "Ln 1") :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
+  (ui/label "Ready"))
 (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
 (ui/data-table {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
                 :rows [{:id :ada :cells ["Ada" "Clojure"]}]
