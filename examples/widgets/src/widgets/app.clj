@@ -11,6 +11,10 @@
            :bold? false
            :theme-mode :dark
            :volume 36
+           :span [20 70]
+           :zoom 1.0
+           :remaining 40
+           :released nil
            :lang :clj
            :tab :general
            :section :audio
@@ -63,7 +67,7 @@
   (fn [v]
     (swap! !state assoc k v)))
 
-(defn- general-panel [{:keys [notify? bold? theme-mode volume lang page]}]
+(defn- general-panel [{:keys [notify? bold? theme-mode volume span zoom remaining released lang page]}]
   (ui/vstack
    {:gap 12}
    (ui/hstack
@@ -81,7 +85,33 @@
     (ui/slider volume {:id "volume"
                        :min 0 :max 100 :flex 1
                        :tooltip "0–100"
-                       :on-change (set-key :volume)}))
+                       :on-change (set-key :volume)
+                       :on-release (set-key :released)}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/label (str "Span " (pr-str span)))
+    (ui/slider span {:id "span"
+                     :min 0 :max 100 :flex 1
+                     :tooltip "Range thumbs"
+                     :on-change (set-key :span)
+                     :on-release (set-key :released)}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/label (str "Zoom " zoom))
+    (ui/slider zoom {:id "zoom"
+                     :min 0.25 :max 4 :step 0.05 :flex 1
+                     :scale :logarithmic
+                     :tooltip "Log zoom"
+                     :on-change (set-key :zoom)}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/label (str "Left " remaining))
+    (ui/slider remaining {:id "remaining"
+                          :min 0 :max 100 :flex 1
+                          :reverse true
+                          :tooltip "Remaining fill"
+                          :on-change (set-key :remaining)}))
+   (ui/label (str "Released " (pr-str released)))
    (ui/progress volume {:tooltip "Mirrors the slider"})
    (ui/hstack
     {:gap 12 :align :center}
@@ -230,7 +260,21 @@
        :items [{:id :email :label "Email"}
                {:id :link :label "Copy link"}]}]
      {:on-change (set-key :menu)}
-     (ui/button "Edit")))
+     (ui/button "Edit"))
+    (ui/dropdown-button
+     [{:id :copy :label "Copy"
+       :on-click #(swap! !state assoc :batch-shift? true)}
+      :-
+      {:id :share :label "Share"
+       :items [{:id :email :label "Email"}
+               {:id :link :label "Copy link"}]}]
+     {:on-change (set-key :menu) :variant :primary :selected true}
+     (ui/button "Export" #(swap! !state assoc :menu :export)))
+    (ui/dropdown-button
+     [{:id :copy :label "Copy"}
+      {:id :share :label "Share"}]
+     {:on-change (set-key :menu) :variant :warning}
+     (ui/button "Warn" {:size :small})))
    (ui/context-menu
     [{:id :inspect :label "Inspect"}
      {:id :delete :label "Delete"}]

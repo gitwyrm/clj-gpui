@@ -301,6 +301,101 @@ impl InputChangeCoalesce {
     }
 }
 
+/// Coalesce Kit `SliderEvent::Change` and `Release` so a click cannot
+/// `export-tree` between them and leave `:on-release` as an unknown `cb-N`.
+///
+/// Same-tick Change then Release is one `:on-change` + `:on-release`
+/// batch. Change-only (live drag) flushes after a defer. Release that
+/// arrives while a Change round-trip is in flight waits for the next
+/// tree's callback ids, same idea as `InputChangeCoalesce`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SliderEventCoalesce {
+    pending_change: Option<Value>,
+    pending_release: Option<Value>,
+    flush_scheduled: bool,
+    in_flight: bool,
+}
+
+impl SliderEventCoalesce {
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_change(&mut self, payload: Value) -> bool {
+        self.pending_change = Some(payload);
+        self.schedule_if_idle()
+    }
+
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_release(&mut self, payload: Value) -> bool {
+        self.pending_release = Some(payload);
+        self.schedule_if_idle()
+    }
+
+    fn schedule_if_idle(&mut self) -> bool {
+        if self.flush_scheduled || self.in_flight {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    /// Drain pending payloads. Does not mark in-flight: a payload with no
+    /// matching callback must not block later gestures.
+    pub fn take_pending(&mut self) -> (Option<Value>, Option<Value>) {
+        self.flush_scheduled = false;
+        (self.pending_change.take(), self.pending_release.take())
+    }
+
+    /// `in_flight` means an RPC was sent, not merely that an event existed.
+    fn mark_in_flight(&mut self) {
+        self.in_flight = true;
+    }
+
+    /// Drain pending events into callback RPCs. Marks in-flight only when
+    /// at least one handler is installed for a pending payload.
+    pub fn take_outbound(
+        &mut self,
+        on_change: Option<String>,
+        on_release: Option<String>,
+    ) -> Vec<CallbackCall> {
+        let (change, release) = self.take_pending();
+        let calls = slider_event_calls(on_change, on_release, change, release);
+        if !calls.is_empty() {
+            self.mark_in_flight();
+        }
+        calls
+    }
+
+    /// New export assigned fresh callback ids. Returns whether to flush
+    /// events that arrived during the round-trip.
+    pub fn on_ids_refreshed(&mut self) -> bool {
+        self.in_flight = false;
+        if (self.pending_change.is_some() || self.pending_release.is_some())
+            && !self.flush_scheduled
+        {
+            self.flush_scheduled = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Slider `:on-change` then `:on-release` when both fired for one gesture.
+pub fn slider_event_calls(
+    on_change: Option<String>,
+    on_release: Option<String>,
+    change: Option<Value>,
+    release: Option<Value>,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let (Some(id), Some(payload)) = (on_change, change) {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    if let (Some(id), Some(payload)) = (on_release, release) {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    calls
+}
+
 /// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
 pub fn menu_selection_calls(
     item_click: Option<String>,
@@ -517,6 +612,10 @@ pub struct Node {
     pub on_click: Option<String>,
     #[serde(default, rename = "on-change")]
     pub on_change: Option<String>,
+    /// Slider: Kit `SliderEvent::Release` after a real click/drag.
+    /// Same payload shape as `on-change`. `set_value` emits neither.
+    #[serde(default, rename = "on-release")]
+    pub on_release: Option<String>,
     #[serde(default, rename = "on-submit")]
     pub on_submit: Option<String>,
     #[serde(default, rename = "on-double-click")]
@@ -637,6 +736,10 @@ pub struct Node {
     pub dashed: bool,
     #[serde(default)]
     pub outline: bool,
+    /// Button / dropdown-button Kit `Selectable` chrome. List / table /
+    /// tree Clojure `:selected` is rewritten to `value` and is not sent here.
+    #[serde(default)]
+    pub selected: bool,
     #[serde(default)]
     pub searchable: bool,
     #[serde(default)]
@@ -683,7 +786,7 @@ pub struct Node {
     /// Date display format, or markdown vs `html`.
     #[serde(default)]
     pub format: Option<String>,
-    /// Date picker range mode.
+    /// Date picker range mode. Slider: two thumbs (`true` or a 2-number `value`).
     #[serde(default)]
     pub range: bool,
     /// Sheet footer node.
@@ -821,7 +924,7 @@ pub struct Node {
     /// ShimmerText absolute highlight half-width in pixels. Wins over `spread` when both set.
     #[serde(default, rename = "spread-px")]
     pub spread_px: Option<f32>,
-    /// ShimmerText right-to-left sweep. Kit default false.
+    /// ShimmerText right-to-left sweep. Slider: fill from thumb to max (single only).
     #[serde(default)]
     pub reverse: bool,
     /// ShimmerText single sweep instead of a loop. Kit default false.
@@ -848,6 +951,10 @@ pub struct Node {
     /// AvatarGroup max visible avatars. Kit default 3. Omitted leaves Kit's default.
     #[serde(default)]
     pub limit: Option<f32>,
+    /// Slider scale: `linear` (default / omitted) or `logarithmic` (`log`).
+    /// Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise linear.
+    #[serde(default)]
+    pub scale: Option<String>,
 }
 
 impl Node {
@@ -1045,6 +1152,7 @@ mod tests {
             "max": 100,
             "step": 0.5,
             "on-change": "cb-2",
+            "on-release": "cb-3",
             "orientation": "horizontal"
         }))
         .unwrap();
@@ -1053,6 +1161,22 @@ mod tests {
         assert_eq!(slider.min, Some(0.0));
         assert_eq!(slider.max, Some(100.0));
         assert_eq!(slider.step, Some(0.5));
+        assert_eq!(slider.on_release.as_deref(), Some("cb-3"));
+
+        let range: Node = serde_json::from_value(json!({
+            "type": "slider",
+            "value": [20, 70],
+            "range": true,
+            "scale": "logarithmic",
+            "reverse": true,
+            "min": 0.25,
+            "max": 4
+        }))
+        .unwrap();
+        assert_eq!(range.value, Some(json!([20, 70])));
+        assert!(range.range);
+        assert_eq!(range.scale.as_deref(), Some("logarithmic"));
+        assert!(range.reverse);
 
         let select: Node = serde_json::from_value(json!({
             "type": "select",
@@ -1254,6 +1378,107 @@ mod tests {
 
         let mut confirm_only = ComboboxActivationCoalesce::default();
         assert!(confirm_only.on_confirm().is_none());
+    }
+
+    #[test]
+    fn slider_event_coalesce_batches_release_after_change() {
+        let mut c = SliderEventCoalesce::default();
+        assert!(c.on_change(json!(42.0)));
+        assert!(
+            !c.on_release(json!(42.0)),
+            "same-tick Release must ride the Change defer"
+        );
+        let calls = c.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "cb-change");
+        assert_eq!(calls[0].value, Some(json!(42.0)));
+        assert_eq!(calls[1].id, "cb-release");
+        assert_eq!(calls[1].value, Some(json!(42.0)));
+
+        let mut drag = SliderEventCoalesce::default();
+        assert!(drag.on_change(json!(10.0)));
+        assert!(!drag.on_change(json!(11.0)));
+        let calls = drag.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].value, Some(json!(11.0)));
+
+        let mut late = SliderEventCoalesce::default();
+        assert!(late.on_change(json!(1.0)));
+        let sent = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(sent.len(), 1);
+        assert!(
+            !late.on_release(json!(1.0)),
+            "Release during in-flight Change waits for new ids"
+        );
+        assert!(late.on_ids_refreshed());
+        let calls = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "cb-release");
+        assert_eq!(calls[0].value, Some(json!(1.0)));
+    }
+
+    #[test]
+    fn slider_event_coalesce_in_flight_requires_an_outbound_rpc() {
+        let mut change_only = SliderEventCoalesce::default();
+        assert!(change_only.on_change(json!(10.0)));
+        assert!(!change_only.on_release(json!(10.0)));
+        let first = change_only.take_outbound(Some("cb-change".into()), None);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].id, "cb-change");
+        assert!(change_only.on_ids_refreshed() == false);
+        assert!(change_only.on_release(json!(10.0)));
+        let poisoned = change_only.take_outbound(Some("cb-change".into()), None);
+        assert!(
+            poisoned.is_empty(),
+            "Release with no handler must not send and must not mark in-flight"
+        );
+        assert!(
+            change_only.on_change(json!(11.0)),
+            "a second gesture must still emit Change"
+        );
+        let second = change_only.take_outbound(Some("cb-change".into()), None);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].value, Some(json!(11.0)));
+
+        let mut release_only = SliderEventCoalesce::default();
+        assert!(release_only.on_change(json!(5.0)));
+        let skipped = release_only.take_outbound(None, Some("cb-release".into()));
+        assert!(
+            skipped.is_empty(),
+            "Change with no handler must not mark in-flight"
+        );
+        assert!(
+            release_only.on_release(json!(5.0)),
+            "preceding Change must not block Release"
+        );
+        let released = release_only.take_outbound(None, Some("cb-release".into()));
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].id, "cb-release");
+        assert_eq!(released[0].value, Some(json!(5.0)));
+
+        let mut both = SliderEventCoalesce::default();
+        assert!(both.on_change(json!([20.0, 70.0])));
+        assert!(!both.on_release(json!([20.0, 70.0])));
+        let batch = both.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(
+            batch
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cb-change", "cb-release"]
+        );
+
+        let mut neither = SliderEventCoalesce::default();
+        assert!(neither.on_change(json!(1.0)));
+        assert!(!neither.on_release(json!(1.0)));
+        assert!(neither.take_outbound(None, None).is_empty());
+        assert!(
+            neither.on_change(json!(2.0)),
+            "events with no handlers leave the coalescer idle"
+        );
+        assert!(neither.take_outbound(None, None).is_empty());
+        assert!(neither.on_release(json!(2.0)));
+        assert!(neither.take_outbound(None, None).is_empty());
     }
 
     #[test]
@@ -1694,6 +1919,38 @@ mod tests {
         .unwrap();
         assert!(node.items[1].is_separator());
         assert_eq!(node.items[2].items[0].id_or_label(), "paste");
+
+        let split: Node = serde_json::from_value(json!({
+            "type": "dropdown-button",
+            "items": [{"id": "csv", "label": "CSV"}],
+            "trigger": {
+                "type": "button",
+                "text": "Export",
+                "control-size": "small",
+                "selected": true,
+                "outline": true
+            },
+            "variant": "warning",
+            "selected": true,
+            "placement": "bottom-left"
+        }))
+        .unwrap();
+        assert_eq!(split.kind, "dropdown-button");
+        assert_eq!(split.items[0].id_or_label(), "csv");
+        assert_eq!(
+            split.trigger.as_ref().unwrap().text.as_deref(),
+            Some("Export")
+        );
+        assert_eq!(
+            split.trigger.as_ref().unwrap().control_size.as_deref(),
+            Some("small")
+        );
+        assert!(split.trigger.as_ref().unwrap().selected);
+        assert!(split.trigger.as_ref().unwrap().outline);
+        assert_eq!(split.variant.as_deref(), Some("warning"));
+        assert!(split.selected);
+        assert_eq!(split.placement.as_deref(), Some("bottom-left"));
+        assert_eq!(PROTOCOL_VERSION, 10);
     }
 
     #[test]

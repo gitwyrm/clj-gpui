@@ -3,14 +3,15 @@
 use crate::catalog;
 use gpui::Axis;
 use gpui_component::{
-    IconName, Placement, Side, Size, button::ToggleVariant, group_box::GroupBoxVariant,
-    tab::TabVariant, tag::TagVariant,
+    IconName, Placement, Side, Size,
+    button::{ButtonVariants, ToggleVariant},
+    group_box::GroupBoxVariant,
+    slider::SliderScale,
+    tab::TabVariant,
+    tag::TagVariant,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
-
-#[cfg(test)]
-use gpui_component::slider::SliderScale;
 
 pub fn parse_scale(value: Option<&str>) -> Size {
     match value.map(catalog::normalize) {
@@ -138,12 +139,99 @@ pub fn parse_toggle_variant(value: Option<&str>) -> ToggleVariant {
     }
 }
 
-/// Logarithmic scale is category C (deferred). Kept for mapping tests.
-#[cfg(test)]
+/// Slider scale. Omitted / unknown is linear. `log` is an alias of
+/// `logarithmic`. The host still refuses log when `min <= 0` so Kit
+/// does not assert.
 pub fn parse_slider_scale(value: Option<&str>) -> SliderScale {
     match value.map(catalog::normalize) {
         Some(name) if name == "logarithmic" || name == "log" => SliderScale::Logarithmic,
         _ => SliderScale::Linear,
+    }
+}
+
+/// Kit `ButtonVariants` names. Outline is a separate look, not a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedButtonVariant {
+    Primary,
+    Secondary,
+    Danger,
+    Warning,
+    Success,
+    Info,
+    Ghost,
+    Link,
+    Text,
+}
+
+pub fn parse_named_button_variant(value: Option<&str>) -> Option<NamedButtonVariant> {
+    match value.map(catalog::normalize) {
+        Some(name) => match name.as_str() {
+            "primary" => Some(NamedButtonVariant::Primary),
+            "secondary" => Some(NamedButtonVariant::Secondary),
+            "danger" => Some(NamedButtonVariant::Danger),
+            "warning" => Some(NamedButtonVariant::Warning),
+            "success" => Some(NamedButtonVariant::Success),
+            "info" => Some(NamedButtonVariant::Info),
+            "ghost" => Some(NamedButtonVariant::Ghost),
+            "link" => Some(NamedButtonVariant::Link),
+            "text" => Some(NamedButtonVariant::Text),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+pub fn is_outline_look(value: Option<&str>) -> bool {
+    matches!(value.map(catalog::normalize).as_deref(), Some("outline"))
+}
+
+/// Chrome plan for `Button` / `DropdownButton`. `size` is `None` when
+/// `control-size` is omitted so Kit can inherit from an inner Button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ButtonChrome {
+    pub variant: Option<NamedButtonVariant>,
+    pub outline: bool,
+    pub selected: bool,
+    pub size: Option<Size>,
+}
+
+pub fn button_chrome(
+    variant: Option<&str>,
+    primary: bool,
+    outline: bool,
+    selected: bool,
+    control_size: Option<&str>,
+) -> ButtonChrome {
+    let named = parse_named_button_variant(variant);
+    let outline_from_variant = is_outline_look(variant);
+    let variant = named.or(if !outline_from_variant && primary {
+        Some(NamedButtonVariant::Primary)
+    } else {
+        None
+    });
+    ButtonChrome {
+        variant,
+        outline: outline || outline_from_variant,
+        selected,
+        size: control_size.map(|s| parse_scale(Some(s))),
+    }
+}
+
+pub fn apply_named_button_variant<B: ButtonVariants>(
+    el: B,
+    variant: Option<NamedButtonVariant>,
+) -> B {
+    match variant {
+        Some(NamedButtonVariant::Primary) => el.primary(),
+        Some(NamedButtonVariant::Secondary) => el.secondary(),
+        Some(NamedButtonVariant::Danger) => el.danger(),
+        Some(NamedButtonVariant::Warning) => el.warning(),
+        Some(NamedButtonVariant::Success) => el.success(),
+        Some(NamedButtonVariant::Info) => el.info(),
+        Some(NamedButtonVariant::Ghost) => el.ghost(),
+        Some(NamedButtonVariant::Link) => el.link(),
+        Some(NamedButtonVariant::Text) => el.text(),
+        None => el,
     }
 }
 
@@ -287,7 +375,79 @@ mod tests {
             parse_slider_scale(Some("logarithmic")),
             SliderScale::Logarithmic
         );
+        assert_eq!(parse_slider_scale(Some("log")), SliderScale::Logarithmic);
+        assert_eq!(parse_slider_scale(Some("linear")), SliderScale::Linear);
         assert_eq!(parse_slider_scale(None), SliderScale::Linear);
+    }
+
+    #[test]
+    fn named_button_variants_cover_kit() {
+        assert_eq!(
+            parse_named_button_variant(Some("primary")),
+            Some(NamedButtonVariant::Primary)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("secondary")),
+            Some(NamedButtonVariant::Secondary)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("danger")),
+            Some(NamedButtonVariant::Danger)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("warning")),
+            Some(NamedButtonVariant::Warning)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("success")),
+            Some(NamedButtonVariant::Success)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("info")),
+            Some(NamedButtonVariant::Info)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("ghost")),
+            Some(NamedButtonVariant::Ghost)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("link")),
+            Some(NamedButtonVariant::Link)
+        );
+        assert_eq!(
+            parse_named_button_variant(Some("text")),
+            Some(NamedButtonVariant::Text)
+        );
+        assert_eq!(parse_named_button_variant(Some("outline")), None);
+        assert_eq!(parse_named_button_variant(None), None);
+        assert!(is_outline_look(Some("outline")));
+        assert!(!is_outline_look(Some("primary")));
+    }
+
+    #[test]
+    fn button_chrome_omits_size_when_control_size_is_unset() {
+        let outer = button_chrome(Some("warning"), false, false, true, None);
+        assert_eq!(outer.variant, Some(NamedButtonVariant::Warning));
+        assert!(!outer.outline);
+        assert!(outer.selected);
+        assert_eq!(outer.size, None);
+
+        let inner = button_chrome(None, false, true, true, Some("small"));
+        assert_eq!(inner.variant, None);
+        assert!(inner.outline);
+        assert!(inner.selected);
+        assert_eq!(inner.size, Some(Size::Small));
+
+        let primary_flag = button_chrome(None, true, false, false, None);
+        assert_eq!(primary_flag.variant, Some(NamedButtonVariant::Primary));
+
+        let outline_variant = button_chrome(Some("outline"), true, false, false, None);
+        assert_eq!(outline_variant.variant, None);
+        assert!(outline_variant.outline);
+
+        let secondary = button_chrome(Some("secondary"), false, false, false, Some("large"));
+        assert_eq!(secondary.variant, Some(NamedButtonVariant::Secondary));
+        assert_eq!(secondary.size, Some(Size::Large));
     }
 
     #[test]
