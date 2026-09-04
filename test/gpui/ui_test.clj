@@ -157,8 +157,12 @@
     (is (= "edit/find" (ui/format-option-id ["edit" "find"])))
     (is (= "Ready" (or (ui/format-option-id nil) "Ready")))
     (is (= "edit/find" (or (ui/format-option-id [:edit :find]) "Ready")))
-    (is (= "edit/find" (:text (ui/label (or (ui/format-option-id [:edit :find]) "Ready"))))
-        "status-bar style labels must survive a grouped Command highlight")))
+    (let [bar (ui/status-bar {:left (ui/label "Ln 1")
+                              :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
+                             (ui/label (or (ui/format-option-id [:edit :find]) "Ready")))
+          exported (runtime/export-tree bar)]
+      (is (= "edit/find" (get-in exported [:children 0 :text]))
+          "export-tree of a grouped Command pick must not throw"))))
 
 (deftest switch-slider-select-nodes
   (testing "switch"
