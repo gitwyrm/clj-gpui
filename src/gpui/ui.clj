@@ -2630,6 +2630,39 @@
            :type :message-scroller
            :children (flatten-children children))))
 
+(defn- nav-item-op
+  [op]
+  (cond
+    (keyword? op) (name op)
+    (string? op) op
+    (sequential? op) (mapv nav-item-op op)
+    :else op))
+
+(defn- nav-item-case
+  [m]
+  (when (map? m)
+    (cond-> m
+      (keyword? (:phase m)) (update :phase name)
+      (some? (:operation m)) (update :operation nav-item-op)
+      (keyword? (:bg m)) (update :bg name))))
+
+(defn- nav-item-spec
+  "Static Kit `NavStack::item` recipe. Not a per-frame callback.
+  `:slide` is the showcase recipe. A map / vector of match arms is
+  evaluated on the host from live `NavPage` phase, operation, index,
+  and eased progress."
+  [item]
+  (cond
+    (nil? item) nil
+    (fn? item) nil
+    (keyword? item) (name item)
+    (string? item) item
+    (sequential? item) {:match (into [] (keep nav-item-case) item)}
+    (map? item) (cond-> (nav-item-case item)
+                  (some? (:match item))
+                  (update :match #(into [] (keep nav-item-case) %)))
+    :else nil))
+
 (defn nav-page
   "A page template in a `ui/nav-stack` catalog. `:id` is required
   (keyword or string). Children paint through the overlay static
@@ -2689,18 +2722,25 @@
   the active trail are valid and create distinct entities.
   `:transition` is seconds (Kit `Transition` only); omitted is an
   immediate swap. `:motion :immediate` forces Immediate even when
-  a transition is set. `:transition-style :slide` opts into the
-  showcase slide `item` renderer; omitted keeps Kit's default
+  a transition is set. `:item` is Kit `NavStack::item`: a static
+  recipe the host evaluates each frame on the retained `NavPage`
+  (`view()`, `index`, `phase`, `operation`, eased `progress`).
+  It is not a Clojure callback — `export-tree` is not per-frame.
+  `:item :slide` (or `:transition-style :slide`) is the showcase
+  slide; a map of `:match` arms (or a vector of those arms)
+  Styled-refines the same page (`:left` / `:opacity` number or
+  `{:from :to}` lerp by progress). `:item` wins over
+  `:transition-style`. Omitted both keeps Kit's default
   unchanged `NavPage` renderer. `:overflow :hidden` or
-  `:overflow-hidden true` clips; omitted does not. Custom `item`
-  rendering beyond `:slide` is remaining and must include the
-  complete `NavPage` surface (the mounted `view()`, plus index,
-  phase, operation, eased progress), not only a canned transition
-  style. Pages paint the overlay static subset (not list /
-  data-table / editor).
+  `:overflow-hidden true` clips; omitted does not. Pages paint
+  the overlay static subset (not list / data-table / editor).
 
   (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
-                 :transition-style :slide :overflow :hidden
+                 :item [{:phase :entering :operation [:push :replace]
+                         :left {:from 1 :to 0}}
+                        {:phase :exiting :operation :pop
+                         :left {:from 0 :to 1}}]
+                 :overflow :hidden
                  :on-forward-change #(reset! !forward %)}
     (ui/nav-page {:id :home} (ui/label \"Home\"))
     (ui/nav-page {:id :detail} (ui/label \"Detail\")))"
@@ -2727,6 +2767,7 @@
                    (assoc :duration (:transition opts)))
                (keyword? (:motion opts)) (update :motion name)
                (keyword? (:transition-style opts)) (update :transition-style name)
+               (some? (:item opts)) (update :item nav-item-spec)
                (keyword? (:overflow opts)) (update :overflow name)
                (keyword? (:replace-generation opts)) (update :replace-generation name))]
     (cond-> (assoc opts

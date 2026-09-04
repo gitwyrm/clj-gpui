@@ -5,7 +5,9 @@
 //! `RootView::render_node` arms stay in `renderer`.
 
 use crate::mapping;
-use crate::protocol::{self, ChartLabelLine, Cmd, Item, Node};
+use crate::protocol::{
+    self, ChartLabelLine, Cmd, Item, NavItemCase, NavItemSpec, NavItemWire, NavScalar, Node,
+};
 use chrono::NaiveDate;
 use gpui::{
     AnyElement, App, Axis, Context, Corners, Entity, EntityId, EventEmitter, FocusHandle,
@@ -280,11 +282,219 @@ impl NavDesired {
 
 /// Kit `NavStack::item` convenience. `slide` is opt-in; omitted keeps Kit's
 /// default unchanged `NavPage` renderer. Independent of `transition()`.
+/// A nested `item` recipe wins over this name.
 pub fn nav_uses_slide(style: Option<&str>) -> bool {
     matches!(
         style.map(crate::catalog::normalize).as_deref(),
         Some("slide")
     )
+}
+
+/// Showcase slide offsets: push/replace enter from the right, pop exits
+/// the same way, the covered page drifts.
+pub fn nav_item_slide_spec() -> NavItemSpec {
+    NavItemSpec {
+        cases: vec![
+            NavItemCase {
+                phase: Some("entering".into()),
+                operation: Some(json!(["push", "replace"])),
+                left: Some(NavScalar::Lerp { from: 1.0, to: 0.0 }),
+                ..NavItemCase::default()
+            },
+            NavItemCase {
+                phase: Some("exiting".into()),
+                operation: Some(json!("pop")),
+                left: Some(NavScalar::Lerp { from: 0.0, to: 1.0 }),
+                ..NavItemCase::default()
+            },
+            NavItemCase {
+                phase: Some("exiting".into()),
+                operation: Some(json!("push")),
+                left: Some(NavScalar::Lerp {
+                    from: 0.0,
+                    to: -0.3,
+                }),
+                ..NavItemCase::default()
+            },
+            NavItemCase {
+                phase: Some("entering".into()),
+                operation: Some(json!("pop")),
+                left: Some(NavScalar::Lerp {
+                    from: -0.3,
+                    to: 0.0,
+                }),
+                ..NavItemCase::default()
+            },
+        ],
+        ..NavItemSpec::default()
+    }
+}
+
+fn nav_item_spec_effective(spec: &NavItemSpec) -> bool {
+    spec.left.is_some()
+        || spec.opacity.is_some()
+        || spec.bg.is_some()
+        || spec.phase.is_some()
+        || spec.operation.is_some()
+        || spec.index.is_some()
+        || !spec.cases.is_empty()
+}
+
+fn nav_item_from_wire(item: &NavItemWire) -> Option<NavItemSpec> {
+    match item {
+        NavItemWire::Named(name) if nav_uses_slide(Some(name)) => Some(nav_item_slide_spec()),
+        NavItemWire::Named(_) => None,
+        NavItemWire::Cases(cases) if !cases.is_empty() => Some(NavItemSpec {
+            cases: cases.clone(),
+            ..NavItemSpec::default()
+        }),
+        NavItemWire::Cases(_) => None,
+        NavItemWire::Spec(spec) if nav_item_spec_effective(spec) => Some(spec.clone()),
+        NavItemWire::Spec(_) => None,
+    }
+}
+
+/// Custom `:item` wins over `:transition-style :slide`. Omitted both is
+/// Kit's default `NavPage` renderer (`None` here means do not install
+/// `NavStack::item`).
+pub fn nav_item_spec(node: &Node) -> Option<NavItemSpec> {
+    if let Some(item) = node.item.as_ref().and_then(nav_item_from_wire) {
+        return Some(item);
+    }
+    if nav_uses_slide(node.transition_style.as_deref()) {
+        Some(nav_item_slide_spec())
+    } else {
+        None
+    }
+}
+
+fn nav_phase_name(phase: gpui::base::motion::PresencePhase) -> &'static str {
+    use gpui::base::motion::PresencePhase;
+    match phase {
+        PresencePhase::Entering => "entering",
+        PresencePhase::Present => "present",
+        PresencePhase::Exiting => "exiting",
+        PresencePhase::Absent => "absent",
+    }
+}
+
+fn nav_operation_name(operation: Option<gpui::base::NavOperation>) -> &'static str {
+    use gpui::base::NavOperation;
+    match operation {
+        None => "none",
+        Some(NavOperation::Push) => "push",
+        Some(NavOperation::Pop) => "pop",
+        Some(NavOperation::Replace) => "replace",
+    }
+}
+
+fn nav_operation_names(value: &Option<Value>) -> Option<Vec<String>> {
+    match value {
+        None => None,
+        Some(Value::Null) => Some(vec!["none".into()]),
+        Some(Value::String(s)) => Some(vec![crate::catalog::normalize(s)]),
+        Some(Value::Array(items)) => Some(
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(crate::catalog::normalize))
+                .collect(),
+        ),
+        Some(_) => Some(Vec::new()),
+    }
+}
+
+fn nav_item_case_matches(
+    case: &NavItemCase,
+    phase: gpui::base::motion::PresencePhase,
+    operation: Option<gpui::base::NavOperation>,
+    index: usize,
+) -> bool {
+    if let Some(want) = case.phase.as_deref().filter(|s| !s.is_empty()) {
+        if crate::catalog::normalize(want) != nav_phase_name(phase) {
+            return false;
+        }
+    }
+    if let Some(names) = nav_operation_names(&case.operation) {
+        if !names
+            .iter()
+            .any(|name| name == nav_operation_name(operation))
+        {
+            return false;
+        }
+    }
+    if let Some(want) = case.index.filter(|n| n.is_finite()) {
+        if want.round() as usize != index {
+            return false;
+        }
+    }
+    true
+}
+
+fn nav_item_implicit_case(spec: &NavItemSpec) -> Option<NavItemCase> {
+    if !spec.cases.is_empty() {
+        return None;
+    }
+    if spec.phase.is_none() && spec.operation.is_none() && spec.index.is_none() {
+        return None;
+    }
+    Some(NavItemCase {
+        phase: spec.phase.clone(),
+        operation: spec.operation.clone(),
+        index: spec.index,
+        left: spec.left.clone(),
+        opacity: spec.opacity.clone(),
+        bg: spec.bg.clone(),
+    })
+}
+
+/// Resolved Styled refinements for one `NavPage` frame. The host applies
+/// these onto the same `NavPage` so `view()` stays the child.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct NavPagePaint {
+    pub left: Option<f32>,
+    pub opacity: Option<f32>,
+    pub bg: Option<String>,
+}
+
+/// Live `phase` / `operation` / `index` / eased `progress` → Styled keys.
+/// First matching `match` arm wins. Base spec keys apply when the spec is
+/// not a single implicit case.
+pub fn nav_item_paint(
+    phase: gpui::base::motion::PresencePhase,
+    operation: Option<gpui::base::NavOperation>,
+    index: usize,
+    progress: f32,
+    spec: &NavItemSpec,
+) -> NavPagePaint {
+    let implicit = nav_item_implicit_case(spec);
+    let mut paint = if implicit.is_some() {
+        NavPagePaint::default()
+    } else {
+        NavPagePaint {
+            left: spec.left.as_ref().map(|scalar| scalar.resolve(progress)),
+            opacity: spec.opacity.as_ref().map(|scalar| scalar.resolve(progress)),
+            bg: spec.bg.clone(),
+        }
+    };
+    let cases: &[NavItemCase] = match &implicit {
+        Some(case) => std::slice::from_ref(case),
+        None => spec.cases.as_slice(),
+    };
+    if let Some(case) = cases
+        .iter()
+        .find(|case| nav_item_case_matches(case, phase, operation, index))
+    {
+        if let Some(left) = &case.left {
+            paint.left = Some(left.resolve(progress));
+        }
+        if let Some(opacity) = &case.opacity {
+            paint.opacity = Some(opacity.resolve(progress));
+        }
+        if case.bg.is_some() {
+            paint.bg = case.bg.clone();
+        }
+    }
+    paint
 }
 
 /// Kit `forward()` vs a fresh `push()` when the new id equals the nearest
@@ -407,26 +617,28 @@ pub fn nav_page_path(stack_key: &str, index: usize, page_id: &str) -> String {
     format!("{stack_key}/nav-page/{index}/{page_id}")
 }
 
-/// Kit showcase slide: push/replace enter from the right, pop exits the
-/// same way, the covered page drifts. Installed only when
-/// `:transition-style :slide`. A later custom `item` wrap must pass the
-/// complete `NavPage` surface: the mounted `view()` plus `index`, `phase`,
-/// `operation`, and eased `progress`. The renderer must keep access to that
-/// retained page element rather than only exposing metadata or painting
-/// unrelated replacement content.
-pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
-    use gpui::base::NavOperation;
-    use gpui::base::motion::PresencePhase;
-    let offset = match (page.phase(), page.operation()) {
-        (PresencePhase::Entering, Some(NavOperation::Push | NavOperation::Replace)) => {
-            1.0 - page.progress()
-        }
-        (PresencePhase::Exiting, Some(NavOperation::Pop)) => page.progress(),
-        (PresencePhase::Exiting, Some(NavOperation::Push)) => -0.3 * page.progress(),
-        (PresencePhase::Entering, Some(NavOperation::Pop)) => -0.3 * (1.0 - page.progress()),
-        _ => 0.0,
-    };
-    page.left(relative(offset)).into_any_element()
+/// Always returns the same `NavPage` after Styled refinements. Kit's
+/// `NavPage::render` children `view()`; this wrap does not replace that
+/// element with unrelated content. Showcase slide is [`nav_item_slide_spec`].
+pub fn nav_stack_item(page: gpui::base::NavPage, spec: &NavItemSpec) -> AnyElement {
+    let paint = nav_item_paint(
+        page.phase(),
+        page.operation(),
+        page.index(),
+        page.progress(),
+        spec,
+    );
+    let mut page = page;
+    if let Some(bg) = paint.bg.as_deref().and_then(parse_hex_color) {
+        page = page.bg(bg);
+    }
+    if let Some(left) = paint.left {
+        page = page.left(relative(left));
+    }
+    if let Some(opacity) = paint.opacity {
+        page = page.opacity(opacity);
+    }
+    page.into_any_element()
 }
 
 /// Text-field payload vs number-input payload for a reused `InputSlot`.
@@ -4161,6 +4373,155 @@ mod tests {
         assert!(nav_reuse_forward(None));
         assert!(nav_reuse_forward(Some(true)));
         assert!(!nav_reuse_forward(Some(false)));
+    }
+
+    fn paint_slide(
+        phase: gpui::base::motion::PresencePhase,
+        operation: Option<gpui::base::NavOperation>,
+        progress: f32,
+    ) -> NavPagePaint {
+        nav_item_paint(phase, operation, 0, progress, &nav_item_slide_spec())
+    }
+
+    #[test]
+    fn nav_item_slide_matches_showcase_offsets() {
+        use gpui::base::NavOperation::{Pop, Push, Replace};
+        use gpui::base::motion::PresencePhase::{Entering, Exiting, Present};
+        let spec = nav_item_slide_spec();
+        assert_eq!(
+            nav_item_paint(Entering, Some(Push), 0, 0.0, &spec).left,
+            Some(1.0)
+        );
+        assert_eq!(
+            nav_item_paint(Entering, Some(Push), 0, 1.0, &spec).left,
+            Some(0.0)
+        );
+        assert_eq!(
+            nav_item_paint(Entering, Some(Replace), 0, 0.25, &spec).left,
+            Some(0.75)
+        );
+        assert_eq!(
+            nav_item_paint(Exiting, Some(Pop), 0, 0.5, &spec).left,
+            Some(0.5)
+        );
+        assert_eq!(
+            nav_item_paint(Exiting, Some(Push), 0, 1.0, &spec).left,
+            Some(-0.3)
+        );
+        assert_eq!(
+            nav_item_paint(Entering, Some(Pop), 0, 0.0, &spec).left,
+            Some(-0.3)
+        );
+        assert_eq!(
+            nav_item_paint(Entering, Some(Pop), 0, 1.0, &spec).left,
+            Some(0.0)
+        );
+        assert_eq!(paint_slide(Present, None, 1.0).left, None);
+        assert_eq!(paint_slide(Exiting, Some(Replace), 0.4).left, None);
+    }
+
+    #[test]
+    fn nav_item_spec_custom_wins_over_slide_name() {
+        let custom = Node {
+            kind: "nav-stack".into(),
+            transition_style: Some("slide".into()),
+            item: Some(NavItemWire::Spec(NavItemSpec {
+                cases: vec![NavItemCase {
+                    phase: Some("entering".into()),
+                    operation: Some(json!("push")),
+                    opacity: Some(NavScalar::Lerp { from: 0.0, to: 1.0 }),
+                    ..NavItemCase::default()
+                }],
+                ..NavItemSpec::default()
+            })),
+            ..Node::default()
+        };
+        let spec = nav_item_spec(&custom).expect("custom item");
+        use gpui::base::NavOperation::Push;
+        use gpui::base::motion::PresencePhase::Entering;
+        let paint = nav_item_paint(Entering, Some(Push), 0, 0.5, &spec);
+        assert_eq!(paint.opacity, Some(0.5));
+        assert_eq!(paint.left, None);
+
+        let named = Node {
+            kind: "nav-stack".into(),
+            item: Some(NavItemWire::Named("slide".into())),
+            ..Node::default()
+        };
+        assert_eq!(nav_item_spec(&named), Some(nav_item_slide_spec()));
+
+        let style_only = Node {
+            kind: "nav-stack".into(),
+            transition_style: Some("slide".into()),
+            ..Node::default()
+        };
+        assert_eq!(nav_item_spec(&style_only), Some(nav_item_slide_spec()));
+
+        let omitted = Node {
+            kind: "nav-stack".into(),
+            ..Node::default()
+        };
+        assert!(nav_item_spec(&omitted).is_none());
+
+        let unknown = Node {
+            kind: "nav-stack".into(),
+            item: Some(NavItemWire::Named("fade".into())),
+            transition_style: Some("slide".into()),
+            ..Node::default()
+        };
+        assert_eq!(nav_item_spec(&unknown), Some(nav_item_slide_spec()));
+
+        let empty = Node {
+            kind: "nav-stack".into(),
+            item: Some(NavItemWire::Spec(NavItemSpec::default())),
+            ..Node::default()
+        };
+        assert!(nav_item_spec(&empty).is_none());
+    }
+
+    #[test]
+    fn nav_item_first_matching_arm_wins_and_keeps_progress() {
+        use gpui::base::NavOperation::Push;
+        use gpui::base::motion::PresencePhase::{Entering, Present};
+        let spec = NavItemSpec {
+            bg: Some("#111111".into()),
+            cases: vec![
+                NavItemCase {
+                    phase: Some("entering".into()),
+                    left: Some(NavScalar::Lerp { from: 1.0, to: 0.0 }),
+                    ..NavItemCase::default()
+                },
+                NavItemCase {
+                    phase: Some("entering".into()),
+                    left: Some(NavScalar::Const(9.0)),
+                    ..NavItemCase::default()
+                },
+            ],
+            ..NavItemSpec::default()
+        };
+        let entering = nav_item_paint(Entering, Some(Push), 0, 0.25, &spec);
+        assert_eq!(entering.left, Some(0.75));
+        assert_eq!(entering.bg.as_deref(), Some("#111111"));
+        let present = nav_item_paint(Present, None, 0, 1.0, &spec);
+        assert_eq!(present.left, None);
+        assert_eq!(present.bg.as_deref(), Some("#111111"));
+
+        let by_index = NavItemSpec {
+            cases: vec![NavItemCase {
+                index: Some(1.0),
+                opacity: Some(NavScalar::Const(0.2)),
+                ..NavItemCase::default()
+            }],
+            ..NavItemSpec::default()
+        };
+        assert_eq!(
+            nav_item_paint(Present, None, 1, 1.0, &by_index).opacity,
+            Some(0.2)
+        );
+        assert_eq!(
+            nav_item_paint(Present, None, 0, 1.0, &by_index).opacity,
+            None
+        );
     }
 
     #[test]

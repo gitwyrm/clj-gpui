@@ -4309,8 +4309,8 @@ impl RootView {
                 Duration::from_secs_f32(secs),
             ));
         }
-        if extra::nav_uses_slide(node.transition_style.as_deref()) {
-            nav = nav.item(|page, _, _| extra::nav_stack_slide(page));
+        if let Some(spec) = extra::nav_item_spec(node) {
+            nav = nav.item(move |page, _, _| extra::nav_stack_item(page, &spec));
         }
         let nav = apply_kit_visual_style(nav, node, cx);
         viewport_box_sized(nav, node, 200.0)

@@ -3,6 +3,74 @@ use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// A number, or a linear interpolation of Kit `NavPage::progress()` (`0..=1`).
+///
+/// `{from, to}` is `from + (to - from) * progress`, the data form of the
+/// showcase `1.0 - page.progress()` / `page.progress()` offsets.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum NavScalar {
+    Const(f32),
+    Lerp { from: f32, to: f32 },
+}
+
+impl NavScalar {
+    pub fn resolve(&self, progress: f32) -> f32 {
+        match self {
+            Self::Const(value) => *value,
+            Self::Lerp { from, to } => from + (to - from) * progress,
+        }
+    }
+}
+
+/// One Kit `item` match arm. Omitted `phase` / `operation` / `index` match
+/// any. `operation` is a name (`push` / `pop` / `replace` / `none`) or an
+/// array of names. `none` is a settled page (`operation()` is `None`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct NavItemCase {
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub operation: Option<Value>,
+    #[serde(default)]
+    pub index: Option<f32>,
+    #[serde(default)]
+    pub left: Option<NavScalar>,
+    #[serde(default)]
+    pub opacity: Option<NavScalar>,
+    #[serde(default)]
+    pub bg: Option<String>,
+}
+
+/// Host-side Kit `NavStack::item` recipe. Visual keys on the spec apply to
+/// every mounted page; `match` arms overlay the first hit.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct NavItemSpec {
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub operation: Option<Value>,
+    #[serde(default)]
+    pub index: Option<f32>,
+    #[serde(default)]
+    pub left: Option<NavScalar>,
+    #[serde(default)]
+    pub opacity: Option<NavScalar>,
+    #[serde(default)]
+    pub bg: Option<String>,
+    #[serde(default, rename = "match")]
+    pub cases: Vec<NavItemCase>,
+}
+
+/// Wire `item`: `"slide"`, a match-arm array, or a spec object.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum NavItemWire {
+    Named(String),
+    Cases(Vec<NavItemCase>),
+    Spec(NavItemSpec),
+}
+
 pub const PROTOCOL_VERSION: u64 = 10;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
@@ -962,9 +1030,17 @@ pub struct Node {
     pub motion: Option<String>,
     /// NavStack: convenience `item` renderer. `slide` is the showcase slide.
     /// Omitted keeps Kit's default unchanged `NavPage` renderer. Independent
-    /// of `duration` / `transition()`.
+    /// of `duration` / `transition()`. A nested `item` recipe wins over this.
     #[serde(default, rename = "transition-style")]
     pub transition_style: Option<String>,
+    /// NavStack: Kit `NavStack::item` recipe. Evaluated on the host each
+    /// animation frame from live `NavPage` `phase` / `operation` / `index` /
+    /// eased `progress`. Always Styled-refines the same `NavPage` so the
+    /// mounted `view()` stays the child. Not a Clojure callback (`export-tree`
+    /// is not per-frame). `slide` is the showcase recipe; an object / array
+    /// is match arms (`left` / `opacity` number or `{from, to}` lerp).
+    #[serde(default)]
+    pub item: Option<NavItemWire>,
     /// NavStack: CSS-like overflow. `hidden` clips (needed for a slide).
     /// Omitted does not clip. Not AvatarGroup ellipsis.
     #[serde(default)]
@@ -2201,6 +2277,14 @@ mod tests {
             "reuse-forward": false,
             "replace-generation": 2,
             "on-forward-change": "cb-forward",
+            "item": {
+                "match": [
+                    {"phase": "entering", "operation": ["push", "replace"],
+                     "left": {"from": 1, "to": 0}, "opacity": {"from": 0.35, "to": 1}},
+                    {"phase": "exiting", "operation": "pop",
+                     "left": {"from": 0, "to": 1}}
+                ]
+            },
             "height": 180,
             "children": [
                 {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
@@ -2221,6 +2305,43 @@ mod tests {
         assert_eq!(nav.reuse_forward, Some(false));
         assert_eq!(nav.replace_generation, Some(json!(2)));
         assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
+        match nav.item.as_ref() {
+            Some(NavItemWire::Spec(spec)) => {
+                assert_eq!(spec.cases.len(), 2);
+                assert_eq!(spec.cases[0].phase.as_deref(), Some("entering"));
+                assert_eq!(
+                    spec.cases[0].left,
+                    Some(NavScalar::Lerp { from: 1.0, to: 0.0 })
+                );
+                assert_eq!(
+                    spec.cases[0].opacity,
+                    Some(NavScalar::Lerp {
+                        from: 0.35,
+                        to: 1.0
+                    })
+                );
+                assert_eq!(spec.cases[1].operation, Some(json!("pop")));
+            }
+            other => panic!("expected item spec, got {other:?}"),
+        }
+        let named: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": "slide"
+        }))
+        .unwrap();
+        assert_eq!(named.item, Some(NavItemWire::Named("slide".into())));
+        let arms: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": [{"phase": "present", "left": 0}]
+        }))
+        .unwrap();
+        match arms.item {
+            Some(NavItemWire::Cases(cases)) => {
+                assert_eq!(cases[0].phase.as_deref(), Some("present"));
+                assert_eq!(cases[0].left, Some(NavScalar::Const(0.0)));
+            }
+            other => panic!("expected item cases, got {other:?}"),
+        }
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");
         assert_eq!(nav.children[0].id.as_deref(), Some("home"));

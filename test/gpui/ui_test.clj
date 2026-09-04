@@ -1242,7 +1242,25 @@
                             (ui/nav-page {:id :home} "Home")
                             (ui/nav-page {:id :detail} "Detail"))]
     (is (false? (:reuse-forward fresh)))
-    (is (= 2 (:replace-generation fresh)))))
+    (is (= 2 (:replace-generation fresh))))
+  (let [recipe (ui/nav-stack {:id "nav" :stack [:home]
+                              :item [{:phase :entering :operation [:push :replace]
+                                      :left {:from 1 :to 0}
+                                      :opacity {:from 0.35 :to 1}}
+                                     {:phase :exiting :operation :pop
+                                      :left {:from 0 :to 1}}]}
+                             (ui/nav-page {:id :home} "Home"))]
+    (is (= "entering" (get-in recipe [:item :match 0 :phase])))
+    (is (= ["push" "replace"] (get-in recipe [:item :match 0 :operation])))
+    (is (= {:from 1 :to 0} (get-in recipe [:item :match 0 :left])))
+    (is (= {:from 0.35 :to 1} (get-in recipe [:item :match 0 :opacity])))
+    (is (= "pop" (get-in recipe [:item :match 1 :operation]))))
+  (let [named (ui/nav-stack {:id "nav" :item :slide}
+                            (ui/nav-page {:id :home} "Home"))]
+    (is (= "slide" (:item named))))
+  (let [dropped (ui/nav-stack {:id "nav" :item (fn [_])}
+                              (ui/nav-page {:id :home} "Home"))]
+    (is (nil? (:item dropped)))))
 
 (deftest nav-stack-forward-change-restores-page-ids
   (runtime/reset-callbacks!)
@@ -1258,6 +1276,20 @@
            (runtime/invoke-callback! (:on-forward-change exported)
                                      ["detail" "settings"])))
     (is (= [:detail :settings] @got))))
+
+(deftest nav-stack-item-recipe-is-not-a-callback
+  (runtime/reset-callbacks!)
+  (let [exported (runtime/export-tree
+                  (ui/nav-stack {:id "nav" :stack [:home]
+                                 :item [{:phase :entering :operation :push
+                                         :left {:from 1 :to 0}}]}
+                                (ui/nav-page {:id :home} "Home")))]
+    (is (map? (:item exported)))
+    (is (not (string? (:item exported))))
+    (is (= "entering" (get-in exported [:item :match 0 :phase])))
+    (is (= "push" (get-in exported [:item :match 0 :operation])))
+    (is (= {:from 1 :to 0}
+           (get-in exported [:item :match 0 :left])))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
