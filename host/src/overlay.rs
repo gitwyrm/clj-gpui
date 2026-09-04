@@ -82,9 +82,10 @@ pub fn kit_avatar(node: &Node) -> Avatar {
     avatar
 }
 
-/// Kit `AvatarGroup` from a node. `flex_shrink_0` plus a min-width matching
-/// Kit's overlap math: negative child margins make flex min-content about
-/// one face, so a row otherwise stacks every avatar on the same spot.
+/// Kit `AvatarGroup` from a node. A host wrap owns the overlap width;
+/// the group fills that box (`w_full`). Kit's negative child margins make
+/// flex min-content about one face, so an unsized row stacks every avatar
+/// on the same spot.
 pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
     let mut group =
         AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
@@ -98,7 +99,6 @@ pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
     if node.ellipsis {
         group = group.ellipsis();
     }
-    let width = avatar_group_content_width(node);
     group
         .children(
             node.children
@@ -107,7 +107,7 @@ pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
                 .map(kit_avatar),
         )
         .flex_shrink_0()
-        .min_w(px(width))
+        .w_full()
 }
 
 /// Kit AvatarGroup layout width: `face + 0.7 * face * (visible - 1)`, plus
@@ -136,7 +136,7 @@ pub(crate) fn avatar_group_content_width(node: &Node) -> f32 {
     width
 }
 
-fn avatar_face_px(size: Size) -> f32 {
+pub(crate) fn avatar_face_px(size: Size) -> f32 {
     match size {
         Size::Large => 80.0,
         Size::Medium => 48.0,
@@ -661,11 +661,16 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             chart_layout(crumb, node).into_any_element()
         }
         "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
-        "avatar-group" => h_flex()
-            .flex_none()
-            .min_w(px(avatar_group_content_width(node)))
-            .child(chart_layout(kit_avatar_group(node), node))
-            .into_any_element(),
+        "avatar-group" => {
+            let width = avatar_group_content_width(node);
+            let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+            h_flex()
+                .flex_none()
+                .w(px(width))
+                .h(px(face))
+                .child(chart_layout(kit_avatar_group(node), node))
+                .into_any_element()
+        }
         "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
         "progress" => {
             let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);

@@ -94,7 +94,7 @@
    (ui/hstack
     {:gap 12 :align :center}
     (ui/avatar {:name "Ada Lovelace" :icon :user})
-    (ui/avatar-group {:limit 4 :ellipsis true :size :small}
+    (ui/avatar-group {:limit 4 :ellipsis true}
                      (ui/avatar "Ada Lovelace")
                      (ui/avatar "Grace Hopper")
                      (ui/avatar "Alan Kay")
@@ -140,6 +140,11 @@
     (ui/badge 3 (ui/icon :bell))
     (ui/badge {:dot true} (ui/icon :inbox))
     (ui/avatar "Ada Lovelace")
+    (ui/clipboard "clj-gpui" {:on-copied (fn [_]
+                                           (swap! !state assoc :alert? true))})
+    (ui/spinner {:size :small}))
+   (ui/hstack
+    {:gap 12 :align :center}
     (ui/avatar {:name "Jason Lee"
                 :src "https://avatars.githubusercontent.com/u/5518?s=64"
                 :size :large})
@@ -150,10 +155,7 @@
                                  :src "https://avatars.githubusercontent.com/u/1789?s=64"})
                      (ui/avatar "Grace Hopper")
                      (ui/avatar {:name "Alan" :icon :building-2})
-                     (ui/avatar "Barbara Liskov"))
-    (ui/clipboard "clj-gpui" {:on-copied (fn [_]
-                                           (swap! !state assoc :alert? true))})
-    (ui/spinner {:size :small}))
+                     (ui/avatar "Barbara Liskov")))
    (when alert?
      (ui/alert "Copied to the clipboard."
                {:variant :success

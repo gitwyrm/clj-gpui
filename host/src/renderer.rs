@@ -4386,16 +4386,12 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
 /// AvatarGroup's negative child margins make flex min-content about one
 /// avatar; shrinking then stacks the faces on top of each other.
 fn row_intrinsic(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
-    apply_style(
-        h_flex()
-            .flex_none()
-            .min_w(px(overlay::avatar_group_content_width(node))),
-        node,
-        cx,
-    )
-    .flex_shrink_0()
-    .child(el)
-    .into_any_element()
+    let width = overlay::avatar_group_content_width(node);
+    let face = overlay::avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    apply_style(h_flex().flex_none().w(px(width)).h(px(face)), node, cx)
+        .flex_shrink_0()
+        .child(el)
+        .into_any_element()
 }
 
 /// List/table/tree use crate `size_full()`. They need a bounded viewport or
