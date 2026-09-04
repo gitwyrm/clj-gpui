@@ -4372,6 +4372,7 @@ fn scroll_viewport(node: &Node) -> ScrollViewport {
     }
 }
 
+#[cfg(test)]
 fn select_opts(node: &Node) -> Vec<SelectOpt> {
     extra::select_sections(node.collection())
         .into_iter()
@@ -4603,6 +4604,7 @@ fn paint_table_from_items(mut table: Table, node: &Node) -> Table {
     table
 }
 
+#[cfg(test)]
 fn select_selected_index(
     items: &[SelectOpt],
     selected: Option<&str>,

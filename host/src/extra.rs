@@ -448,6 +448,7 @@ pub fn select_index(items: &[Item], selected: Option<&str>) -> Option<gpui_compo
 }
 
 /// Ids Kit would keep after `SearchableVec<SelectGroup<_>>::perform_search`.
+#[cfg(test)]
 pub fn select_group_search_ids(sections: &[SelectSection], query: &str) -> Vec<String> {
     let q = query.to_lowercase();
     let mut ids = Vec::new();
