@@ -21,6 +21,8 @@
   (is (some? (ns-resolve 'gpui.ui 'pagination)))
   (is (some? (ns-resolve 'gpui.ui 'progress-circle)))
   (is (some? (ns-resolve 'gpui.ui 'shimmer)))
+  (is (some? (ns-resolve 'gpui.ui 'hover-card)))
+  (is (some? (ns-resolve 'gpui.ui 'avatar-group)))
   (is (some? (ns-resolve 'gpui.ui 'table-header)))
   (is (some? (ns-resolve 'gpui.ui 'table-body)))
   (is (some? (ns-resolve 'gpui.ui 'table-footer)))
@@ -226,7 +228,46 @@
     (is (= ["Home" "Proj"]
            (mapv :label (:items (ui/breadcrumb [{:id :home :label "Home"} "Proj"])))))
     (is (= "copy-me" (:text (ui/clipboard "copy-me"))))
-    (is (= "Ada" (:text (ui/avatar "Ada")))))
+    (is (= "Ada" (:text (ui/avatar "Ada"))))
+    (let [n (ui/avatar {:name "Ada Lovelace"
+                        :src "https://example.com/ada.png"
+                        :icon :building-2
+                        :size :large})]
+      (is (= :avatar (:type n)))
+      (is (= "Ada Lovelace" (:text n)))
+      (is (= "https://example.com/ada.png" (:src n)))
+      (is (= "building-2" (:icon n)))
+      (is (= "large" (:control-size n))))
+    (is (nil? (:src (ui/avatar {:name "Ada" :src ""}))))
+    (is (nil? (:text (ui/avatar {:src "https://example.com/x.png"}))))
+    (let [n (ui/avatar-group {:limit 5 :ellipsis true :size :small}
+                             (ui/avatar "Ada")
+                             "Grace"
+                             (ui/avatar {:name "Alan" :src "https://example.com/alan.png"}))]
+      (is (= :avatar-group (:type n)))
+      (is (= 5 (:limit n)))
+      (is (true? (:ellipsis n)))
+      (is (= "small" (:control-size n)))
+      (is (= ["Ada" "Grace" "Alan"] (mapv :text (:children n))))
+      (is (= "https://example.com/alan.png" (get-in n [:children 2 :src]))))
+    (let [n (ui/hover-card {:trigger (ui/link "https://example.com" "@ada")
+                            :open-delay 0.2
+                            :close-delay 0.1
+                            :anchor :bottom-left
+                            :appearance false
+                            :on-open-change identity}
+                           (ui/label "Ada Lovelace")
+                           (ui/avatar "Ada"))]
+      (is (= :hover-card (:type n)))
+      (is (= 0.2 (:open-delay n)))
+      (is (= 0.1 (:close-delay n)))
+      (is (= "bottom-left" (:placement n)))
+      (is (false? (:appearance n)))
+      (is (fn? (:on-open-change n)))
+      (is (= :link (get-in n [:trigger :type])))
+      (is (= ["Ada Lovelace" "Ada"] (mapv :text (:children n)))))
+    (is (= :label (get-in (ui/hover-card {:trigger "Hover"} (ui/label "Hi"))
+                          [:trigger :type]))))
   (testing "accordion content stays a node"
     (let [n (ui/accordion :a {:items [{:id :a :title "One" :content (ui/label "hi")}
                                       {:id :b :title "Two" :content (ui/label "there")}]})]

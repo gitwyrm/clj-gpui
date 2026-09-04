@@ -15,7 +15,6 @@ use gpui_component::{
     WindowExt as _,
     accordion::Accordion,
     alert::Alert,
-    avatar::Avatar,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
@@ -28,6 +27,7 @@ use gpui_component::{
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
+    hover_card::HoverCard,
     input::{
         Editor, EditorState, Input, InputEvent, InputState, NumberInput, NumberInputEvent,
         OtpEvent, OtpInput, OtpState, StepAction, Textarea, TextareaState,
@@ -1285,10 +1285,12 @@ impl RootView {
             "clipboard" => self.render_clipboard(node, &key, cx),
             "breadcrumb" => self.render_breadcrumb(node, &key, cx),
             "avatar" => self.render_avatar(node, cx),
+            "avatar-group" => self.render_avatar_group(node, cx),
             "accordion" => self.render_accordion(node, path, &key, window, cx),
             "description-list" => self.render_description_list(node, cx),
             "dialog" | "alert-dialog" => div().into_any_element(),
             "popover" => self.render_popover(node, &key, cx),
+            "hover-card" => self.render_hover_card(node, path, &key, window, cx),
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
@@ -2206,12 +2208,53 @@ impl RootView {
     }
 
     fn render_avatar(&self, node: &Node, cx: &App) -> AnyElement {
-        let mut avatar =
-            Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-        if let Some(name) = node.text.clone().or(node.title.clone()) {
-            avatar = avatar.name(name);
+        apply_style(overlay::kit_avatar(node), node, cx).into_any_element()
+    }
+
+    fn render_avatar_group(&self, node: &Node, cx: &App) -> AnyElement {
+        // Kit `AvatarGroup: Styled` keys (`:gap`, padding, colors, …) refine
+        // the real group. The clip wrap only takes workaround geometry plus
+        // Clojure box keys (`:width` / `:height` / `:size` / `:flex`).
+        let group = apply_kit_visual_style(overlay::kit_avatar_group(node), node, cx);
+        apply_outer_box_style(overlay::avatar_group_element(group, node), node).into_any_element()
+    }
+
+    fn render_hover_card(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut card = HoverCard::new(eid(key));
+        if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+            card = card.anchor(anchor);
         }
-        apply_style(avatar, node, cx).into_any_element()
+        if let Some(secs) = extra::hover_card_delay_secs(node.open_delay) {
+            card = card.open_delay(Duration::from_secs_f32(secs));
+        }
+        if let Some(secs) = extra::hover_card_delay_secs(node.close_delay) {
+            card = card.close_delay(Duration::from_secs_f32(secs));
+        }
+        if let Some(appearance) = node.appearance {
+            card = card.appearance(appearance);
+        }
+        if let Some(trigger) = node.trigger.as_deref() {
+            card = card.trigger(self.render_node(trigger, &format!("{path}-trigger"), window, cx));
+        }
+        card = card.children(self.render_children(node, path, window, cx));
+        if let Some(callback_id) = node.on_open_change.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            card = card.on_open_change(move |open, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*open)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(card, node, cx).into_any_element()
     }
 
     fn render_accordion(
@@ -4297,7 +4340,7 @@ fn outer_layout(node: &Node) -> OuterLayout {
     }
 }
 
-fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+fn apply_outer_box_style<E: Styled>(mut el: E, node: &Node) -> E {
     let layout = outer_layout(node);
     if let Some(width) = layout.width {
         el = el.w(px(width));
@@ -4309,6 +4352,8 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.size(px(size));
     }
     if layout.flex_fill {
+        // Flex items default to content-sized minimums. Allow shrinking on
+        // both axes so long rows stay bounded and nested scrolling works.
         el = el.flex_1();
     }
     if layout.shrink_width {
@@ -4317,7 +4362,12 @@ fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
     if layout.shrink_height {
         el = el.min_h_0();
     }
-    if layout.full_width {
+    el
+}
+
+fn copy_outer_layout<E: Styled>(mut el: E, node: &Node) -> E {
+    el = apply_outer_box_style(el, node);
+    if outer_layout(node).full_width {
         el = el.w_full();
     }
     el
@@ -4576,6 +4626,20 @@ fn content_wrap(node: &Node) -> ContentWrap {
     }
 }
 
+/// Testable layout contract for `row_intrinsic` wrappers.
+#[cfg(test)]
+fn row_intrinsic_wrap(node: &Node) -> ContentWrap {
+    let layout = outer_layout(node);
+    ContentWrap {
+        width: layout.width,
+        height: layout.height,
+        size: layout.size,
+        flex_fill: false,
+        fill_width: false,
+        flex_none: true,
+    }
+}
+
 /// Testable layout contract for list/table/tree viewports.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
@@ -4618,33 +4682,14 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
         .into_any_element()
 }
 
-fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
+/// Kit `Styled` refinements: gap, padding, type, colors, alignment.
+/// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
+fn apply_kit_visual_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
     }
     if let Some(padding) = node.padding {
         el = el.p(px(padding));
-    }
-    if let Some(width) = node.width {
-        el = el.w(px(width));
-    }
-    if let Some(height) = node.height {
-        el = el.h(px(height));
-    }
-    if let Some(size) = node.size {
-        el = el.size(px(size));
-    }
-    let layout = outer_layout(node);
-    if layout.flex_fill {
-        // Flex items default to content-sized minimums. Allow shrinking on
-        // both axes so long rows stay bounded and nested scrolling works.
-        el = el.flex_1();
-    }
-    if layout.shrink_width {
-        el = el.min_w_0();
-    }
-    if layout.shrink_height {
-        el = el.min_h_0();
     }
     if let Some(font_size) = node.font_size {
         el = el.text_size(px(font_size));
@@ -4709,6 +4754,10 @@ fn apply_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
         }
     }
     el
+}
+
+fn apply_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
+    apply_outer_box_style(apply_kit_visual_style(el, node, cx), node)
 }
 
 fn node_theme_pref(node: &Node) -> Option<&str> {
@@ -5245,10 +5294,54 @@ mod accordion_control_tests {
 
 #[cfg(test)]
 mod widget_wrap_tests {
-    use super::{Node, content_wrap, context_menu_wrap, outer_layout, viewport_wrap};
+    use super::{
+        Node, content_wrap, context_menu_wrap, outer_layout, row_intrinsic_wrap, viewport_wrap,
+    };
     use crate::extra;
     use crate::protocol::Item;
     use serde_json::json;
+
+    #[test]
+    fn avatar_group_row_is_flex_none_without_full_width() {
+        let node = Node {
+            kind: "avatar-group".into(),
+            ..Node::default()
+        };
+        let row = row_intrinsic_wrap(&node);
+        let column = content_wrap(&node);
+        assert!(row.flex_none);
+        assert!(!row.fill_width);
+        assert!(!row.flex_fill);
+        assert!(column.fill_width);
+
+        let grow = Node {
+            kind: "avatar-group".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let row = row_intrinsic_wrap(&grow);
+        assert!(row.flex_none);
+        assert!(!row.fill_width);
+        assert!(!row.flex_fill);
+
+        let styled = Node {
+            kind: "avatar-group".into(),
+            gap: Some(8.0),
+            padding: Some(4.0),
+            width: Some(200.0),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let split = crate::overlay::avatar_group_style_split(&styled);
+        assert_eq!(split.kit_gap, Some(8.0));
+        assert_eq!(split.kit_padding, Some(4.0));
+        assert_eq!(split.wrap_width, Some(200.0));
+        assert!(split.wrap_flex_fill);
+        assert_eq!(
+            split.wrap_workaround_w,
+            crate::overlay::avatar_group_content_width(&styled)
+        );
+    }
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {

@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, and `ui/shimmer` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, and `ui/avatar-group` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -270,6 +270,9 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/badge 3 (ui/icon :bell))
 (ui/clipboard "copy me")
 (ui/avatar "Ada Lovelace")
+(ui/avatar {:name "Ada" :src "https://example.com/ada.png" :size :large})
+(ui/avatar-group {:limit 3 :ellipsis true}
+  (ui/avatar "Ada") (ui/avatar "Grace") (ui/avatar "Alan"))
 (ui/breadcrumb [{:id :home :label "Home"} "Project"])
 (ui/group-box {:title "Audio" :variant :outline} …)
 (ui/accordion open-id {:items [{:id :a :title "One" :content (ui/label "…")}]
@@ -282,6 +285,8 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
   (ui/label "Backdrop clicks do not dismiss this."))
 (ui/popover open? {:trigger (ui/button "More") :on-open-change set-open!}
   (ui/label "Hint"))
+(ui/hover-card {:trigger (ui/link "https://example.com" "@ada") :open-delay 0.2}
+  (ui/label "Ada Lovelace"))
 (ui/dropdown-menu [{:id :copy :label "Copy"} :- {:id :paste :label "Paste"}]
                   {:on-change handle!}
                   (ui/button "Edit"))

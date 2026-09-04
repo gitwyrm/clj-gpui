@@ -203,6 +203,25 @@ pub fn shimmer_duration_secs(node: &Node) -> Option<f32> {
     node.duration.filter(|n| n.is_finite() && *n >= 0.0)
 }
 
+/// HoverCard open/close delay in seconds. `None` leaves Kit's 0.6s / 0.3s.
+pub fn hover_card_delay_secs(value: Option<f32>) -> Option<f32> {
+    value.filter(|n| n.is_finite() && *n >= 0.0)
+}
+
+/// Avatar image source. Empty / omitted is initials or the placeholder icon.
+#[cfg(test)]
+pub fn avatar_src(node: &Node) -> Option<&str> {
+    node.src.as_deref().filter(|s| !s.is_empty())
+}
+
+/// AvatarGroup visible count. `None` leaves Kit's 3.
+#[cfg(test)]
+pub fn avatar_group_limit(node: &Node) -> Option<usize> {
+    node.limit
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+}
+
 /// ShimmerText highlight half-width. `spread-px` wins when both are set.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShimmerSpreadSpec {
@@ -1868,6 +1887,45 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(shimmer_duration_secs(&bad), None);
+    }
+
+    #[test]
+    fn hover_card_delays_and_avatar_group_limit() {
+        assert_eq!(hover_card_delay_secs(None), None);
+        assert_eq!(hover_card_delay_secs(Some(0.0)), Some(0.0));
+        assert_eq!(hover_card_delay_secs(Some(0.2)), Some(0.2));
+        assert_eq!(hover_card_delay_secs(Some(-1.0)), None);
+        let avatar: Node = serde_json::from_value(json!({
+            "type": "avatar",
+            "text": "Ada",
+            "src": "https://example.com/ada.png",
+            "icon": "building-2"
+        }))
+        .unwrap();
+        assert_eq!(avatar_src(&avatar), Some("https://example.com/ada.png"));
+        let empty_src: Node = serde_json::from_value(json!({
+            "type": "avatar",
+            "src": ""
+        }))
+        .unwrap();
+        assert_eq!(avatar_src(&empty_src), None);
+        let group: Node = serde_json::from_value(json!({
+            "type": "avatar-group",
+            "limit": 5,
+            "ellipsis": true
+        }))
+        .unwrap();
+        assert_eq!(avatar_group_limit(&group), Some(5));
+        assert!(group.ellipsis);
+        let omitted: Node = serde_json::from_value(json!({"type": "avatar-group"})).unwrap();
+        assert_eq!(avatar_group_limit(&omitted), None);
+        assert!(!omitted.ellipsis);
+        let zero: Node = serde_json::from_value(json!({
+            "type": "avatar-group",
+            "limit": 0
+        }))
+        .unwrap();
+        assert_eq!(avatar_group_limit(&zero), Some(0));
     }
 
     #[test]

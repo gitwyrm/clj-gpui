@@ -49,7 +49,8 @@ Classification:
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
 | `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string. Host wrapper owns layout keys |
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
-| `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; no image `src` yet |
+| `avatar::Avatar` | `ui/avatar` | ✅ | B | Initials from `:name`; `:src` is a Kit image (http URL or file path); host installs GPUI's reqwest HTTP client so remote URLs load; `:icon` is the placeholder |
+| `avatar::AvatarGroup` | `ui/avatar-group` | ✅ | C | Child avatars; omitted `:limit` keeps Kit's 3; `:ellipsis` overflow |
 | `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids in original item order. Outer wrapper owns `:width` / `:height` / `:size` / `:flex` (default flex-none + full width) so crate `size_full()` does not eat leftover column height |
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |
 | `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
@@ -70,6 +71,7 @@ Classification:
 | `dialog::Dialog` | `ui/dialog` | ✅ | C | Controlled `:open?`; overlay via `WindowExt`. `:variant` `:confirm`. Overlay click dismisses unless `:overlay-closable false` |
 | `dialog::AlertDialog` | `ui/alert-dialog` | ✅ | C | Same controlled overlay as dialog; not backdrop-dismissible |
 | `popover::Popover` | `ui/popover` | ✅ | C | Controlled `:open?`; trigger must be a button; content rebuilt from child nodes |
+| `hover_card::HoverCard` | `ui/hover-card` | ✅ | C | Hover-driven (not `:open?`). Trigger is any widget. Omitted `:open-delay` / `:close-delay` keep Kit 0.6s / 0.3s. `:placement` is Kit `Anchor`. `:on-open-change` is boolean |
 | `menu::PopupMenu` / context / dropdown | `ui/dropdown-menu`, `ui/context-menu` | ✅ | C | `{id, label}` items, nested `:items` submenus, `-` separators. No GPUI Action required. Context-menu host is `v_flex` so a wrapped `:flex 1` listing does not collapse |
 | `VirtualList` | `ui/virtual-list` | ✅ | C | `{id, label, height?}` rows; host `v_virtual_list` / `h_virtual_list`. Vertical by default; `:orientation :horizontal` for a row. Default row height 36 |
 | `sheet::Sheet` | `ui/sheet` | ✅ | C | One crate sheet; last open in tree order. Live spec + next-frame `WindowExt`. `:placement`, `:footer` |
@@ -87,7 +89,6 @@ Classification:
 | `highlighter::*` | — | ❌ | E | Tree-sitter internals for the editor |
 | `form::{v,h}_form` / `field` | — | ❌ | E | Layout sugar; `vstack` is enough |
 | `collapsible::Collapsible` | — | ❌ | E | Trait, not a widget |
-| `avatar::AvatarGroup` | — | ❌ | C | Image stack + overflow |
 | `TitleBar` | `ui/window` | ❌ | D | Window chrome is already Clojure-owned |
 | `WindowBorder` | — | ❌ | D | Linux decoration helper |
 | `Inspector` | — | ❌ | D | Debug-only |
@@ -101,11 +102,11 @@ Chat `Message`/`Bubble` and `NavStack` are still follow-ups. `gpui-fps` paints o
 
 ## Category C — remaining
 
-Slider range thumbs / log scale, searchable select sections, `DropdownButton`, `AvatarGroup`, HoverCard, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `ui/pagination`, `ui/progress-circle`, and `ui/shimmer` are wrapped. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Slider range thumbs / log scale, searchable select sections, `DropdownButton`, and chat / NavStack. Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, and `ui/avatar-group` are wrapped. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 
-Kit 0.6 `Root::render` does not paint overlay layers; the host calls `Root::render_dialog_layer`, `Root::render_sheet_layer`, and `Root::render_notification_layer` from `RootView`. Open/close for dialogs and the single crate sheet still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The overlay builder is stored for the overlay's lifetime and runs on every layer paint. It reads a live spec cell (callback ids, title, body, children, footer) instead of capturing the tree from open time — `export-tree` rebuilds the callback registry each render, so a stale `cb-7` would otherwise invoke the wrong function. The builder must not `entity.read` / `update` RootView. Dialog `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg. Crate order: OK → `on_ok` then `on_close`; Cancel / Escape / close button / overlay click → `on_cancel` then `on_close`. The host sends `:on-open-change false` from `on_close`. Those ids are captured for the action and sent as **one** callback batch so `:on-ok` cannot `export-tree` and rewire `:on-close`. Each Clojure handler runs at most once per action. Clicking the overlay dismisses the dialog (`:overlay-closable` defaults true even for `:variant :confirm`, which the crate otherwise locks). After a crate-side dismiss the host does not re-open until Clojure’s tree drops `:open?`. Static overlay children use a full path element id (`dialog-key/content/0/1`) so nested stacks cannot collide. Static buttons honor `disabled`, `primary` / `variant`, `on-click`, and `text`. Popover is in-tree and controlled (`:open?` + `:on-open-change`). Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus. Item `:on-click` then menu `:on-change` is one batch. `ui/context-menu` is a flex column host (`v_flex` + `min_h_0`), not a block `div`; leftover height is inherited from a `:flex 1` child only when the menu omitted `:flex`, so wrapping a list/table/tree does not collapse the listing.
+Kit 0.6 `Root::render` does not paint overlay layers; the host calls `Root::render_dialog_layer`, `Root::render_sheet_layer`, and `Root::render_notification_layer` from `RootView`. Open/close for dialogs and the single crate sheet still goes through `WindowExt` on the next frame so `RootView::render` does not re-enter `Root`. The overlay builder is stored for the overlay's lifetime and runs on every layer paint. It reads a live spec cell (callback ids, title, body, children, footer) instead of capturing the tree from open time — `export-tree` rebuilds the callback registry each render, so a stale `cb-7` would otherwise invoke the wrong function. The builder must not `entity.read` / `update` RootView. Dialog `:on-close` is 0-arg; `:on-ok` / `:on-cancel` are 0-arg. Crate order: OK → `on_ok` then `on_close`; Cancel / Escape / close button / overlay click → `on_cancel` then `on_close`. The host sends `:on-open-change false` from `on_close`. Those ids are captured for the action and sent as **one** callback batch so `:on-ok` cannot `export-tree` and rewire `:on-close`. Each Clojure handler runs at most once per action. Clicking the overlay dismisses the dialog (`:overlay-closable` defaults true even for `:variant :confirm`, which the crate otherwise locks). After a crate-side dismiss the host does not re-open until Clojure’s tree drops `:open?`. Static overlay children use a full path element id (`dialog-key/content/0/1`) so nested stacks cannot collide. Static buttons honor `disabled`, `primary` / `variant`, `on-click`, and `text`. Popover is in-tree and controlled (`:open?` + `:on-open-change`). HoverCard is in-tree and hover-driven (not `:open?`); the trigger is any widget; omitted delays keep Kit's 0.6s / 0.3s. Dropdown/context menus use `PopupMenuItem::on_click` (no GPUI Action). Nested `:items` are submenus. Item `:on-click` then menu `:on-change` is one batch. `ui/context-menu` is a flex column host (`v_flex` + `min_h_0`), not a block `div`; leftover height is inherited from a `:flex 1` child only when the menu omitted `:flex`, so wrapping a list/table/tree does not collapse the listing.
 
 The crate holds **one** sheet. Last open `sheet` in tree order wins. Same live-cell + next-frame open as dialogs. `:placement` is the slide edge. `:footer` is a child node. Notifications are a stack keyed by Clojure id (`Notification::id1`). Presence in the tree means show unless `:open false`. A fingerprint of title|message|variant|autohide skips re-push (re-push would reset autohide). Tree removal dismisses with `suppress_close` so Clojure is not double-notified. Click uses crate `on_click` (fires before delayed dismiss). Autohide defaults **true**.
 
@@ -121,7 +122,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 
 ## Path to near-complete coverage
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, AvatarGroup, HoverCard, and chat / NavStack — not a new architecture. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select, combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/hover-card/menus are in-tree. Remaining C work is slider range/log, select sections, DropdownButton, and chat / NavStack — not a new architecture. `gpui-shell` will not be wrapped. `gpui-wry` waits until a product needs it.
 
 ## Callback payloads (protocol v10)
 
@@ -140,7 +141,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 | `list` | `:on-confirm` | original Clojure row id (click / Enter; same batch as `:on-change`) |
 | `data-table` | `:on-confirm` / `:on-double-click` | original Clojure row id (double-click; same batch as that click's `:on-change`) |
 | `dialog` / `alert-dialog` | `:on-close` / `:on-ok` / `:on-cancel` | none (0-arg) |
-| `dialog` / `alert-dialog` / `popover` / `sheet` | `:on-open-change` | boolean |
+| `dialog` / `alert-dialog` / `popover` / `hover-card` / `sheet` | `:on-open-change` | boolean |
 | `sheet` / `notification` | `:on-close` | none (0-arg) |
 | `number-input` | `:on-change` | number |
 | `rating` | `:on-change` | integer `0..=:max` |

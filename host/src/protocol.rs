@@ -830,6 +830,24 @@ pub struct Node {
     /// ShimmerText highlight hex. Omitted follows theme/text color. Not layout `color`.
     #[serde(default, rename = "highlight-color")]
     pub highlight_color: Option<String>,
+    /// Avatar image (`ImageSource`: http URL or file path). Empty/omitted is initials or the placeholder icon.
+    #[serde(default)]
+    pub src: Option<String>,
+    /// HoverCard open delay in seconds. Kit default 0.6. Omitted leaves Kit's default.
+    #[serde(default, rename = "open-delay")]
+    pub open_delay: Option<f32>,
+    /// HoverCard close delay in seconds. Kit default 0.3. Omitted leaves Kit's default.
+    #[serde(default, rename = "close-delay")]
+    pub close_delay: Option<f32>,
+    /// HoverCard default popover chrome. Kit default true. Omitted leaves Kit's default.
+    #[serde(default)]
+    pub appearance: Option<bool>,
+    /// AvatarGroup overflow ellipsis avatar. Kit default false.
+    #[serde(default)]
+    pub ellipsis: bool,
+    /// AvatarGroup max visible avatars. Kit default 3. Omitted leaves Kit's default.
+    #[serde(default)]
+    pub limit: Option<f32>,
 }
 
 impl Node {
@@ -1606,6 +1624,56 @@ mod tests {
         assert!(shimmer.reverse);
         assert!(shimmer.once);
         assert_eq!(shimmer.highlight_color.as_deref(), Some("#ffffff"));
+
+        let hover: Node = serde_json::from_value(json!({
+            "type": "hover-card",
+            "id": "hint",
+            "open-delay": 0.2,
+            "close-delay": 0.1,
+            "placement": "bottom-left",
+            "appearance": false,
+            "on-open-change": "cb-hover",
+            "trigger": {"type": "link", "href": "https://example.com", "text": "@ada"},
+            "children": [{"type": "label", "text": "Ada Lovelace"}]
+        }))
+        .unwrap();
+        assert_eq!(hover.kind, "hover-card");
+        assert_eq!(hover.open_delay, Some(0.2));
+        assert_eq!(hover.close_delay, Some(0.1));
+        assert_eq!(hover.placement.as_deref(), Some("bottom-left"));
+        assert_eq!(hover.appearance, Some(false));
+        assert_eq!(hover.on_open_change.as_deref(), Some("cb-hover"));
+        assert_eq!(
+            hover.trigger.as_ref().map(|n| n.kind.as_str()),
+            Some("link")
+        );
+        assert!(hover.contains_text("Ada Lovelace"));
+        assert!(hover.contains_text("@ada"));
+
+        let avatar: Node = serde_json::from_value(json!({
+            "type": "avatar",
+            "text": "Ada Lovelace",
+            "src": "https://example.com/ada.png",
+            "icon": "building-2"
+        }))
+        .unwrap();
+        assert_eq!(avatar.src.as_deref(), Some("https://example.com/ada.png"));
+        assert_eq!(avatar.icon.as_deref(), Some("building-2"));
+
+        let group: Node = serde_json::from_value(json!({
+            "type": "avatar-group",
+            "limit": 5,
+            "ellipsis": true,
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(group.kind, "avatar-group");
+        assert_eq!(group.limit, Some(5.0));
+        assert!(group.ellipsis);
+        assert_eq!(group.children.len(), 2);
         assert_eq!(PROTOCOL_VERSION, 10);
     }
 

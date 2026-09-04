@@ -948,19 +948,51 @@
           (with-option-callback opts items))))
 
 (defn avatar
-  "Initials avatar from a display name.
+  "Avatar. Initials from `:name` or a string. `:src` is a Kit image
+  source (http URL or file path). Remote http URLs load through the
+  host HTTP client. `:icon` is the placeholder when there is no image
+  (Kit default User).
 
-  (ui/avatar {:name \"Ada Lovelace\"})
-  (ui/avatar \"Ada Lovelace\")"
+  (ui/avatar \"Ada Lovelace\")
+  (ui/avatar {:name \"Ada Lovelace\" :src \"https://example.com/ada.png\"})
+  (ui/avatar \"Ada\" {:src \"https://example.com/ada.png\" :size :large})"
   ([name-or-opts]
    (if (map? name-or-opts)
-     (let [opts name-or-opts
-           name (or (:name opts) (:text opts))]
-       (merge-widget {:type :avatar :text (when (some? name) (str name))}
-                     (dissoc opts :name :text)))
+     (avatar (or (:name name-or-opts) (:text name-or-opts)) name-or-opts)
      {:type :avatar :text (str name-or-opts)}))
   ([name opts]
-   (merge-widget {:type :avatar :text (str name)} opts)))
+   (let [opts (or opts {})
+         src (when-let [s (:src opts)]
+               (let [text (str s)]
+                 (when (seq text) text)))
+         icon (:icon opts)]
+     (cond-> (merge-widget {:type :avatar
+                            :text (when (some? name) (str name))}
+                           (dissoc opts :name :text :src :icon))
+       (some? src) (assoc :src src)
+       (some? icon) (assoc :icon (wire-id icon))))))
+
+(defn- avatar-child
+  [n]
+  (cond
+    (= (:type n) :avatar) n
+    (and (= (:type n) :label) (seq (:text n))) (avatar (:text n))
+    :else nil))
+
+(defn avatar-group
+  "Overlapping avatars. Kit `AvatarGroup`. Omitted `:limit` keeps Kit's
+  3. `:ellipsis true` adds a ⋯ overflow avatar when there are more
+  than the limit.
+
+  (ui/avatar-group {:limit 5 :ellipsis true :size :small}
+    (ui/avatar \"Ada\")
+    (ui/avatar {:name \"Grace\" :src \"https://example.com/grace.png\"}))
+  (ui/avatar-group (map ui/avatar names))"
+  [& args]
+  (let [[style children] (split-style-children args)]
+    (merge-widget {:type :avatar-group
+                   :children (into [] (keep avatar-child) (flatten-children children))}
+                  style)))
 
 (defn accordion
   "Accordion. `value` is the open item id (`nil` when all closed).
@@ -1174,6 +1206,43 @@
       (ui-node? trigger) (assoc :trigger trigger)
       (and (some? trigger) (not (ui-node? trigger)))
       (assoc :trigger (button (str trigger))))))
+
+(defn- rewrite-anchor
+  "Clojure `:anchor` becomes wire `:placement` when placement was omitted."
+  [opts]
+  (cond-> opts
+    (and (contains? opts :anchor) (not (contains? opts :placement)))
+    (assoc :placement (wire-id (:anchor opts)))
+    (contains? opts :anchor) (dissoc :anchor)))
+
+(defn hover-card
+  "Hover-triggered card. Kit `HoverCard`. Not click-controlled like
+  `ui/popover`. Omitted `:open-delay` / `:close-delay` keep Kit's 0.6s
+  / 0.3s. `:placement` (or `:anchor`) is a Kit Anchor (`:top-center`
+  default). `:trigger` is any widget, not only a button.
+  `:on-open-change` receives the new boolean. Children are the card
+  body. `:appearance false` drops Kit's default popover chrome.
+
+  (ui/hover-card {:trigger (ui/link \"https://example.com\" \"@ada\")
+                  :open-delay 0.2}
+    (ui/label \"Ada Lovelace\")
+    (ui/avatar {:name \"Ada\" :src \"https://example.com/ada.png\"}))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        trigger (:trigger opts)
+        opts (-> opts
+                 (dissoc :trigger)
+                 rewrite-anchor
+                 apply-control-size)
+        trigger (cond
+                  (ui-node? trigger) trigger
+                  (string? trigger) (label trigger)
+                  (some? trigger) (label (str trigger))
+                  :else nil)]
+    (cond-> (merge {:type :hover-card
+                    :children (flatten-children children)}
+                   opts)
+      (some? trigger) (assoc :trigger trigger))))
 
 (defn dropdown-menu
   "Button that opens a popup menu. `on-change` receives the original item id.

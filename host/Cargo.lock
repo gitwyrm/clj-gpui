@@ -968,6 +968,7 @@ dependencies = [
  "chrono",
  "gpui-fps",
  "gpui-kit",
+ "gpui-pre-reqwest-client",
  "image 0.25.10",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

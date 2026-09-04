@@ -105,10 +105,14 @@ In `main.rs` / modules:
 use gpui_kit::{self as gpui, application};
 use gpui_kit::component as gpui_component;
 use gpui_kit::assets as gpui_kit_assets;
+use std::sync::Arc;
 
 fn main() {
     application()
         .with_assets(gpui_kit_assets::Assets)
+        .with_http_client(Arc::new(
+            reqwest_client::ReqwestClient::user_agent("clj-gpui/host").unwrap(),
+        ))
         .run(|cx| {
             gpui_kit::init(cx);
             // …
@@ -122,6 +126,7 @@ Why this, not listing `gpui-pre` + `gpui-component` + `gpui-kit-assets` ourselve
 - `gpui_kit::application()` is `gpui_platform::application()`. **`gpui::Application::new()` is gone** on 0.3.x (only `with_platform` / `new_inaccessible` remain).
 - `gpui_kit::init(cx)` is `gpui_component::init`, which also initializes `gpui-base`. Calling both is wrong.
 - Default `assets` feature is the icon pack. Without it, `IconName` / spinner / alert / select chevron break the same way they would if we dropped `gpui-component-assets` today.
+- GPUI defaults to `NullHttpClient`. Remote `Avatar` `:src` (and other `img` URIs) never load until the host installs `gpui-pre-reqwest-client` via `Application::with_http_client` / `cx.set_http_client`. Kit's Storybook and `text_max_lines` example do the same. Add a direct alias: `reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.3" }`.
 
 Set the host crate to **edition 2024** in the same PR. That matches Kit and is the right default for a new project. Watch for edition 2024 keyword changes (`gen`, `unsafe` in `extern` blocks) in our own Rust; Kit already compiles on 2024 so the dependency side is fine.
 
@@ -339,7 +344,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | `Combobox` | `ui/combobox` | Replaces some of the deferred "searchable select sections" C item. |
 | `Rating`, `Stepper`, `Pagination` | `ui/rating`, `ui/stepper`, `ui/pagination` | Straightforward controlled widgets. |
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
-| `HoverCard`, `FocusTrap` | maybe | |
+| `HoverCard`, `AvatarGroup` | `ui/hover-card`, `ui/avatar-group` | Hover-driven card; overlapping avatars. `FocusTrap` still unwrapped. |
 | `Command`, `NativeMenu`, `StatusBar` | maybe | OS menu / palette — think through whether Clojure owns the menu tree. |
 | `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | later | Chat/assistant layout. Large API. |
 | `NavStack` | `ui/nav-stack` | Push/back/forward + motion. Needs host history state. |

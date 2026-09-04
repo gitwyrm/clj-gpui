@@ -8,13 +8,13 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
-    App, Axis, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
+    App, Axis, Div, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
     Styled, Window, div, px,
 };
 use gpui_component::{
-    Colorize as _, Disableable as _, Icon, IconName, Sizable as _,
+    Colorize as _, Disableable as _, Icon, IconName, Sizable as _, Size,
     alert::Alert,
-    avatar::Avatar,
+    avatar::{Avatar, AvatarGroup},
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _},
@@ -22,6 +22,7 @@ use gpui_component::{
     dialog::{AlertDialog, DialogButtonProps},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
+    hover_card::HoverCard,
     kbd::Kbd,
     link::Link,
     menu::{PopupMenu, PopupMenuItem},
@@ -59,6 +60,186 @@ pub fn node_key(node: &Node, path: &str) -> String {
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| path.to_string())
+}
+
+/// Kit `Avatar` from a node. Image `src` is an http URL or file path.
+pub fn kit_avatar(node: &Node) -> Avatar {
+    let mut avatar = Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if let Some(name) = node
+        .text
+        .clone()
+        .or(node.title.clone())
+        .filter(|s| !s.is_empty())
+    {
+        avatar = avatar.name(name);
+    }
+    if let Some(src) = node.src.as_deref().filter(|s| !s.is_empty()) {
+        avatar = avatar.src(src.to_string());
+    }
+    if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        avatar = avatar.placeholder(icon);
+    }
+    avatar
+}
+
+/// Kit `AvatarGroup` from a node. A host wrap owns the overlap width;
+/// the group fills that box (`w_full`). Kit's negative child margins make
+/// flex min-content about one face, so an unsized row stacks every avatar
+/// on the same spot.
+pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
+    let mut group =
+        AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if let Some(limit) = node
+        .limit
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+    {
+        group = group.limit(limit);
+    }
+    if node.ellipsis {
+        group = group.ellipsis();
+    }
+    group
+        .children(
+            node.children
+                .iter()
+                .filter(|child| child.kind == "avatar")
+                .map(kit_avatar),
+        )
+        .flex_shrink_0()
+        .w_full()
+}
+
+/// Kit AvatarGroup *visual* width after 30% overlap: `face * (1 + 0.7 *
+/// (visible - 1))`, plus the ellipsis avatar and `ml_1` (0.25rem ≈ 4px).
+pub(crate) fn avatar_group_content_width(node: &Node) -> f32 {
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    let (visible, ellipsis) = avatar_group_visible(node);
+    if visible == 0 {
+        return if ellipsis { face + 4.0 } else { 0.0 };
+    }
+    let mut width = face * visible as f32 - face * 0.3 * (visible - 1) as f32;
+    if ellipsis {
+        width += face + 4.0;
+    }
+    width
+}
+
+/// Width the inner flex row needs so `flex_shrink_0` avatars fit before
+/// Kit's negative margins overlap them. Taffy does not shrink this by
+/// those margins, so a wrap sized to the visual overlap overflows left.
+pub(crate) fn avatar_group_flex_width(node: &Node) -> f32 {
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    let (visible, ellipsis) = avatar_group_visible(node);
+    let n = visible + usize::from(ellipsis);
+    if n == 0 {
+        return 0.0;
+    }
+    face * n as f32 + if ellipsis { 4.0 } else { 0.0 }
+}
+
+fn avatar_group_visible(node: &Node) -> (usize, bool) {
+    let count = node
+        .children
+        .iter()
+        .filter(|child| child.kind == "avatar")
+        .count();
+    let limit = node
+        .limit
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+        .unwrap_or(3);
+    let visible = count.min(limit);
+    let ellipsis = node.ellipsis && count > limit;
+    (visible, ellipsis)
+}
+
+pub(crate) fn avatar_face_px(size: Size) -> f32 {
+    match size {
+        Size::Large => 80.0,
+        Size::Medium => 48.0,
+        Size::Small => 24.0,
+        Size::XSmall => 16.0,
+        Size::Size(px) => px.as_f32(),
+    }
+}
+
+/// Host box for AvatarGroup: inner row is wide enough for `flex_shrink_0`
+/// faces, outer clips to Kit's overlapped width and right-aligns so the
+/// leftover (taffy ignores negative margins) is clipped on the left.
+///
+/// This wrap owns only that workaround geometry (and Clojure box keys the
+/// caller applies on top). Kit `AvatarGroup: Styled` keys such as `:gap`
+/// belong on `group`, not here — a one-child outer row would ignore them.
+pub(crate) fn avatar_group_element(group: AvatarGroup, node: &Node) -> Div {
+    let overlapped = avatar_group_content_width(node);
+    let flex_w = avatar_group_flex_width(node);
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    h_flex()
+        .flex_none()
+        .w(px(overlapped))
+        .h(px(face))
+        .overflow_hidden()
+        .justify_end()
+        .child(
+            h_flex()
+                .w(px(flex_w))
+                .h(px(face))
+                .flex_shrink_0()
+                .child(group),
+        )
+}
+
+/// Clojure keys that refine Kit `AvatarGroup` vs the clip wrap.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AvatarGroupStyleSplit {
+    pub kit_gap: Option<f32>,
+    pub kit_padding: Option<f32>,
+    pub wrap_width: Option<f32>,
+    pub wrap_height: Option<f32>,
+    pub wrap_size: Option<f32>,
+    pub wrap_flex_fill: bool,
+    pub wrap_workaround_w: f32,
+    pub wrap_workaround_h: f32,
+}
+
+#[cfg(test)]
+pub(crate) fn avatar_group_style_split(node: &Node) -> AvatarGroupStyleSplit {
+    AvatarGroupStyleSplit {
+        kit_gap: node.gap,
+        kit_padding: node.padding,
+        wrap_width: node.width,
+        wrap_height: node.height,
+        wrap_size: node.size,
+        wrap_flex_fill: node.flex.unwrap_or(0.0) >= 1.0,
+        wrap_workaround_w: avatar_group_content_width(node),
+        wrap_workaround_h: avatar_face_px(mapping::parse_scale(node.control_size.as_deref())),
+    }
+}
+
+fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
+    let mut card = HoverCard::new(SharedString::from(node_key(node, path)));
+    if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+        card = card.anchor(anchor);
+    }
+    if let Some(secs) = node.open_delay.filter(|n| n.is_finite() && *n >= 0.0) {
+        card = card.open_delay(Duration::from_secs_f32(secs));
+    }
+    if let Some(secs) = node.close_delay.filter(|n| n.is_finite() && *n >= 0.0) {
+        card = card.close_delay(Duration::from_secs_f32(secs));
+    }
+    if let Some(appearance) = node.appearance {
+        card = card.appearance(appearance);
+    }
+    if let Some(trigger) = node.trigger.as_deref() {
+        card = card.trigger(paint_chart_element(trigger, &format!("{path}-trigger")));
+    }
+    card.children(
+        node.children.iter().enumerate().map(|(child_ix, child)| {
+            paint_chart_element(child, &static_child_path(path, child_ix))
+        }),
+    )
 }
 
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
@@ -382,13 +563,25 @@ fn chart_hex(text: Option<&str>) -> Option<Hsla> {
     text.and_then(|s| Hsla::parse_hex(s.trim()).ok())
 }
 
-fn chart_layout<E: Styled>(mut el: E, node: &Node) -> E {
+/// Kit `Styled` keys (gap, padding, type). Used on the real widget.
+fn chart_kit_style<E: Styled>(mut el: E, node: &Node) -> E {
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
     }
     if let Some(padding) = node.padding {
         el = el.p(px(padding));
     }
+    if let Some(font_size) = node.font_size {
+        el = el.text_size(px(font_size));
+    }
+    if let Some(color) = chart_hex(node.color.as_deref()) {
+        el = el.text_color(color);
+    }
+    el
+}
+
+/// Clojure box geometry (`:width` / `:height` / `:size`).
+fn chart_outer_style<E: Styled>(mut el: E, node: &Node) -> E {
     if let Some(width) = node.width {
         el = el.w(px(width));
     }
@@ -398,13 +591,11 @@ fn chart_layout<E: Styled>(mut el: E, node: &Node) -> E {
     if let Some(size) = node.size {
         el = el.size(px(size));
     }
-    if let Some(font_size) = node.font_size {
-        el = el.text_size(px(font_size));
-    }
-    if let Some(color) = chart_hex(node.color.as_deref()) {
-        el = el.text_color(color);
-    }
     el
+}
+
+fn chart_layout<E: Styled>(el: E, node: &Node) -> E {
+    chart_outer_style(chart_kit_style(el, node), node)
 }
 
 fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElement {
@@ -551,14 +742,12 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             }
             chart_layout(crumb, node).into_any_element()
         }
-        "avatar" => {
-            let mut avatar =
-                Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-            if let Some(name) = node.text.clone().or(node.title.clone()) {
-                avatar = avatar.name(name);
-            }
-            chart_layout(avatar, node).into_any_element()
+        "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
+        "avatar-group" => {
+            let group = chart_kit_style(kit_avatar_group(node), node);
+            chart_outer_style(avatar_group_element(group, node), node).into_any_element()
         }
+        "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
         "progress" => {
             let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
             chart_layout(
@@ -1351,10 +1540,33 @@ mod tests {
             "children": [{"type": "label", "text": "N"}]
         }));
         let _ = paint_chart_label(&badge, "radar-label/0");
-        let avatar = node(json!({"type": "avatar", "text": "AB"}));
+        let avatar = node(json!({
+            "type": "avatar",
+            "text": "AB",
+            "src": "https://example.com/ab.png"
+        }));
         let _ = paint_chart_label(&avatar, "radar-label/1");
         let tag = node(json!({"type": "tag", "text": "Hot", "variant": "primary"}));
         let _ = paint_chart_label(&tag, "radar-label/2");
+        let group = node(json!({
+            "type": "avatar-group",
+            "limit": 2,
+            "ellipsis": true,
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        let _ = paint_chart_label(&group, "radar-label/3");
+        let hover = node(json!({
+            "type": "hover-card",
+            "id": "hint",
+            "open-delay": 0.2,
+            "trigger": {"type": "label", "text": "@ada"},
+            "children": [{"type": "label", "text": "Ada Lovelace"}]
+        }));
+        let _ = paint_chart_label(&hover, "radar-label/4");
     }
 
     #[test]
@@ -1384,5 +1596,85 @@ mod tests {
             })),
             "radar-label/3",
         );
+    }
+
+    #[test]
+    fn avatar_group_content_width_matches_kit_overlap() {
+        let three_medium = node(json!({
+            "type": "avatar-group",
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        assert_eq!(
+            avatar_group_content_width(&three_medium),
+            48.0 + 48.0 * 0.7 * 2.0
+        );
+
+        let small_overflow = node(json!({
+            "type": "avatar-group",
+            "limit": 4,
+            "ellipsis": true,
+            "control-size": "small",
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"},
+                {"type": "avatar", "text": "Barbara"},
+                {"type": "avatar", "text": "Rich"}
+            ]
+        }));
+        // 4 small faces with 30% overlap, plus ⋯ and ml_1 (4px).
+        assert_eq!(
+            avatar_group_content_width(&small_overflow),
+            24.0 * 4.0 - 24.0 * 0.3 * 3.0 + 24.0 + 4.0
+        );
+        assert_eq!(avatar_group_flex_width(&three_medium), 48.0 * 3.0);
+        assert_eq!(avatar_group_flex_width(&small_overflow), 24.0 * 5.0 + 4.0);
+
+        let empty = node(json!({"type": "avatar-group"}));
+        assert_eq!(avatar_group_content_width(&empty), 0.0);
+        assert_eq!(avatar_group_flex_width(&empty), 0.0);
+    }
+
+    #[test]
+    fn avatar_group_clj_styles_split_kit_group_from_clip_wrap() {
+        let plain = node(json!({
+            "type": "avatar-group",
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        let styled = node(json!({
+            "type": "avatar-group",
+            "gap": 8,
+            "padding": 4,
+            "width": 200,
+            "height": 64,
+            "flex": 1,
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        let split = avatar_group_style_split(&styled);
+        assert_eq!(split.kit_gap, Some(8.0));
+        assert_eq!(split.kit_padding, Some(4.0));
+        assert_eq!(split.wrap_width, Some(200.0));
+        assert_eq!(split.wrap_height, Some(64.0));
+        assert!(split.wrap_flex_fill);
+        // Workaround geometry is Kit overlap, not `:gap` on a one-child wrap.
+        assert_eq!(split.wrap_workaround_w, avatar_group_content_width(&plain));
+        assert_eq!(split.wrap_workaround_h, 48.0);
+        assert_eq!(
+            avatar_group_content_width(&styled),
+            avatar_group_content_width(&plain)
+        );
+        let _ = avatar_group_element(kit_avatar_group(&styled), &styled);
     }
 }

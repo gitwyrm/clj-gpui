@@ -20,6 +20,7 @@
            :overlay-lock? false
            :tick 0
            :popover? false
+           :hover-card? false
            :menu nil
            :list-sel :alpha
            :list-confirm nil
@@ -90,6 +91,18 @@
     (ui/progress-circle nil {:loading true :size :large
                              :accessibility-label "Syncing"})
     (ui/shimmer "Indexing project…" {:id "shimmer-index"}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/avatar {:name "Ada Lovelace" :icon :user})
+    (ui/avatar-group {:limit 4 :ellipsis true}
+                     (ui/avatar "Ada Lovelace")
+                     (ui/avatar "Grace Hopper")
+                     (ui/avatar "Alan Kay")
+                     (ui/avatar "Barbara Liskov")
+                     (ui/avatar "Rich Hickey"))
+    (ui/hover-card {:trigger (ui/label "Hover for volume")
+                    :open-delay 0.15}
+                   (ui/label (str "Volume " volume))))
    (ui/label (str "Page " page))
    (ui/pagination page {:id "pages" :total 12 :on-change (set-key :page)})
    (ui/pagination page {:id "pages-compact" :total 12 :compact true
@@ -130,6 +143,19 @@
     (ui/clipboard "clj-gpui" {:on-copied (fn [_]
                                            (swap! !state assoc :alert? true))})
     (ui/spinner {:size :small}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/avatar {:name "Jason Lee"
+                :src "https://avatars.githubusercontent.com/u/5518?s=64"
+                :size :large})
+    (ui/avatar-group {:limit 3 :ellipsis true}
+                     (ui/avatar {:name "Jason Lee"
+                                 :src "https://avatars.githubusercontent.com/u/5518?s=64"})
+                     (ui/avatar {:name "nathansobo"
+                                 :src "https://avatars.githubusercontent.com/u/1789?s=64"})
+                     (ui/avatar "Grace Hopper")
+                     (ui/avatar {:name "Alan" :icon :building-2})
+                     (ui/avatar "Barbara Liskov")))
    (when alert?
      (ui/alert "Copied to the clipboard."
                {:variant :success
@@ -152,11 +178,12 @@
    (ui/separator)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit]}]
+(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
                   " · tick " tick
+                  " · hover " (pr-str hover-card?)
                   " · close-hit " (pr-str close-hit)
                   " · dialog-open " (pr-str dialog-open)
                   " · shift " (pr-str batch-shift?)
@@ -175,7 +202,26 @@
                 {:trigger (ui/button "Popover")
                  :on-open-change (set-key :popover?)}
                 (ui/label "Anchored content.")
-                (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost}))
+                (ui/button "Close" #(swap! !state assoc :popover? false) {:variant :ghost})))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/hover-card {:id "profile"
+                    :trigger (ui/button "@huacnlee")
+                    :open-delay 0.15
+                    :placement :bottom-center
+                    :on-open-change (set-key :hover-card?)}
+                   (ui/hstack
+                    {:gap 8 :align :center :padding 8}
+                    (ui/avatar {:name "Jason Lee"
+                                :src "https://avatars.githubusercontent.com/u/5518?s=64"
+                                :size :large})
+                    (ui/vstack
+                     {:gap 2}
+                     (ui/label "Jason Lee" {:font-weight :semibold})
+                     (ui/label "GPUI Kit author"))))
+    (ui/label (if hover-card? "card open" "hover the button")))
+   (ui/hstack
+    {:gap 8 :align :center}
     (ui/dropdown-menu
      [{:id :copy :label "Copy"
        :on-click #(swap! !state assoc :batch-shift? true)}
@@ -424,6 +470,19 @@
     (ui/progress-circle 68 {:size :large :color "#7aa2f7"})
     (ui/shimmer "Generating a response…" {:duration 1 :reverse true
                                           :highlight-color "#c0caf5"}))
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/avatar-group {:limit 3 :ellipsis true}
+                     (ui/avatar {:name "Jason Lee"
+                                 :src "https://avatars.githubusercontent.com/u/5518?s=64"})
+                     (ui/avatar {:name "nathansobo"
+                                 :src "https://avatars.githubusercontent.com/u/1789?s=64"})
+                     (ui/avatar "Ada Lovelace")
+                     (ui/avatar "Grace Hopper"))
+    (ui/hover-card {:trigger (ui/label "HoverCard")
+                    :open-delay 0.15
+                    :placement :bottom-center}
+                   (ui/label "Kit HoverCard with a label trigger.")))
    (ui/label "Disk-style horizontal bars (cljdu)" {:font-size 13})
    (ui/horizontal-bar-chart
     [{:id :src :label "src" :value 412}
