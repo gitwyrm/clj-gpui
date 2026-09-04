@@ -897,6 +897,11 @@ fn paint_static_tree(
             node,
         )
         .into_any_element(),
+        "nav-page" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
+            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+            }))
+            .into_any_element(),
         _ if !node.children.is_empty() => {
             chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {

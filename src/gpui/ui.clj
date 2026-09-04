@@ -2629,3 +2629,72 @@
     (assoc (chat-opts opts)
            :type :message-scroller
            :children (flatten-children children))))
+
+(defn nav-page
+  "A page template in a `ui/nav-stack` catalog. `:id` is required
+  (keyword or string). Children paint through the overlay static
+  subset plus the chat family — the same set as dock panels and
+  message-scroller rows — because a live stack page cannot re-enter
+  `RootView`. Not list / data-table / editor.
+
+  (ui/nav-page {:id :home} (ui/label \"Home\"))"
+  [opts-or-child & children]
+  (let [[opts kids]
+        (if (and (map? opts-or-child) (not (ui-node? opts-or-child)))
+          [opts-or-child children]
+          [{} (cons opts-or-child children)])
+        opts (apply-control-size opts)
+        id (some-> (:id opts) wire-id)]
+    (cond-> (assoc (dissoc opts :id)
+                   :type :nav-page
+                   :children (flatten-children kids))
+      (some? id) (assoc :id id))))
+
+(defn nav-stack
+  "Kit `NavStack`. `:stack` (or `:value`) is page ids root-first.
+  Children are `ui/nav-page` templates, not the live trail. Omitted
+  stack is the first page id. An empty `:stack []` clears the stack.
+  An explicit trail that names an unknown page id is rejected (the
+  native stack is left unchanged); only `[]` means clear.
+  Clojure owns the trail; the host diffs and calls Kit `push` /
+  `pop` / `replace` / `clear`. Re-adding a popped id is a new `push`
+  and discards Kit's forward branch (`forward` / `forward_views` are
+  not wrapped). Repeated ids are separate history entries (a new
+  view entity per stack slot). `:transition` is seconds (Kit
+  `Transition` only); omitted is an immediate swap. `:motion
+  :immediate` forces Immediate even when a transition is set.
+  `:transition-style :slide` opts into the showcase slide `item`
+  renderer; omitted keeps Kit's default unchanged `NavPage`
+  renderer. `:overflow :hidden` or `:overflow-hidden true` clips;
+  omitted does not. Custom `item` rendering beyond `:slide`,
+  dedicated `pop_to_root`, and Kit `forward` are remaining.
+  Pages paint the overlay static subset (not list / data-table /
+  editor).
+
+  (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
+                 :transition-style :slide :overflow :hidden}
+    (ui/nav-page {:id :home} (ui/label \"Home\"))
+    (ui/nav-page {:id :detail} (ui/label \"Detail\")))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        pages (flatten-children children)
+        page-ids (into [] (keep :id) pages)
+        explicit? (or (contains? opts :stack) (contains? opts :value))
+        raw (cond
+              (contains? opts :stack) (:stack opts)
+              (contains? opts :value) (:value opts)
+              :else (first page-ids))
+        opts (-> opts
+                 (dissoc :stack)
+                 apply-control-size)
+        opts (cond-> opts
+               (contains? opts :transition)
+               (-> (dissoc :transition)
+                   (assoc :duration (:transition opts)))
+               (keyword? (:motion opts)) (update :motion name)
+               (keyword? (:transition-style opts)) (update :transition-style name)
+               (keyword? (:overflow opts)) (update :overflow name))]
+    (cond-> (assoc opts
+                   :type :nav-stack
+                   :children pages)
+      (or explicit? (some? raw)) (assoc :value (wire-selected raw)))))

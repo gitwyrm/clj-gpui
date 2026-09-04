@@ -50,7 +50,14 @@ impl RegistryPeer {
              "on-click": self.id("rerender")},
             {"type": "sheet", "id": "inspect", "open": true,
              "children": [{"type": "button", "text": "Ping", "on-click": self.id("sheet-body")}],
-             "footer": {"type": "button", "text": "Done", "on-click": self.id("sheet-footer")}}
+             "footer": {"type": "button", "text": "Done", "on-click": self.id("sheet-footer")}},
+            {"type": "nav-stack", "id": "gallery-nav", "value": ["home"],
+             "children": [
+                {"type": "nav-page", "id": "home", "children": [
+                    {"type": "button", "id": "nav-go", "text": "Go",
+                     "on-click": self.id("nav-go")}
+                ]}
+             ]}
         ]})
     }
 
@@ -528,4 +535,59 @@ fn queued_static_overlay_button_skips_removed_disabled_or_replaced() {
         });
         assert!(queue.next(&serde_json::from_value(tree).unwrap()).is_none());
     }
+}
+
+fn nav_go_click_id(tree: &Node) -> String {
+    tree.children[6].children[0].children[0]
+        .on_click
+        .clone()
+        .expect("nav-go on-click")
+}
+
+#[test]
+fn nav_page_button_uses_current_generation_after_unrelated_rerender() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let old_id = nav_go_click_id(&tree_a);
+    // Same current page; an unrelated Clojure rerender regenerates callback ids.
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    let (tree_b, seq) = fixture.tree();
+    let current_id = nav_go_click_id(&tree_b);
+    assert_ne!(current_id, old_id);
+    let mut queue = CallbackQueue::default();
+    queue.tree_installed(seq);
+    queue.push(QueuedAction::ButtonClick {
+        key: "nav-go".into(),
+    });
+    let calls = fixture.send(&mut queue, &tree_b, 1);
+    assert_eq!(calls[0].id, current_id);
+    assert_ne!(calls[0].id, old_id);
+    let _ = fixture.tree();
+    let peer = fixture.peer.lock().unwrap();
+    assert!(peer.unknown.is_empty());
+    assert!(
+        peer.fired.iter().any(|(role, _, _)| role == "nav-go"),
+        "current nav-page callback must fire, not a stale id"
+    );
+}
+
+#[test]
+fn nav_page_stale_callback_fails_closed_after_registry_replacement() {
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let old_id = nav_go_click_id(&tree_a);
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    let _ = fixture.tree();
+    send_callbacks_seq(
+        &fixture.host.cmd_tx,
+        vec![CallbackCall::fire(old_id.clone())],
+        Some(1),
+    );
+    assert_eq!(fixture.tree().1, Some(1));
+    let error = fixture.host.event_rx.recv_blocking().unwrap();
+    assert!(matches!(error, HostEvent::Error(message)
+        if message == format!("unknown callback {old_id}")));
+    let peer = fixture.peer.lock().unwrap();
+    assert_eq!(peer.unknown, vec![old_id]);
+    assert!(!peer.fired.iter().any(|(role, _, _)| role == "nav-go"));
 }
