@@ -447,7 +447,9 @@
                               (ui/label "Settings" {:font-weight :semibold})
                               (ui/button "Back to home" #(swap! !state assoc :trail [:home]))))))
 
-(defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift tree-sel list-rev batch-shift? vlist-sel]}]
+(defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift
+                           tree-sel list-rev batch-shift? vlist-sel
+                           table-cell? table-export table-export-gen]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
         list-items [{:id :alpha :label (str "Alpha" suffix)}
                     {:id :beta :label (str "Beta" suffix)}
@@ -476,6 +478,9 @@
                     " confirm " (pr-str list-confirm)
                     " · table " (pr-str table-sel)
                     " confirm " (pr-str table-confirm)
+                    (when table-cell? " · cells")
+                    (when table-export
+                      (str " · dump " (pr-str (:headers table-export))))
                     " · tree " (pr-str tree-sel)
                     " · shift " (pr-str batch-shift?)
                     " · tbl-shift " table-shift))
@@ -509,21 +514,32 @@
       {:gap 8 :align :center}
       (ui/button "Table A→B" #(swap! !state assoc :table-sel :grace))
       (ui/button "Table nil" #(swap! !state assoc :table-sel nil))
-      (ui/button "Drop Ada" #(swap! !state assoc :table-sel :gone)))
+      (ui/button "Drop Ada" #(swap! !state assoc :table-sel :gone))
+      (ui/button "Cell Ada/Lang" #(swap! !state assoc :table-sel {:row :ada :col :lang}
+                                         :table-cell? true))
+      (ui/switch (boolean table-cell?) (set-key :table-cell?) "Cells")
+      (ui/button "Dump"
+                 #(swap! !state update :table-export-gen (fnil inc 0))))
      (ui/context-menu
       [{:id :inspect :label "Inspect"}
        {:id :delete :label "Delete"}]
       {:on-change (set-key :menu)}
-      (ui/data-table {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
-                                {:id :lang :label "Lang" :width 100}]
-                      :rows table-rows
-                      :selected (when (not= table-sel :gone) table-sel)
-                      :height 160
-                      :on-change (fn [id]
-                                   (swap! !state #(-> %
-                                                      (assoc :table-sel id)
-                                                      (update :table-shift (fnil inc 0)))))
-                      :on-confirm (set-key :table-confirm)}))
+      (ui/data-table (cond-> {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
+                                        {:id :lang :label "Lang" :width 100 :align :end}]
+                              :rows table-rows
+                              :header-groups [[{:label "Identity" :span 2}]]
+                              :row-height 40
+                              :selected (when (not= table-sel :gone) table-sel)
+                              :height 160
+                              :on-change (fn [id]
+                                           (swap! !state #(-> %
+                                                              (assoc :table-sel id)
+                                                              (update :table-shift (fnil inc 0)))))
+                              :on-confirm (set-key :table-confirm)
+                              :on-export (fn [dump]
+                                           (swap! !state assoc :table-export dump))}
+                       table-cell? (assoc :cell-selectable true :row-header false)
+                       table-export-gen (assoc :export-generation table-export-gen))))
      (ui/hstack
       {:gap 8 :align :center}
       (ui/button "Tree lib" #(swap! !state assoc :tree-sel :lib))
