@@ -569,7 +569,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
         }
         "progress-circle" => {
             let value = node.number_value().filter(|n| n.is_finite()).unwrap_or(0.0);
-            let mut circle = ProgressCircle::new(SharedString::from(path.to_string()))
+            let mut circle = ProgressCircle::new(SharedString::from(node_key(node, path)))
                 .value(value)
                 .loading(node.loading)
                 .with_size(mapping::parse_scale(node.control_size.as_deref()));
@@ -602,7 +602,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
                 .filter(|n| n.is_finite())
                 .map(|n| n.round().max(0.0) as usize)
                 .unwrap_or(1);
-            let mut pagination = Pagination::new(SharedString::from(path.to_string()))
+            let mut pagination = Pagination::new(SharedString::from(node_key(node, path)))
                 .current_page(page)
                 .total_pages(total)
                 .with_size(mapping::parse_scale(node.control_size.as_deref()))
@@ -1355,5 +1355,34 @@ mod tests {
         let _ = paint_chart_label(&avatar, "radar-label/1");
         let tag = node(json!({"type": "tag", "text": "Hot", "variant": "primary"}));
         let _ = paint_chart_label(&tag, "radar-label/2");
+    }
+
+    #[test]
+    fn chart_kit_id_prefers_non_empty_node_id() {
+        let named = node(json!({
+            "type": "progress-circle",
+            "id": "upload",
+            "value": 40
+        }));
+        assert_eq!(node_key(&named, "radar-label/0"), "upload");
+        let empty = node(json!({
+            "type": "pagination",
+            "id": "",
+            "value": 2,
+            "total": 4
+        }));
+        assert_eq!(node_key(&empty, "radar-label/1"), "radar-label/1");
+        let omitted = node(json!({"type": "progress-circle", "value": 10}));
+        assert_eq!(node_key(&omitted, "radar-label/2"), "radar-label/2");
+        let _ = paint_chart_label(&named, "radar-label/0");
+        let _ = paint_chart_label(&empty, "radar-label/1");
+        let _ = paint_chart_label(
+            &node(json!({
+                "type": "shimmer",
+                "id": "think",
+                "text": "Thinking…"
+            })),
+            "radar-label/3",
+        );
     }
 }

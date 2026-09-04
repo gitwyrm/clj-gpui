@@ -1267,7 +1267,7 @@ impl RootView {
             "stepper" => self.render_stepper(node, &key, cx),
             "pagination" => self.render_pagination(node, &key, cx),
             "progress" => self.render_progress(node, cx),
-            "progress-circle" => self.render_progress_circle(node, path, window, cx),
+            "progress-circle" => self.render_progress_circle(node, path, &key, window, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
             "tag" => self.render_tag(node, cx),
@@ -1519,10 +1519,14 @@ impl RootView {
         &mut self,
         node: &Node,
         path: &str,
+        key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut circle = ProgressCircle::new(eid(path))
+        // Kit `transition((id, "value"), …)` keys off this id. Use
+        // `widget_key` (`:id` or path) so reorder/insert does not steal
+        // another circle's animation. `path` still names children.
+        let mut circle = ProgressCircle::new(eid(key))
             .value(extra::progress_circle_value(node))
             .loading(node.loading)
             .with_size(mapping::parse_scale(node.control_size.as_deref()));
@@ -3954,6 +3958,37 @@ fn widget_key(node: &Node, path: &str) -> String {
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| path.to_string())
+}
+
+#[cfg(test)]
+mod widget_key_tests {
+    use super::*;
+
+    #[test]
+    fn prefers_non_empty_node_id() {
+        let named = Node {
+            kind: "progress-circle".into(),
+            id: Some("upload".into()),
+            ..Node::default()
+        };
+        assert_eq!(widget_key(&named, "root-0-1"), "upload");
+        let empty = Node {
+            kind: "progress-circle".into(),
+            id: Some(String::new()),
+            ..Node::default()
+        };
+        assert_eq!(widget_key(&empty, "root-0-1"), "root-0-1");
+        assert_eq!(
+            widget_key(
+                &Node {
+                    kind: "progress-circle".into(),
+                    ..Node::default()
+                },
+                "root-0-1"
+            ),
+            "root-0-1"
+        );
+    }
 }
 
 fn parse_color(value: &str) -> Option<u32> {
