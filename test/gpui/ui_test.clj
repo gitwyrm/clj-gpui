@@ -148,7 +148,17 @@
   (is (nil? (ui/resolve-option-id (ui/option-id-map [:a]) nil)))
   (testing "first option wins when wire ids collide"
     (is (= :dark (ui/resolve-option-id (ui/option-id-map [:dark "dark"]) "dark")))
-    (is (= "dark" (ui/resolve-option-id (ui/option-id-map ["dark" :dark]) "dark")))))
+    (is (= "dark" (ui/resolve-option-id (ui/option-id-map ["dark" :dark]) "dark"))))
+  (testing "format-option-id accepts flat ids and grouped path vectors"
+    (is (nil? (ui/format-option-id nil)))
+    (is (= "copy" (ui/format-option-id :copy)))
+    (is (= "copy" (ui/format-option-id "copy")))
+    (is (= "edit/find" (ui/format-option-id [:edit :find])))
+    (is (= "edit/find" (ui/format-option-id ["edit" "find"])))
+    (is (= "Ready" (or (ui/format-option-id nil) "Ready")))
+    (is (= "edit/find" (or (ui/format-option-id [:edit :find]) "Ready")))
+    (is (= "edit/find" (:text (ui/label (or (ui/format-option-id [:edit :find]) "Ready"))))
+        "status-bar style labels must survive a grouped Command highlight")))
 
 (deftest switch-slider-select-nodes
   (testing "switch"

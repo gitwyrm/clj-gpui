@@ -200,6 +200,23 @@
                  (wire-id wire-value))
                wire-value)))
 
+(defn format-option-id
+  "Display string for a callback id, including nested menu/command paths.
+
+  Flat keywords use `name`. A path vector `[group leaf]` joins with `/`.
+  `nil` stays `nil` so callers can supply a fallback with `or`. Do not
+  call `clojure.core/name` on the payload: grouped Command / menu
+  callbacks are vectors, and `name` throws ClassCastException."
+  [id]
+  (cond
+    (nil? id) nil
+    (and (sequential? id) (not (string? id)))
+    (let [parts (keep format-option-id id)]
+      (when (seq parts)
+        (apply str (interpose "/" parts))))
+    (instance? clojure.lang.Named id) (name id)
+    :else (str id)))
+
 (defn- wrap-option-callback
   [on-change xs]
   (if (fn? on-change)
@@ -1483,6 +1500,7 @@
   is one batch, same as `ui/dropdown-menu`. Parent `:on-change` receives
   the original leaf id, or a path vector `[submenu-id leaf-id]` when
   the leaf is nested, so duplicate submenu leaves stay distinct.
+  Display either shape with `format-option-id`.
   Nested `:items` are submenus. `-` / `:-` is a separator.
   `:disabled true` on a submenu wrapper is forwarded. Kit's
   `NativeMenu::submenu` builder always creates an enabled submenu; the
@@ -1524,9 +1542,10 @@
   for a grouped leaf so duplicate ids round-trip through controlled
   `:selected`. Kit `on_confirm` is a separate route: `:on-confirm`
   fires after that Action, same payload, in one batch with
-  `:on-change`. `:on-select` is highlight only (arrows / hover),
+  `:on-change`.   `:on-select` is highlight only (arrows / hover),
   not confirmation; the host installs it only when this callback is
-  present.
+  present. Display the payload with `format-option-id`; `name` throws
+  on a path vector.
 
   Nested `:items` are Kit `CommandGroup` sections. Group titles are
   not selectable. Group identities are in the parent-callback id map

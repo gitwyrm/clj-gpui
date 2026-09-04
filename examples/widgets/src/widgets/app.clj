@@ -176,7 +176,7 @@
                :on-change (set-key :dialect)})
    (ui/hstack
     {:gap 8 :align :center}
-    (ui/tag (if lang (name lang) "none") {:variant :info})
+    (ui/tag (or (ui/format-option-id lang) "none") {:variant :info})
     (ui/kbd "ctrl-s")
     (ui/button "Save" #(swap! !state assoc :alert? true)
                {:primary true :tooltip "Write the current settings"})
@@ -348,7 +348,7 @@
      :on-query (set-key :command-query)})
    (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
                    :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
-                  (ui/label (or (some-> command-pick name) "Ready")))
+                  (ui/label (or (ui/format-option-id command-pick) "Ready")))
    (ui/dialog dialog?
               {:title (str "Confirm · tick " tick)
                :variant :confirm
