@@ -166,7 +166,30 @@
       (is (= "clj" (:value n)))
       (is (= [{:id "clj" :label "Clojure"} {:id "Rust" :label "Rust"}]
              (:options n)))
-      (is (= "Lang" (:placeholder n)))))
+      (is (= "Lang" (:placeholder n))))
+    (let [n (ui/select :rs {:options [{:label "Lisp"
+                                       :items [{:id :clj :label "Clojure"}
+                                               {:id :cljs :label "ClojureScript"
+                                                :display "ClojureScript (cljs)"}]}
+                                      {:label "Systems"
+                                       :items [{:id :rs :label "Rust"}
+                                               {:id :go :label "Go" :disabled true}]}]
+                            :searchable true
+                            :cleanable true
+                            :title-prefix "Lang: "
+                            :menu-width 280
+                            :empty "No languages"
+                            :focus-ring false})]
+      (is (true? (:searchable n)))
+      (is (true? (:cleanable n)))
+      (is (= "Lang: " (:title-prefix n)))
+      (is (= 280 (:menu-width n)))
+      (is (= "No languages" (:empty n)))
+      (is (false? (:focus-ring n)))
+      (is (= "Lisp" (get-in n [:options 0 :label])))
+      (is (= "clj" (get-in n [:options 0 :items 0 :id])))
+      (is (= "ClojureScript (cljs)" (get-in n [:options 0 :items 1 :display])))
+      (is (true? (get-in n [:options 1 :items 1 :disabled])))))
   (testing "radio-group"
     (let [n (ui/radio-group :dark {:options [:light :dark]
                                    :orientation :horizontal})]

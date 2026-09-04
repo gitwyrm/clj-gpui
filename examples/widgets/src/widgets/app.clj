@@ -16,6 +16,7 @@
            :remaining 40
            :released nil
            :lang :clj
+           :dialect :clj
            :tab :general
            :section :audio
            :crumb :home
@@ -67,7 +68,7 @@
   (fn [v]
     (swap! !state assoc k v)))
 
-(defn- general-panel [{:keys [notify? bold? theme-mode volume span zoom remaining released lang page]}]
+(defn- general-panel [{:keys [notify? bold? theme-mode volume span zoom remaining released lang dialect page]}]
   (ui/vstack
    {:gap 12}
    (ui/hstack
@@ -148,6 +149,22 @@
                 :flex 1
                 :on-change (set-key :lang)})
     (ui/button "Clear" #(swap! !state assoc :lang nil)))
+   (ui/select dialect
+              {:id "dialect"
+               :options [{:label "Lisp"
+                          :items [{:id :clj :label "Clojure"}
+                                  {:id :cljs :label "ClojureScript"
+                                   :display "ClojureScript (cljs)"}]}
+                         {:label "Systems"
+                          :items [{:id :rs :label "Rust"}
+                                  {:id :go :label "Go" :disabled true}]}]
+               :placeholder "Grouped language"
+               :searchable true
+               :cleanable true
+               :title-prefix "Lang: "
+               :search-placeholder "Filter languages"
+               :empty "No languages"
+               :on-change (set-key :dialect)})
    (ui/hstack
     {:gap 8 :align :center}
     (ui/tag (if lang (name lang) "none") {:variant :info})

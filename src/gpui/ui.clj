@@ -284,8 +284,10 @@
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
-  `:label` / `:text`, `:disabled`, `:on-click`, and `:content`. Chart
-  items also keep `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
+  `:label` / `:text`, `:disabled`, `:display` (select trigger copy),
+  `:on-click`, and `:content`. Nested `:items` are menu submenus, tree
+  children, or Select `SelectGroup` sections. Chart items also keep
+  `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
   `:outer-radius`, and `:label-lines`."
   [x]
   (cond
@@ -303,6 +305,7 @@
         (and (some? value) scalar-value?) (assoc :text (str value))
         (contains? x :text) (assoc :text (str (:text x)))
         (true? (:disabled x)) (assoc :disabled true)
+        (some? (:display x)) (assoc :display (str (:display x)))
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
         (ui-node? content) (assoc :content content)
         (and (some? content) (not (ui-node? content)))
@@ -883,17 +886,44 @@
   `nil` clears the selection. `:searchable true` filters options by
   label as the user types. Keyword ids round-trip as keywords.
 
+  Nested `:items` are Kit `SelectGroup` sections (`IndexPath` section+row
+  on the host). A group is `{ :label \"Lisp\" :items [{:id :clj :label \"Clojure\"}] }`.
+  Option `:display` is the string form of Kit `SelectItem::display_title`
+  (trigger copy); Kit's API is `Option<AnyElement>`. Omitted, the trigger
+  uses `:label`. `:disabled` greys a row.
+
+  A controlled value change uses Kit `set_selected_value` so a live
+  search query is not indexed with a full-list `IndexPath`. Native
+  Confirm updates the host cache first: Clojure echoing that id is a
+  no-op and does not clear in-progress typing. Replacing the option
+  collection rebuilds `SelectState` so query text and matched rows
+  agree; an unrelated rerender with the same options and id does not.
+
+  Kit Select chrome: `:cleanable`, `:title-prefix`, `:menu-width` /
+  `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
+  Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
+  `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
+  `:accessibility-label`. Custom row/section `render` is not wrapped.
+
   (ui/select selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
      :placeholder \"Language\"
      :searchable true
-     :on-change #(swap! !state assoc :lang %)})"
+     :on-change #(swap! !state assoc :lang %)})
+  (ui/select selected
+    {:options [{:label \"Lisp\"
+                :items [{:id :clj :label \"Clojure\"}
+                        {:id :cljs :label \"ClojureScript\" :display \"ClojureScript (cljs)\"}]}
+               {:label \"Systems\"
+                :items [{:id :rs :label \"Rust\"}]}]
+     :searchable true
+     :focus-ring false})"
   ([value]
    {:type :select :value (wire-id value) :options []})
   ([value opts]
    (let [opts (if (map? opts) opts {:on-change opts})
          raw (or (:options opts) (:items opts))
-         opts (with-option-callback (dissoc opts :options :items) raw)]
+         opts (with-nested-option-callback (dissoc opts :options :items) raw)]
      (merge-widget {:type :select
                     :value (wire-id value)
                     :options (option-items raw)}

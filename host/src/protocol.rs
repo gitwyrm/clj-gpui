@@ -448,6 +448,11 @@ pub struct Item {
     pub text: Option<String>,
     #[serde(default)]
     pub disabled: bool,
+    /// Select string form of `SelectItem::display_title`. Kit's API is
+    /// `Option<AnyElement>`; custom display widgets are not wrapped yet.
+    /// Omitted falls back to `label`.
+    #[serde(default)]
+    pub display: Option<String>,
     #[serde(default)]
     pub children: Vec<Node>,
     #[serde(default)]
@@ -459,7 +464,7 @@ pub struct Item {
     /// Clojure expander copies it onto the header cell only.
     #[serde(default)]
     pub span: u32,
-    /// Nested items for menus and trees.
+    /// Nested items for menus, trees, and Select `SelectGroup` sections.
     #[serde(default)]
     pub items: Vec<Item>,
     /// Table row cells (one string per column). Empty falls back to `label`.
@@ -742,6 +747,29 @@ pub struct Node {
     pub selected: bool,
     #[serde(default)]
     pub searchable: bool,
+    /// Select: Kit `Select::cleanable` (clear button when a value is selected).
+    #[serde(default)]
+    pub cleanable: bool,
+    /// Select: Kit `Select::title_prefix`.
+    #[serde(default, rename = "title-prefix")]
+    pub title_prefix: Option<String>,
+    /// Select: Kit `Select::menu_width` in pixels. Omitted is Kit `Length::Auto`.
+    #[serde(default, rename = "menu-width")]
+    pub menu_width: Option<f32>,
+    /// Select: Kit `Select::menu_max_h` in pixels. Omitted is Kit's 20rem default.
+    #[serde(default, rename = "menu-max-h")]
+    pub menu_max_h: Option<f32>,
+    /// Select: Kit `Select::search_placeholder`.
+    #[serde(default, rename = "search-placeholder")]
+    pub search_placeholder: Option<String>,
+    /// Select: string form of Kit `Select::empty` when the list has no
+    /// rows. Kit accepts arbitrary `IntoElement`; custom empty widgets
+    /// are not wrapped yet.
+    #[serde(default)]
+    pub empty: Option<String>,
+    /// Select: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
+    #[serde(default, rename = "focus-ring")]
+    pub focus_ring: Option<bool>,
     #[serde(default)]
     pub multiple: bool,
     #[serde(default)]
@@ -1195,6 +1223,52 @@ mod tests {
         assert_eq!(select.collection()[0].id_or_label(), "clj");
         assert_eq!(select.collection()[1].label_or_id(), "Rust");
         assert!(select.searchable);
+        assert_eq!(select.focus_ring, None);
+
+        let grouped: Node = serde_json::from_value(json!({
+            "type": "select",
+            "value": "rs",
+            "searchable": true,
+            "cleanable": true,
+            "title-prefix": "Lang: ",
+            "menu-width": 280,
+            "menu-max-h": 240,
+            "search-placeholder": "Filter…",
+            "empty": "No languages",
+            "focus-ring": false,
+            "options": [
+                {
+                    "label": "Lisp",
+                    "items": [
+                        {"id": "clj", "label": "Clojure"},
+                        {"id": "cljs", "label": "ClojureScript", "display": "ClojureScript (cljs)"}
+                    ]
+                },
+                {
+                    "label": "Systems",
+                    "items": [
+                        {"id": "rs", "label": "Rust"},
+                        {"id": "go", "label": "Go", "disabled": true}
+                    ]
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(grouped.string_value().as_deref(), Some("rs"));
+        assert!(grouped.cleanable);
+        assert_eq!(grouped.title_prefix.as_deref(), Some("Lang: "));
+        assert_eq!(grouped.menu_width, Some(280.0));
+        assert_eq!(grouped.menu_max_h, Some(240.0));
+        assert_eq!(grouped.search_placeholder.as_deref(), Some("Filter…"));
+        assert_eq!(grouped.empty.as_deref(), Some("No languages"));
+        assert_eq!(grouped.focus_ring, Some(false));
+        assert_eq!(grouped.collection().len(), 2);
+        assert_eq!(grouped.collection()[0].label_or_id(), "Lisp");
+        assert_eq!(
+            grouped.collection()[0].items[1].display.as_deref(),
+            Some("ClojureScript (cljs)")
+        );
+        assert!(grouped.collection()[1].items[1].disabled);
     }
 
     #[test]
