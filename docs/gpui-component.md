@@ -129,7 +129,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 | Widget | callback | payload |
 |---|---|---|
 | `switch` / `toggle` | `:on-change` | boolean |
-| `slider` | `:on-change` / `:on-release` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity). `:on-release` is Kit `Release` after a real click/drag; `set_value` emits neither |
+| `slider` | `:on-change` / `:on-release` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity). `:on-release` is Kit `Release` after a real click/drag; same-gesture Change+Release is one batch. `set_value` emits neither |
 | `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id |
 | `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
 | `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |

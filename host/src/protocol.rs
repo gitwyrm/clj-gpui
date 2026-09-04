@@ -301,6 +301,85 @@ impl InputChangeCoalesce {
     }
 }
 
+/// Coalesce Kit `SliderEvent::Change` and `Release` so a click cannot
+/// `export-tree` between them and leave `:on-release` as an unknown `cb-N`.
+///
+/// Same-tick Change then Release is one `:on-change` + `:on-release`
+/// batch. Change-only (live drag) flushes after a defer. Release that
+/// arrives while a Change round-trip is in flight waits for the next
+/// tree's callback ids, same idea as `InputChangeCoalesce`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SliderEventCoalesce {
+    pending_change: Option<Value>,
+    pending_release: Option<Value>,
+    flush_scheduled: bool,
+    in_flight: bool,
+}
+
+impl SliderEventCoalesce {
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_change(&mut self, payload: Value) -> bool {
+        self.pending_change = Some(payload);
+        self.schedule_if_idle()
+    }
+
+    /// Returns whether the caller should schedule a deferred flush.
+    pub fn on_release(&mut self, payload: Value) -> bool {
+        self.pending_release = Some(payload);
+        self.schedule_if_idle()
+    }
+
+    fn schedule_if_idle(&mut self) -> bool {
+        if self.flush_scheduled || self.in_flight {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    /// Take payloads to send. Marks in-flight when either event is pending.
+    pub fn take_pending(&mut self) -> (Option<Value>, Option<Value>) {
+        self.flush_scheduled = false;
+        let change = self.pending_change.take();
+        let release = self.pending_release.take();
+        if change.is_some() || release.is_some() {
+            self.in_flight = true;
+        }
+        (change, release)
+    }
+
+    /// New export assigned fresh callback ids. Returns whether to flush
+    /// events that arrived during the round-trip.
+    pub fn on_ids_refreshed(&mut self) -> bool {
+        self.in_flight = false;
+        if (self.pending_change.is_some() || self.pending_release.is_some())
+            && !self.flush_scheduled
+        {
+            self.flush_scheduled = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Slider `:on-change` then `:on-release` when both fired for one gesture.
+pub fn slider_event_calls(
+    on_change: Option<String>,
+    on_release: Option<String>,
+    change: Option<Value>,
+    release: Option<Value>,
+) -> Vec<CallbackCall> {
+    let mut calls = Vec::new();
+    if let (Some(id), Some(payload)) = (on_change, change) {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    if let (Some(id), Some(payload)) = (on_release, release) {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    calls
+}
+
 /// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
 pub fn menu_selection_calls(
     item_click: Option<String>,
@@ -1283,6 +1362,49 @@ mod tests {
 
         let mut confirm_only = ComboboxActivationCoalesce::default();
         assert!(confirm_only.on_confirm().is_none());
+    }
+
+    #[test]
+    fn slider_event_coalesce_batches_release_after_change() {
+        let mut c = SliderEventCoalesce::default();
+        assert!(c.on_change(json!(42.0)));
+        assert!(
+            !c.on_release(json!(42.0)),
+            "same-tick Release must ride the Change defer"
+        );
+        let (change, release) = c.take_pending();
+        assert_eq!(change, Some(json!(42.0)));
+        assert_eq!(release, Some(json!(42.0)));
+
+        let mut drag = SliderEventCoalesce::default();
+        assert!(drag.on_change(json!(10.0)));
+        assert!(!drag.on_change(json!(11.0)));
+        let (change, release) = drag.take_pending();
+        assert_eq!(change, Some(json!(11.0)));
+        assert!(release.is_none());
+
+        let mut late = SliderEventCoalesce::default();
+        assert!(late.on_change(json!(1.0)));
+        let _ = late.take_pending();
+        assert!(
+            !late.on_release(json!(1.0)),
+            "Release during in-flight Change waits for new ids"
+        );
+        assert!(late.on_ids_refreshed());
+        let (change, release) = late.take_pending();
+        assert!(change.is_none());
+        assert_eq!(release, Some(json!(1.0)));
+
+        let calls = slider_event_calls(
+            Some("cb-change".into()),
+            Some("cb-release".into()),
+            Some(json!(20.0)),
+            Some(json!([20.0, 70.0])),
+        );
+        assert_eq!(calls[0].id, "cb-change");
+        assert_eq!(calls[0].value, Some(json!(20.0)));
+        assert_eq!(calls[1].id, "cb-release");
+        assert_eq!(calls[1].value, Some(json!([20.0, 70.0])));
     }
 
     #[test]

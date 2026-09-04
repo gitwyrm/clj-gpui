@@ -123,6 +123,7 @@ struct SliderSlot {
     scale: SliderScale,
     on_change: Option<String>,
     on_release: Option<String>,
+    coalesce: protocol::SliderEventCoalesce,
     /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
     /// track width changes we must re-render or they disagree by a few px.
     bar_px: Option<(f32, f32)>,
@@ -756,6 +757,29 @@ impl RootView {
         });
     }
 
+    fn schedule_slider_event_flush(key: String, window: &Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, move |this, _, _cx| {
+            this.flush_slider_events(&key);
+        });
+    }
+
+    fn flush_slider_events(&mut self, key: &str) {
+        let Some(slot) = self.sliders.get_mut(key) else {
+            return;
+        };
+        let (change, release) = slot.coalesce.take_pending();
+        let calls = protocol::slider_event_calls(
+            slot.on_change.clone(),
+            slot.on_release.clone(),
+            change,
+            release,
+        );
+        if calls.is_empty() {
+            return;
+        }
+        protocol::send_callbacks(&self.cmd_tx, calls);
+    }
+
     fn flush_text_slot<S>(
         slot: &mut TextControlSlot<S>,
         as_number: bool,
@@ -1021,8 +1045,11 @@ impl RootView {
                 && (slot.step - step).abs() <= f32::EPSILON
                 && slot.scale == scale
             {
+                let id_changed =
+                    slot.on_change != node.on_change || slot.on_release != node.on_release;
                 slot.on_change = node.on_change.clone();
                 slot.on_release = node.on_release.clone();
+                let refresh = id_changed && slot.coalesce.on_ids_refreshed();
                 let current = slot.state.read(cx).value();
                 // `set_value` notifies without emitting Change or Release, so
                 // applying Clojure's current value cannot loop. Step is drag
@@ -1032,6 +1059,9 @@ impl RootView {
                     slot.state.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
+                }
+                if refresh {
+                    Self::schedule_slider_event_flush(key.to_string(), window, cx);
                 }
                 return slot.state.clone();
             }
@@ -1049,15 +1079,6 @@ impl RootView {
             );
         }
         let key_owned = key.to_string();
-        cx.subscribe(&state, move |this, _, event: &SliderEvent, _cx| {
-            let Some((id, payload)) = this.sliders.get(&key_owned).and_then(|slot| {
-                slider_slot_callback(event, slot.on_change.as_deref(), slot.on_release.as_deref())
-            }) else {
-                return;
-            };
-            this.emit_value(id, payload);
-        })
-        .detach();
         self.sliders.insert(
             key.to_string(),
             SliderSlot {
@@ -1068,10 +1089,34 @@ impl RootView {
                 scale,
                 on_change: node.on_change.clone(),
                 on_release: node.on_release.clone(),
+                coalesce: protocol::SliderEventCoalesce::default(),
                 bar_px: None,
                 settle: 0,
             },
         );
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _, event: &SliderEvent, window, cx| {
+                let schedule = {
+                    let Some(slot) = this.sliders.get_mut(&key_owned) else {
+                        return;
+                    };
+                    match event {
+                        SliderEvent::Change(changed) => {
+                            slot.coalesce.on_change(slider_event_payload(*changed))
+                        }
+                        SliderEvent::Release(changed) => {
+                            slot.coalesce.on_release(slider_event_payload(*changed))
+                        }
+                    }
+                };
+                if schedule {
+                    Self::schedule_slider_event_flush(key_owned.clone(), window, cx);
+                }
+            },
+        )
+        .detach();
         state
     }
 
@@ -4179,6 +4224,7 @@ fn slider_event_payload(value: SliderValue) -> Value {
     }
 }
 
+#[cfg(test)]
 fn slider_slot_callback(
     event: &SliderEvent,
     on_change: Option<&str>,
