@@ -995,9 +995,11 @@
   `:search-placeholder`, `:empty` (string form of Kit `Combobox::empty`;
   Kit accepts arbitrary `IntoElement`), `:icon` (trigger chevron),
   `:check-icon` (selected-row mark), `:appearance`, `:focus-ring`
-  (Kit `FocusableExt`; omit = Kit true). Custom `render_trigger` /
-  `footer`, empty as `IntoElement`, and `ComboboxState::query` /
-  `set_query` are not wrapped.
+  (Kit `FocusableExt`; omit = Kit true). `:query` is programmatic
+  search text (`ComboboxState::query` / `set_query`). Omitted leaves
+  the native query. Kit `ComboboxEvent` has no query variant, so there
+  is no `:on-query` (unlike `ui/command`). Custom `render_trigger` /
+  `footer` and empty as `IntoElement` are not wrapped.
 
   A single-select pick can emit Kit `Change` then `Confirm` for one
   user action. The host sends `:on-change` then `:on-confirm` as one
@@ -1011,9 +1013,10 @@
   fingerprint change so query text and matched sections agree. Kit
   `set_selected_values` clears the search query, so an unrelated atom
   rerender with the same options and ids must not wipe in-progress
-  typing. A native `Change` updates the host cache first: Clojure
-  echoing those same ids is a no-op; a different Clojure value still
-  overrides native state.
+  typing. A present `:query` is applied after that write so a
+  controlled filter survives a selection sync. A native `Change`
+  updates the host cache first: Clojure echoing those same ids is a
+  no-op; a different Clojure value still overrides native state.
 
   (ui/combobox selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
@@ -1021,6 +1024,8 @@
      :on-change set-lang!})
   (ui/combobox picked
     {:options langs :multiple true :on-change set-picked!})
+  (ui/combobox selected
+    {:options langs :query \"clj\" :on-change set-lang!})
   (ui/combobox selected
     {:options [{:label \"Lisp\"
                 :items [{:id :clj :label \"Clojure\"}
@@ -1036,10 +1041,13 @@
          searchable (if (contains? opts :searchable)
                       (boolean (:searchable opts))
                       true)
+         has-query? (contains? opts :query)
+         query (:query opts)
          opts (with-selectable-option-callbacks
-                (-> opts
-                    (dissoc :options :items)
-                    (assoc :searchable searchable))
+                (cond-> (-> opts
+                            (dissoc :options :items)
+                            (assoc :searchable searchable))
+                  has-query? (assoc :query (when (some? query) (str query))))
                 raw
                 [:on-change :on-confirm])]
      (merge-widget {:type :combobox

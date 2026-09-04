@@ -52,6 +52,7 @@
            :field-val 4
            :combo :clj
            :combo-multi [:clj]
+           :combo-query nil
            :stars 3
            :step :pay
            :page 4
@@ -566,12 +567,13 @@
                        :height 160
                        :on-change (set-key :vlist-sel)}))))
 
-(defn- forms-panel [{:keys [qty otp color date src notes field-kind field-val combo combo-multi stars step]}]
+(defn- forms-panel [{:keys [qty otp color date src notes field-kind field-val combo combo-multi combo-query stars step]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "qty " qty " · otp " (pr-str otp) " · " (pr-str color) " · " date
                   " · field " (pr-str field-kind) " " (pr-str field-val)
                   " · combo " (pr-str combo)
+                  " · query " (pr-str combo-query)
                   " · multi " (pr-str combo-multi)
                   " · stars " stars
                   " · step " (pr-str step)))
@@ -593,8 +595,11 @@
                   :cleanable true
                   :check-icon :check
                   :menu-width 280
+                  :query combo-query
                   :flex 1
                   :on-change (set-key :combo)})
+    (ui/button "Filter clj" #(swap! !state assoc :combo-query "clj"))
+    (ui/button "Clear query" #(swap! !state assoc :combo-query nil))
     (ui/combobox combo-multi
                  {:id "combo-multi"
                   :options [{:id :clj :label "Clojure"}

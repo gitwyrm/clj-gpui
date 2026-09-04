@@ -966,7 +966,8 @@
                           :icon :search
                           :check-icon :check
                           :appearance false
-                          :focus-ring false})]
+                          :focus-ring false
+                          :query "clj"})]
       (is (true? (:cleanable n)))
       (is (= 280 (:menu-width n)))
       (is (= 240 (:menu-max-h n)))
@@ -975,7 +976,14 @@
       (is (= :search (:icon n)))
       (is (= :check (:check-icon n)))
       (is (false? (:appearance n)))
-      (is (false? (:focus-ring n)))))
+      (is (false? (:focus-ring n)))
+      (is (= "clj" (:query n))))
+    (is (nil? (:query (ui/combobox :clj {:options [:clj]})))
+        "omitted :query stays off the node")
+    (is (nil? (:query (ui/combobox :clj {:options [:clj] :query nil}))))
+    (let [exported (runtime/export-tree
+                    (ui/combobox :clj {:options [:clj] :query "rs"}))]
+      (is (= "rs" (:query exported)))))
   (testing "group titles that share a wire id do not shadow leaf callbacks"
     (let [opts [{:label "clj" :items [{:id :clj :label "Clojure"}]}
                 {:label "rs" :items [{:id :rs :label "Rust"}]}]
