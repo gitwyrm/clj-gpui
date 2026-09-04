@@ -39,8 +39,9 @@ pub struct StyledKeys {
     pub bg: Option<String>,
     pub border: Option<String>,
     pub border_bottom: Option<String>,
-    pub strikethrough: bool,
-    pub shadow: bool,
+    /// Omitted vs explicit `false` so a match arm can disable a base `true`.
+    pub strikethrough: Option<bool>,
+    pub shadow: Option<bool>,
     pub align: Option<String>,
     pub justify: Option<String>,
     pub width: Option<f32>,
@@ -61,8 +62,8 @@ impl StyledKeys {
             bg: self.bg.clone(),
             border: self.border.clone(),
             border_bottom: self.border_bottom.clone(),
-            strikethrough: self.strikethrough,
-            shadow: self.shadow,
+            strikethrough: self.strikethrough.unwrap_or(false),
+            shadow: self.shadow.unwrap_or(false),
             align: self.align.clone(),
             justify: self.justify.clone(),
             width: self.width,
@@ -2423,6 +2424,24 @@ mod tests {
                 assert!(spec.cases.is_empty());
             }
             other => panic!("expected styled spec, got {other:?}"),
+        }
+        let bools: Node = serde_json::from_value(json!({
+            "type": "nav-stack",
+            "item": {
+                "shadow": true,
+                "strikethrough": true,
+                "match": [{"phase": "present", "shadow": false, "strikethrough": false}]
+            }
+        }))
+        .unwrap();
+        match bools.item {
+            Some(NavItemWire::Spec(spec)) => {
+                assert_eq!(spec.style.shadow, Some(true));
+                assert_eq!(spec.style.strikethrough, Some(true));
+                assert_eq!(spec.cases[0].style.shadow, Some(false));
+                assert_eq!(spec.cases[0].style.strikethrough, Some(false));
+            }
+            other => panic!("expected bool overlay spec, got {other:?}"),
         }
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");

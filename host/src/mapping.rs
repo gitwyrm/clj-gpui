@@ -144,8 +144,8 @@ pub fn has_styled_keys(style: &StyledKeys) -> bool {
         || style.bg.is_some()
         || style.border.is_some()
         || style.border_bottom.is_some()
-        || style.strikethrough
-        || style.shadow
+        || style.strikethrough.is_some()
+        || style.shadow.is_some()
         || style.align.is_some()
         || style.justify.is_some()
         || style.width.is_some()
@@ -155,8 +155,8 @@ pub fn has_styled_keys(style: &StyledKeys) -> bool {
 }
 
 /// Overlay `over` onto `base` for the Styled vocabulary only.
-/// Set keys on `over` win; omitted keys keep `base`. Bools are or-merged
-/// because the wire cannot distinguish omitted `false` from explicit.
+/// Set keys on `over` win; omitted keys keep `base`. Recipe booleans are
+/// `Option<bool>` so an explicit `false` can disable a base `true`.
 pub fn overlay_styled(base: &StyledKeys, over: &StyledKeys) -> StyledKeys {
     StyledKeys {
         gap: over.gap.or(base.gap),
@@ -177,8 +177,8 @@ pub fn overlay_styled(base: &StyledKeys, over: &StyledKeys) -> StyledKeys {
             .border_bottom
             .clone()
             .or_else(|| base.border_bottom.clone()),
-        strikethrough: over.strikethrough || base.strikethrough,
-        shadow: over.shadow || base.shadow,
+        strikethrough: over.strikethrough.or(base.strikethrough),
+        shadow: over.shadow.or(base.shadow),
         align: over.align.clone().or_else(|| base.align.clone()),
         justify: over.justify.clone().or_else(|| base.justify.clone()),
         width: over.width.or(base.width),
@@ -793,5 +793,27 @@ mod tests {
         assert_eq!(merged.color.as_deref(), Some("#eeeeee"));
         assert_eq!(merged.bg.as_deref(), Some("#111111"));
         assert_eq!(merged.gap, None);
+
+        let base_bools = StyledKeys {
+            shadow: Some(true),
+            strikethrough: Some(true),
+            ..StyledKeys::default()
+        };
+        let off = StyledKeys {
+            shadow: Some(false),
+            strikethrough: Some(false),
+            ..StyledKeys::default()
+        };
+        assert!(has_styled_keys(&off));
+        let disabled = overlay_styled(&base_bools, &off);
+        assert_eq!(disabled.shadow, Some(false));
+        assert_eq!(disabled.strikethrough, Some(false));
+        assert!(!disabled.to_node().shadow);
+        assert!(!disabled.to_node().strikethrough);
+        let kept = overlay_styled(&base_bools, &StyledKeys::default());
+        assert_eq!(kept.shadow, Some(true));
+        assert_eq!(kept.strikethrough, Some(true));
+        assert!(kept.to_node().shadow);
+        assert!(kept.to_node().strikethrough);
     }
 }

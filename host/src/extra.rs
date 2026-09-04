@@ -4599,6 +4599,38 @@ mod tests {
     }
 
     #[test]
+    fn nav_item_paint_match_arm_can_disable_base_bools() {
+        use gpui::base::motion::PresencePhase::{Entering, Present};
+        let spec = NavItemSpec {
+            style: StyledKeys {
+                shadow: Some(true),
+                strikethrough: Some(true),
+                ..StyledKeys::default()
+            },
+            cases: vec![NavItemCase {
+                phase: Some("present".into()),
+                style: StyledKeys {
+                    shadow: Some(false),
+                    strikethrough: Some(false),
+                    ..StyledKeys::default()
+                },
+                ..NavItemCase::default()
+            }],
+            ..NavItemSpec::default()
+        };
+        let present = nav_item_paint(Present, None, 0, 1.0, &spec);
+        assert_eq!(present.style.shadow, Some(false));
+        assert_eq!(present.style.strikethrough, Some(false));
+        assert!(!present.style.to_node().shadow);
+        assert!(!present.style.to_node().strikethrough);
+        let entering = nav_item_paint(Entering, None, 0, 1.0, &spec);
+        assert_eq!(entering.style.shadow, Some(true));
+        assert_eq!(entering.style.strikethrough, Some(true));
+        assert!(entering.style.to_node().shadow);
+        assert!(entering.style.to_node().strikethrough);
+    }
+
+    #[test]
     fn nav_page_live_cell_tracks_regenerated_callback_ids() {
         let live = Rc::new(RefCell::new(Node {
             kind: "nav-page".into(),

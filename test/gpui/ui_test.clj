@@ -1278,7 +1278,18 @@
                                 :transition-style :slide}
                                (ui/nav-page {:id :home} "Home"))]
     (is (false? (:item fn-slide)))
-    (is (= "slide" (:transition-style fn-slide)))))
+    (is (= "slide" (:transition-style fn-slide))))
+  (let [bools (ui/nav-stack {:id "nav"
+                             :item {:shadow true
+                                    :strikethrough true
+                                    :match [{:phase :present
+                                             :shadow false
+                                             :strikethrough false}]}}
+                            (ui/nav-page {:id :home} "Home"))]
+    (is (true? (get-in bools [:item :shadow])))
+    (is (true? (get-in bools [:item :strikethrough])))
+    (is (false? (get-in bools [:item :match 0 :shadow])))
+    (is (false? (get-in bools [:item :match 0 :strikethrough])))))
 
 (deftest nav-stack-forward-change-restores-page-ids
   (runtime/reset-callbacks!)
