@@ -12,7 +12,7 @@ use gpui::{
     Styled, Window, div, px,
 };
 use gpui_component::{
-    Colorize as _, Disableable as _, Icon, IconName, Sizable as _,
+    Colorize as _, Disableable as _, Icon, IconName, Sizable as _, Size,
     alert::Alert,
     avatar::{Avatar, AvatarGroup},
     badge::Badge,
@@ -82,6 +82,9 @@ pub fn kit_avatar(node: &Node) -> Avatar {
     avatar
 }
 
+/// Kit `AvatarGroup` from a node. `flex_shrink_0` plus a min-width matching
+/// Kit's overlap math: negative child margins make flex min-content about
+/// one face, so a row otherwise stacks every avatar on the same spot.
 pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
     let mut group =
         AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
@@ -95,9 +98,7 @@ pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
     if node.ellipsis {
         group = group.ellipsis();
     }
-    // Kit Avatar is flex_shrink_0; AvatarGroup is not. Negative child
-    // margins make flex min-content ≈ one face, so a shrinking group
-    // stacks every avatar on the same spot.
+    let width = avatar_group_content_width(node);
     group
         .children(
             node.children
@@ -106,6 +107,43 @@ pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
                 .map(kit_avatar),
         )
         .flex_shrink_0()
+        .min_w(px(width))
+}
+
+/// Kit AvatarGroup layout width: `face + 0.7 * face * (visible - 1)`, plus
+/// the ellipsis avatar and `ml_1` (0.25rem ≈ 4px) when overflow is shown.
+pub(crate) fn avatar_group_content_width(node: &Node) -> f32 {
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    let count = node
+        .children
+        .iter()
+        .filter(|child| child.kind == "avatar")
+        .count();
+    let limit = node
+        .limit
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+        .unwrap_or(3);
+    let visible = count.min(limit);
+    let ellipsis = node.ellipsis && count > limit;
+    if visible == 0 {
+        return if ellipsis { face + 4.0 } else { 0.0 };
+    }
+    let mut width = face * visible as f32 - face * 0.3 * (visible - 1) as f32;
+    if ellipsis {
+        width += face + 4.0;
+    }
+    width
+}
+
+fn avatar_face_px(size: Size) -> f32 {
+    match size {
+        Size::Large => 80.0,
+        Size::Medium => 48.0,
+        Size::Small => 24.0,
+        Size::XSmall => 16.0,
+        Size::Size(px) => px.as_f32(),
+    }
 }
 
 fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
@@ -625,6 +663,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
         "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
         "avatar-group" => h_flex()
             .flex_none()
+            .min_w(px(avatar_group_content_width(node)))
             .child(chart_layout(kit_avatar_group(node), node))
             .into_any_element(),
         "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
@@ -1476,5 +1515,43 @@ mod tests {
             })),
             "radar-label/3",
         );
+    }
+
+    #[test]
+    fn avatar_group_content_width_matches_kit_overlap() {
+        let three_medium = node(json!({
+            "type": "avatar-group",
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        assert_eq!(
+            avatar_group_content_width(&three_medium),
+            48.0 + 48.0 * 0.7 * 2.0
+        );
+
+        let small_overflow = node(json!({
+            "type": "avatar-group",
+            "limit": 4,
+            "ellipsis": true,
+            "control-size": "small",
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"},
+                {"type": "avatar", "text": "Barbara"},
+                {"type": "avatar", "text": "Rich"}
+            ]
+        }));
+        // 4 small faces with 30% overlap, plus ⋯ and ml_1 (4px).
+        assert_eq!(
+            avatar_group_content_width(&small_overflow),
+            24.0 * 4.0 - 24.0 * 0.3 * 3.0 + 24.0 + 4.0
+        );
+
+        let empty = node(json!({"type": "avatar-group"}));
+        assert_eq!(avatar_group_content_width(&empty), 0.0);
     }
 }
