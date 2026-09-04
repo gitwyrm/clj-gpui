@@ -2644,7 +2644,7 @@
           [opts-or-child children]
           [{} (cons opts-or-child children)])
         opts (apply-control-size opts)
-        id (some-> (:id opts) wire-id)]
+        id (:id opts)]
     (cond-> (assoc (dissoc opts :id)
                    :type :nav-page
                    :children (flatten-children kids))
@@ -2656,29 +2656,63 @@
   stack is the first page id. An empty `:stack []` clears the stack.
   An explicit trail that names an unknown page id is rejected (the
   native stack is left unchanged); only `[]` means clear.
-  Clojure owns the trail; the host diffs and calls Kit `push` /
-  `pop` / `replace` / `clear`. Re-adding a popped id is a new `push`
-  and discards Kit's forward branch (`forward` / `forward_views` are
-  not wrapped). Repeated ids are separate history entries (a new
-  view entity per stack slot). `:transition` is seconds (Kit
-  `Transition` only); omitted is an immediate swap. `:motion
-  :immediate` forces Immediate even when a transition is set.
-  `:transition-style :slide` opts into the showcase slide `item`
-  renderer; omitted keeps Kit's default unchanged `NavPage`
-  renderer. `:overflow :hidden` or `:overflow-hidden true` clips;
-  omitted does not. Custom `item` rendering beyond `:slide`,
-  dedicated `pop_to_root`, and Kit `forward` are remaining.
-  Pages paint the overlay static subset (not list / data-table /
-  editor).
+  Clojure owns the trail; the host preserves the longest matching
+  active prefix and applies a plan of Kit `push` / `pop` /
+  `forward` / `pop_to_root` / `replace`. Rebuild (`clear` +
+  immediate pushes) is last resort: empty current, explicit `[]`,
+  or a root id that cannot be `replace`d. Multi-step pops keep
+  popped entities on the forward branch (Kit order). Restoring
+  that same trail is the same number of `forward` calls, not a
+  rebuild. Growing by an id that matches the nearest Kit
+  `forward_views()` entry restores that retained page (`forward`)
+  unless `:reuse-forward false`, which forces a fresh `push` and
+  discards the remainder of the forward branch — the same Kit
+  operation you would call yourself. Omitted / true keeps
+  automatic `forward` as the convenient default. `:replace-generation`
+  is an integer or string token. Changing it while the current page
+  id stays the same creates a fresh page entity and calls Kit
+  `replace()` (forward is kept, `NavOperation::Replace` uses the
+  configured motion). Leaving the token unchanged across rerenders
+  is a no-op, so ordinary callback-id regeneration still only
+  `replace_live`s the existing page. The host binds the token to
+  the current `CljNavPage` entity (not the catalog page id); a later
+  navigation to another history entry — including another instance
+  of the same page id — keeps the previous entity binding across
+  ordinary rerenders. The next generation bump rebinds rather than
+  replacing that other entity. Setting the trail to just the root from depth > 2 is one `pop_to_root` transition
+  (popped pages join forward, nearest first). `:on-forward-change`
+  receives Kit `forward_views()` as a vector of original page ids,
+  nearest first (the id `forward` would restore). Empty after first
+  mount is not sent; a later Push/Rebuild that clears forward still
+  notifies `[]`. Catalog page ids should be unique (duplicate
+  templates share a lookup key; the last wins). Repeated ids on
+  the active trail are valid and create distinct entities.
+  `:transition` is seconds (Kit `Transition` only); omitted is an
+  immediate swap. `:motion :immediate` forces Immediate even when
+  a transition is set. `:transition-style :slide` opts into the
+  showcase slide `item` renderer; omitted keeps Kit's default
+  unchanged `NavPage` renderer. `:overflow :hidden` or
+  `:overflow-hidden true` clips; omitted does not. Custom `item`
+  rendering beyond `:slide` is remaining and must include the
+  complete `NavPage` surface (the mounted `view()`, plus index,
+  phase, operation, eased progress), not only a canned transition
+  style. Pages paint the overlay static subset (not list /
+  data-table / editor).
 
   (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
-                 :transition-style :slide :overflow :hidden}
+                 :transition-style :slide :overflow :hidden
+                 :on-forward-change #(reset! !forward %)}
     (ui/nav-page {:id :home} (ui/label \"Home\"))
     (ui/nav-page {:id :detail} (ui/label \"Detail\")))"
   [& args]
   (let [[opts children] (leading-opts args)
         pages (flatten-children children)
         page-ids (into [] (keep :id) pages)
+        opts (with-id-callbacks opts pages [:on-forward-change])
+        pages (mapv (fn [page]
+                      (cond-> page
+                        (contains? page :id) (update :id wire-id)))
+                    pages)
         explicit? (or (contains? opts :stack) (contains? opts :value))
         raw (cond
               (contains? opts :stack) (:stack opts)
@@ -2693,7 +2727,8 @@
                    (assoc :duration (:transition opts)))
                (keyword? (:motion opts)) (update :motion name)
                (keyword? (:transition-style opts)) (update :transition-style name)
-               (keyword? (:overflow opts)) (update :overflow name))]
+               (keyword? (:overflow opts)) (update :overflow name)
+               (keyword? (:replace-generation opts)) (update :replace-generation name))]
     (cond-> (assoc opts
                    :type :nav-stack
                    :children pages)

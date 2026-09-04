@@ -789,6 +789,11 @@ pub struct Node {
     pub on_confirm: Option<String>,
     #[serde(default, rename = "on-open-change")]
     pub on_open_change: Option<String>,
+    /// NavStack: Kit `forward_views()` as a JSON array of page ids,
+    /// nearest first. Omitted does not notify. Empty after first mount is
+    /// not sent; later clears still notify `[]`.
+    #[serde(default, rename = "on-forward-change")]
+    pub on_forward_change: Option<String>,
     /// Dialog: click the dimmed overlay to dismiss. Default true.
     /// `confirm` dialogs follow Kit (not overlay-closable unless set).
     /// `alert-dialog` never dismisses on backdrop.
@@ -967,6 +972,21 @@ pub struct Node {
     /// NavStack: explicit clip opt-in. Omitted / false does not clip.
     #[serde(default, rename = "overflow-hidden")]
     pub overflow_hidden: bool,
+    /// NavStack: when the next page id equals the nearest forward entry,
+    /// omitted / true calls Kit `forward()` (retained entity). `false`
+    /// forces a fresh `push()` and discards the forward branch.
+    #[serde(default, rename = "reuse-forward")]
+    pub reuse_forward: Option<bool>,
+    /// NavStack: same-id Kit `replace()` token. A changed integer or string
+    /// while the current `CljNavPage` entity is unchanged creates a fresh
+    /// entity and calls `replace()` (forward is kept). Unchanged across
+    /// rerenders is a no-op. Bound to that entity (not the catalog id) so
+    /// a later navigation cannot apply a stale bump to a different history
+    /// entry, including another instance of the same page id. Unrelated
+    /// rerenders do not transfer the binding; the first later token change
+    /// on the new entity rebinds, and only the next change may `replace()`.
+    #[serde(default, rename = "replace-generation")]
+    pub replace_generation: Option<Value>,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
     #[serde(default)]
     pub spread: Option<f32>,
@@ -2178,6 +2198,9 @@ mod tests {
             "transition-style": "slide",
             "overflow": "hidden",
             "overflow-hidden": true,
+            "reuse-forward": false,
+            "replace-generation": 2,
+            "on-forward-change": "cb-forward",
             "height": 180,
             "children": [
                 {"type": "nav-page", "id": "home", "children": [{"type": "label", "text": "Home"}]},
@@ -2195,6 +2218,9 @@ mod tests {
         assert_eq!(nav.transition_style.as_deref(), Some("slide"));
         assert_eq!(nav.overflow.as_deref(), Some("hidden"));
         assert!(nav.overflow_hidden);
+        assert_eq!(nav.reuse_forward, Some(false));
+        assert_eq!(nav.replace_generation, Some(json!(2)));
+        assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");
         assert_eq!(nav.children[0].id.as_deref(), Some("home"));

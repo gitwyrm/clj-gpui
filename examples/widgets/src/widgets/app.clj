@@ -64,7 +64,10 @@
            :split-id "split-a"
            :split-sizes nil
            :chat-count 3
-           :trail [:home]}))
+           :trail [:home]
+           :forward []
+           :reuse-forward? true
+           :replace-generation 0}))
 
 (defn- set-key [k]
   (fn [v]
@@ -227,7 +230,7 @@
    (ui/separator)
    (ui/skeleton {:width 220 :height 12})))
 
-(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail]}]
+(defn- overlay-panel [{:keys [dialog? alert-dialog? popover? hover-card? menu overlay-lock? tick batch-shift? close-hit dialog-open sheet? toasts sticky-toast? toast-hit trail forward reuse-forward? replace-generation]}]
   (ui/vstack
    {:gap 12}
    (ui/label (str "Menu " (pr-str menu)
@@ -350,12 +353,24 @@
                        :autohide false
                        :on-click #(swap! !state assoc :toast-hit tick)
                        :on-close #(swap! !state assoc :sticky-toast? false)}))
-   (ui/label (str "Trail " (pr-str trail)))
+   (ui/label (str "Trail " (pr-str trail) " · Forward " (pr-str forward)
+                  " · Gen " replace-generation))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (when (seq forward)
+      (ui/button "Forward" #(swap! !state update :trail conj (first forward))))
+    (when (> (count trail) 1)
+      (ui/button "Pop to root" #(swap! !state assoc :trail [(first trail)])))
+    (ui/button "Replace page" #(swap! !state update :replace-generation inc))
+    (ui/switch reuse-forward? (set-key :reuse-forward?) "Reuse forward"))
    (ui/nav-stack {:id "gallery-nav"
                   :stack trail
                   :transition 0.22
                   :transition-style :slide
                   :overflow :hidden
+                  :reuse-forward reuse-forward?
+                  :replace-generation replace-generation
+                  :on-forward-change #(swap! !state assoc :forward (vec %))
                   :height 180
                   :border "#3b4261"}
                  (ui/nav-page {:id :home :padding 12 :gap 8}
@@ -365,6 +380,8 @@
                               (ui/label "Detail" {:font-weight :semibold})
                               (ui/hstack {:gap 8}
                                          (ui/button "Back" #(swap! !state assoc :trail [:home]))
+                                         (ui/button "Open settings"
+                                                    #(swap! !state assoc :trail [:home :detail :settings]))
                                          (ui/button "Replace with settings"
                                                     #(swap! !state assoc :trail [:home :settings]))))
                  (ui/nav-page {:id :settings :padding 12 :gap 8}

@@ -8,9 +8,9 @@ use crate::mapping;
 use crate::protocol::{self, ChartLabelLine, Cmd, Item, Node};
 use chrono::NaiveDate;
 use gpui::{
-    AnyElement, App, Axis, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, linear_color_stop,
-    prelude::*, px, relative, size,
+    AnyElement, App, Axis, Context, Corners, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
+    linear_color_stop, prelude::*, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
@@ -90,43 +90,93 @@ pub fn color_sync(wanted: Option<Hsla>, current: Option<Hsla>) -> ColorSync {
     }
 }
 
-/// How to sync Kit `NavStackState` with Clojure's controlled page-id trail.
+/// One Kit history operation in a trail-sync plan.
 ///
-/// Clojure owns the trail. The host diffs and calls Kit `push` / `pop` /
-/// `replace` / `clear`. Re-adding a popped id is a new `Push` and discards
-/// Kit's forward branch (`forward` / `forward_views` are not wrapped).
+/// Clojure owns the trail. The host preserves the longest matching active
+/// prefix, then applies native `pop` / `pop_to_root` / `forward` / `push` /
+/// `replace`. `Rebuild` (`clear` + immediate pushes) is last resort: empty
+/// current, explicit `[]`, or a root id that cannot be `replace`d.
+/// `forward` is Kit-internal order: last is nearest. Growing by an id that
+/// matches that nearest entry is `Forward` unless `reuse_forward` is false
+/// (fresh `Push`, which discards the forward branch). `Replace` does not
+/// inspect forward. `Push` and `Rebuild` clear it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NavTrailOp {
-    Leave,
+pub enum NavTrailStep {
     Push(String),
     Pop,
+    Forward,
+    PopToRoot,
     Replace(String),
     Rebuild(Vec<String>),
 }
 
-pub fn nav_trail_sync(current: &[String], desired: &[String]) -> NavTrailOp {
+/// Kit operations that take `current` to `desired`. Empty means leave.
+pub fn nav_trail_sync(
+    current: &[String],
+    desired: &[String],
+    forward: &[String],
+    reuse_forward: bool,
+) -> Vec<NavTrailStep> {
     if current == desired {
-        return NavTrailOp::Leave;
+        return Vec::new();
     }
     if desired.is_empty() {
-        return NavTrailOp::Rebuild(Vec::new());
+        return vec![NavTrailStep::Rebuild(Vec::new())];
     }
     if current.is_empty() {
-        return NavTrailOp::Rebuild(desired.to_vec());
+        return vec![NavTrailStep::Rebuild(desired.to_vec())];
     }
-    if desired.len() == current.len() + 1 && desired.starts_with(current) {
-        return NavTrailOp::Push(desired[desired.len() - 1].clone());
+
+    let prefix = current
+        .iter()
+        .zip(desired.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    if current.len() == desired.len() && prefix + 1 == current.len() {
+        return vec![NavTrailStep::Replace(desired[prefix].clone())];
     }
-    if current.len() == desired.len() + 1 && current.starts_with(desired) {
-        return NavTrailOp::Pop;
+    if prefix == 0 {
+        return vec![NavTrailStep::Rebuild(desired.to_vec())];
     }
-    if current.len() == desired.len() {
-        let prefix = current.len() - 1;
-        if current[..prefix] == desired[..prefix] {
-            return NavTrailOp::Replace(desired[prefix].clone());
+
+    let mut steps = Vec::new();
+    let mut sim_current = current.to_vec();
+    let mut sim_forward = forward.to_vec();
+    let pops = sim_current.len() - prefix;
+    if prefix == 1 && pops > 1 {
+        steps.push(NavTrailStep::PopToRoot);
+        while sim_current.len() > 1 {
+            if let Some(id) = sim_current.pop() {
+                sim_forward.push(id);
+            }
+        }
+    } else {
+        for _ in 0..pops {
+            steps.push(NavTrailStep::Pop);
+            if let Some(id) = sim_current.pop() {
+                sim_forward.push(id);
+            }
         }
     }
-    NavTrailOp::Rebuild(desired.to_vec())
+
+    for id in &desired[prefix..] {
+        if reuse_forward && sim_forward.last() == Some(id) {
+            steps.push(NavTrailStep::Forward);
+            sim_current.push(sim_forward.pop().expect("nearest forward id"));
+        } else {
+            steps.push(NavTrailStep::Push(id.clone()));
+            sim_current.push(id.clone());
+            sim_forward.clear();
+        }
+    }
+    steps
+}
+
+/// Kit `forward_views()` order: nearest first (the id `forward()` restores).
+/// `forward` is Kit-internal order (last is nearest).
+pub fn nav_forward_view_ids<T>(forward: &[(String, T)]) -> Vec<String> {
+    forward.iter().rev().map(|(id, _)| id.clone()).collect()
 }
 
 /// Kit `Transition` seconds. `None` / non-finite / ≤0 means no animation.
@@ -162,6 +212,24 @@ pub fn nav_catalog(node: &Node) -> Vec<(String, Node)> {
         .iter()
         .filter_map(|child| nav_page_id(child).map(|id| (id, child.clone())))
         .collect()
+}
+
+/// Catalog ids that appear more than once, sorted. Repeated ids on the
+/// active trail are valid (distinct entities); duplicate *templates* share
+/// a HashMap key so lookup uses the last row.
+pub fn nav_duplicate_catalog_ids<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for id in ids {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    let mut dups: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    dups.sort();
+    dups
 }
 
 /// Controlled trail from Clojure `value`.
@@ -219,6 +287,110 @@ pub fn nav_uses_slide(style: Option<&str>) -> bool {
     )
 }
 
+/// Kit `forward()` vs a fresh `push()` when the new id equals the nearest
+/// forward entry. Omitted / true reuses the retained entity (default).
+/// `false` forces `push` and discards the forward branch, which Kit allows.
+pub fn nav_reuse_forward(flag: Option<bool>) -> bool {
+    flag.unwrap_or(true)
+}
+
+/// Wire `replace-generation`: integer or non-empty string. Omitted / null
+/// does not request a same-id `replace()`.
+pub fn nav_replace_token(value: Option<&Value>) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else {
+                let f = n.as_f64()?;
+                if f.is_finite() && f == f.trunc() {
+                    Some((f as i64).to_string())
+                } else {
+                    None
+                }
+            }
+        }
+        Some(_) => None,
+    }
+}
+
+/// Same-id Kit `replace()`: the trail is unchanged, a token is present, and
+/// that token last applied to this same `CljNavPage` entity with a different
+/// value. Catalog page ids are not identity — `[detail, detail]` is two
+/// entities. The first observation of a token is a latch (no replace). A
+/// token last bound to a different entity is not a replace, even when the
+/// catalog id matches. Forward is preserved (Kit `replace` keeps it).
+pub fn nav_same_id_replace(
+    current: &[String],
+    desired: &[String],
+    current_entity: Option<EntityId>,
+    last: Option<&(EntityId, String)>,
+    token: Option<&str>,
+) -> bool {
+    if current != desired || current.is_empty() {
+        return false;
+    }
+    let Some(entity) = current_entity else {
+        return false;
+    };
+    let Some(token) = token else {
+        return false;
+    };
+    match last {
+        Some((id, prev)) if *id == entity && prev != token => true,
+        _ => false,
+    }
+}
+
+/// Bind the observed token to a history-entry entity.
+pub fn nav_bind_replace_token(
+    entity: Option<EntityId>,
+    token: Option<&str>,
+) -> Option<(EntityId, String)> {
+    Some((entity?, token?.to_string()))
+}
+
+/// After the trail plan, bind `:replace-generation` from the existing
+/// `(entity, token)` pair and `slot.entries.last()` — never from
+/// `before == after`. No previous binding latches the current entity.
+/// A successful same-id `Replace` binds the newly created entity. If the
+/// current entity already owns the binding, keep it (a changed token on
+/// an unchanged trail already produced `Replace`). If the current entity
+/// differs and the token is unchanged, keep the old binding across any
+/// number of ordinary rerenders. If the current entity differs and the
+/// token changed, that first bump rebinds without `Replace` — including
+/// when navigation and the bump share a render. An omitted token does
+/// not clear the last binding.
+pub fn nav_commit_replace_binding(
+    replaced: bool,
+    current: Option<EntityId>,
+    token: Option<&str>,
+    last: Option<(EntityId, String)>,
+) -> Option<(EntityId, String)> {
+    let Some(bound) = nav_bind_replace_token(current, token) else {
+        return last;
+    };
+    if replaced || last.is_none() {
+        return Some(bound);
+    }
+    match last.as_ref() {
+        Some((entity, _)) if *entity == bound.0 => last,
+        Some((_, prev)) if prev == &bound.1 => last,
+        _ => Some(bound),
+    }
+}
+
 /// Kit clipping is application-owned. Opt in with `overflow: hidden` or
 /// `overflow-hidden: true`. Omitted does not clip.
 pub fn nav_clip(overflow: Option<&str>, overflow_hidden: bool) -> bool {
@@ -237,7 +409,11 @@ pub fn nav_page_path(stack_key: &str, index: usize, page_id: &str) -> String {
 
 /// Kit showcase slide: push/replace enter from the right, pop exits the
 /// same way, the covered page drifts. Installed only when
-/// `:transition-style :slide`.
+/// `:transition-style :slide`. A later custom `item` wrap must pass the
+/// complete `NavPage` surface: the mounted `view()` plus `index`, `phase`,
+/// `operation`, and eased `progress`. The renderer must keep access to that
+/// retained page element rather than only exposing metadata or painting
+/// unrelated replacement content.
 pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
     use gpui::base::NavOperation;
     use gpui::base::motion::PresencePhase;
@@ -1886,7 +2062,9 @@ impl CljNavPage {
 
     /// Replace the live catalog template. Must `notify` so GPUI re-renders
     /// with the current export-tree callback ids (an unchanged trail can
-    /// still receive `cb-42` in place of the painted `cb-17`).
+    /// still receive `cb-42` in place of the painted `cb-17`). Forward-branch
+    /// pages get the same update so a later `forward()` cannot restore a
+    /// stale callback id.
     pub fn replace_live(&mut self, node: Node, cx: &mut Context<Self>) {
         *self.live.borrow_mut() = node;
         cx.notify();
@@ -2144,6 +2322,7 @@ pub fn sync_input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::EntityId;
     use gpui_component::plot::shape::{BarAlignment, SankeyAlign, SankeyValueScale};
     use serde_json::json;
 
@@ -3422,47 +3601,440 @@ mod tests {
         assert!(!slots.contains_key("split-b"));
     }
 
+    fn owned(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    fn plan(
+        current: &[&str],
+        desired: &[&str],
+        forward: &[&str],
+        reuse: bool,
+    ) -> Vec<NavTrailStep> {
+        nav_trail_sync(&owned(current), &owned(desired), &owned(forward), reuse)
+    }
+
+    fn apply_id_plan(entries: &mut Vec<String>, forward: &mut Vec<String>, steps: &[NavTrailStep]) {
+        use NavTrailStep::*;
+        for step in steps {
+            match step {
+                Push(id) => {
+                    entries.push(id.clone());
+                    forward.clear();
+                }
+                Pop => {
+                    if let Some(id) = entries.pop() {
+                        forward.push(id);
+                    }
+                }
+                Forward => {
+                    if let Some(id) = forward.pop() {
+                        entries.push(id);
+                    }
+                }
+                PopToRoot => {
+                    while entries.len() > 1 {
+                        forward.push(entries.pop().unwrap());
+                    }
+                }
+                Replace(id) => {
+                    if let Some(last) = entries.last_mut() {
+                        *last = id.clone();
+                    } else {
+                        entries.push(id.clone());
+                    }
+                }
+                Rebuild(ids) => {
+                    *entries = ids.clone();
+                    forward.clear();
+                }
+            }
+        }
+    }
+
     #[test]
     fn nav_trail_sync_cases() {
-        use super::NavTrailOp::*;
-        assert_eq!(nav_trail_sync(&["a".into()], &["a".into()]), Leave);
+        use super::NavTrailStep::*;
+        assert!(plan(&["a"], &["a"], &[], true).is_empty());
+        assert_eq!(plan(&["a"], &["a", "b"], &[], true), vec![Push("b".into())]);
+        assert_eq!(plan(&["a", "b"], &["a"], &[], true), vec![Pop]);
         assert_eq!(
-            nav_trail_sync(&["a".into()], &["a".into(), "b".into()]),
-            Push("b".into())
+            plan(&["a", "b"], &["a", "c"], &[], true),
+            vec![Replace("c".into())]
+        );
+        assert_eq!(plan(&["a"], &["z"], &[], true), vec![Replace("z".into())]);
+        assert_eq!(
+            plan(&["a", "b"], &["z"], &[], true),
+            vec![Rebuild(vec!["z".into()])]
+        );
+        assert_eq!(plan(&["a"], &[], &[], true), vec![Rebuild(vec![])]);
+        assert_eq!(
+            plan(&[], &["a"], &[], true),
+            vec![Rebuild(vec!["a".into()])]
+        );
+        assert_eq!(plan(&["a", "b", "c"], &["a"], &[], true), vec![PopToRoot]);
+        assert_eq!(
+            plan(&["a", "b", "c", "d"], &["a"], &[], true),
+            vec![PopToRoot]
+        );
+        assert_eq!(plan(&["a", "b", "c"], &["a", "b"], &[], true), vec![Pop]);
+        assert_eq!(
+            plan(&["home"], &["home", "home"], &[], true),
+            vec![Push("home".into())]
+        );
+        assert_eq!(plan(&["home", "home"], &["home"], &[], true), vec![Pop]);
+        assert_eq!(
+            plan(&["h", "a", "b", "c"], &["h", "a"], &[], true),
+            vec![Pop, Pop]
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["a".into()]),
-            Pop
+            plan(&["h", "a", "b"], &["h", "a", "b", "c"], &[], true),
+            vec![Push("c".into())]
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["a".into(), "c".into()]),
-            Replace("c".into())
+            plan(&["h", "a", "b"], &["h", "c"], &[], true),
+            vec![PopToRoot, Push("c".into())]
         );
         assert_eq!(
-            nav_trail_sync(&["a".into()], &["z".into()]),
-            Replace("z".into())
+            plan(&["h", "a", "b", "c"], &["h", "x"], &[], true),
+            vec![PopToRoot, Push("x".into())]
+        );
+    }
+
+    #[test]
+    fn nav_trail_sync_forward_vs_push() {
+        use super::NavTrailStep::*;
+        assert_eq!(plan(&["a"], &["a", "b"], &["b"], true), vec![Forward]);
+        assert_eq!(
+            plan(&["a"], &["a", "c"], &["b"], true),
+            vec![Push("c".into())]
+        );
+        assert_eq!(plan(&["a"], &["a", "b"], &["c", "b"], true), vec![Forward]);
+        assert_eq!(
+            plan(&["a"], &["a", "c"], &["c", "b"], true),
+            vec![Push("c".into())]
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into()], &["z".into()]),
-            Rebuild(vec!["z".into()])
-        );
-        assert_eq!(nav_trail_sync(&["a".into()], &[]), Rebuild(vec![]));
-        assert_eq!(
-            nav_trail_sync(&[], &["a".into()]),
-            Rebuild(vec!["a".into()])
+            plan(&["home"], &["home", "home"], &["home"], true),
+            vec![Forward]
         );
         assert_eq!(
-            nav_trail_sync(&["a".into(), "b".into(), "c".into()], &["a".into()]),
-            Rebuild(vec!["a".into()])
+            plan(&["h"], &["h", "d", "s"], &["s", "d"], true),
+            vec![Forward, Forward]
         );
         assert_eq!(
-            nav_trail_sync(&["home".into()], &["home".into(), "home".into()]),
-            Push("home".into())
+            plan(&["h", "a"], &["h", "a", "b", "x"], &["c", "b"], true),
+            vec![Forward, Push("x".into())]
         );
         assert_eq!(
-            nav_trail_sync(&["home".into(), "home".into()], &["home".into()]),
-            Pop
+            plan(&["a"], &["a", "b"], &["b"], false),
+            vec![Push("b".into())]
         );
+        assert_eq!(
+            plan(&["h"], &["h", "d", "s"], &["s", "d"], false),
+            vec![Push("d".into()), Push("s".into())]
+        );
+    }
+
+    #[test]
+    fn nav_trail_plan_retains_forward_across_multi_pop_and_forward() {
+        use super::NavTrailStep::*;
+        let mut entries = owned(&["home", "a", "b", "c"]);
+        let mut forward = Vec::new();
+        let steps = plan(&["home", "a", "b", "c"], &["home", "a"], &[], true);
+        assert_eq!(steps, vec![Pop, Pop]);
+        apply_id_plan(&mut entries, &mut forward, &steps);
+        assert_eq!(entries, owned(&["home", "a"]));
+        assert_eq!(forward, owned(&["c", "b"]));
+        assert_eq!(
+            nav_forward_view_ids(
+                &forward
+                    .iter()
+                    .map(|id| (id.clone(), ()))
+                    .collect::<Vec<_>>()
+            ),
+            owned(&["b", "c"])
+        );
+
+        let steps = plan(&["home", "a"], &["home", "a", "b", "c"], &["c", "b"], true);
+        assert_eq!(steps, vec![Forward, Forward]);
+        apply_id_plan(&mut entries, &mut forward, &steps);
+        assert_eq!(entries, owned(&["home", "a", "b", "c"]));
+        assert!(forward.is_empty());
+
+        let mut entries = owned(&["home", "a", "b", "c"]);
+        let mut forward = Vec::new();
+        let steps = plan(&["home", "a", "b", "c"], &["home", "x"], &[], true);
+        assert_eq!(steps, vec![PopToRoot, Push("x".into())]);
+        apply_id_plan(&mut entries, &mut forward, &steps);
+        assert_eq!(entries, owned(&["home", "x"]));
+        assert!(forward.is_empty());
+    }
+
+    #[test]
+    fn nav_replace_token_parses_int_and_string() {
+        assert_eq!(nav_replace_token(None), None);
+        assert_eq!(nav_replace_token(Some(&json!(null))), None);
+        assert_eq!(nav_replace_token(Some(&json!(""))), None);
+        assert_eq!(nav_replace_token(Some(&json!(2))), Some("2".into()));
+        assert_eq!(nav_replace_token(Some(&json!(0))), Some("0".into()));
+        assert_eq!(
+            nav_replace_token(Some(&json!("session-9"))),
+            Some("session-9".into())
+        );
+        assert_eq!(nav_replace_token(Some(&json!(true))), None);
+        let detail = EntityId::from(7u64);
+        assert_eq!(
+            nav_bind_replace_token(Some(detail), Some("2")),
+            Some((detail, "2".into()))
+        );
+        assert_eq!(nav_bind_replace_token(None, Some("2")), None);
+    }
+
+    #[test]
+    fn nav_same_id_replace_requires_token_change_on_same_entity() {
+        let trail = owned(&["home", "detail"]);
+        let detail = EntityId::from(10u64);
+        let other = EntityId::from(11u64);
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            None,
+            Some("1")
+        ));
+        let last = nav_bind_replace_token(Some(detail), Some("1"));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            last.as_ref(),
+            Some("1")
+        ));
+        assert!(nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            last.as_ref(),
+            None
+        ));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &owned(&["home"]),
+            Some(detail),
+            last.as_ref(),
+            Some("2")
+        ));
+        let home = owned(&["home"]);
+        assert!(!nav_same_id_replace(
+            &home,
+            &home,
+            Some(other),
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(other),
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(
+            &[],
+            &[],
+            None,
+            last.as_ref(),
+            Some("2")
+        ));
+    }
+
+    #[test]
+    fn nav_replace_generation_rebinds_after_pop_of_repeated_id() {
+        let stacked = owned(&["home", "detail", "detail"]);
+        let revealed = owned(&["home", "detail"]);
+        let detail_a = EntityId::from(2u64);
+        let detail_b = EntityId::from(3u64);
+        let replacement = EntityId::from(4u64);
+        let mut last = nav_bind_replace_token(Some(detail_b), Some("1"));
+
+        let replace = nav_same_id_replace(
+            &stacked,
+            &revealed,
+            Some(detail_b),
+            last.as_ref(),
+            Some("1"),
+        );
+        assert!(!replace);
+        last = nav_commit_replace_binding(replace, Some(detail_a), Some("1"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_b), Some("1")));
+
+        last = nav_commit_replace_binding(false, Some(detail_a), Some("1"), last);
+        assert_eq!(
+            last,
+            nav_bind_replace_token(Some(detail_b), Some("1")),
+            "unrelated rerender must not transfer the binding to the revealed entity"
+        );
+        last = nav_commit_replace_binding(false, Some(detail_a), Some("1"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_b), Some("1")));
+
+        let replace = nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last.as_ref(),
+            Some("2"),
+        );
+        assert!(
+            !replace,
+            "first bump on the revealed same-id entity rebinds"
+        );
+        last = nav_commit_replace_binding(replace, Some(detail_a), Some("2"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_a), Some("2")));
+
+        let replace = nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last.as_ref(),
+            Some("3"),
+        );
+        assert!(replace);
+        last = nav_commit_replace_binding(replace, Some(replacement), Some("3"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(replacement), Some("3")));
+        assert!(!nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(replacement),
+            last.as_ref(),
+            Some("3")
+        ));
+
+        let last_b = nav_bind_replace_token(Some(detail_b), Some("1"));
+        assert!(
+            nav_same_id_replace(
+                &stacked,
+                &stacked,
+                Some(detail_b),
+                last_b.as_ref(),
+                Some("2")
+            ),
+            "forward back to the retained entity is a replace of that instance"
+        );
+        assert!(!nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last_b.as_ref(),
+            Some("2")
+        ));
+
+        assert_eq!(
+            nav_commit_replace_binding(false, Some(detail_a), None, last_b.clone()),
+            last_b
+        );
+
+        let mut same_frame = nav_bind_replace_token(Some(detail_b), Some("1"));
+        let replace = nav_same_id_replace(
+            &stacked,
+            &revealed,
+            Some(detail_b),
+            same_frame.as_ref(),
+            Some("2"),
+        );
+        assert!(!replace);
+        same_frame = nav_commit_replace_binding(replace, Some(detail_a), Some("2"), same_frame);
+        assert_eq!(
+            same_frame,
+            nav_bind_replace_token(Some(detail_a), Some("2")),
+            "navigation plus a token bump in one render rebinds without Replace"
+        );
+        assert!(nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            same_frame.as_ref(),
+            Some("3")
+        ));
+    }
+
+    #[test]
+    fn nav_same_id_replace_preserves_forward_branch() {
+        use super::NavTrailStep::*;
+        let trail = owned(&["home", "detail"]);
+        let detail = EntityId::from(10u64);
+        let last = nav_bind_replace_token(Some(detail), Some("1"));
+        assert!(
+            plan(
+                &["home", "detail"],
+                &["home", "detail"],
+                &["settings"],
+                true
+            )
+            .is_empty()
+        );
+        assert!(nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            last.as_ref(),
+            Some("2")
+        ));
+        let mut entries = trail.clone();
+        let mut forward = owned(&["settings"]);
+        apply_id_plan(&mut entries, &mut forward, &[Replace("detail".into())]);
+        assert_eq!(entries, owned(&["home", "detail"]));
+        assert_eq!(forward, owned(&["settings"]));
+        assert_eq!(
+            nav_forward_view_ids(
+                &forward
+                    .iter()
+                    .map(|id| (id.clone(), ()))
+                    .collect::<Vec<_>>()
+            ),
+            owned(&["settings"])
+        );
+    }
+
+    #[test]
+    fn nav_host_forward_branch_matches_kit_history() {
+        // Kit History: pop pushes onto forward (last = nearest);
+        // pop_to_root backs until the root; forward_views is reverse;
+        // push clears; replace keeps forward.
+        let mut entries = vec!["h".to_string(), "d".to_string(), "s".to_string()];
+        let mut forward: Vec<(String, ())> = Vec::new();
+        while entries.len() > 1 {
+            forward.push((entries.pop().unwrap(), ()));
+        }
+        assert_eq!(entries, vec!["h".to_string()]);
+        assert_eq!(
+            forward
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s", "d"]
+        );
+        assert_eq!(
+            nav_forward_view_ids(&forward),
+            vec!["d".to_string(), "s".to_string()]
+        );
+        entries.push(forward.pop().unwrap().0);
+        assert_eq!(entries, vec!["h".to_string(), "d".to_string()]);
+        assert_eq!(nav_forward_view_ids(&forward), vec!["s".to_string()]);
+        entries.push("x".to_string());
+        forward.clear();
+        assert!(nav_forward_view_ids(&forward).is_empty());
+        forward.push((entries.pop().unwrap(), ()));
+        *entries.last_mut().unwrap() = "y".to_string();
+        assert_eq!(entries, vec!["h".to_string(), "y".to_string()]);
+        assert_eq!(nav_forward_view_ids(&forward), vec!["x".to_string()]);
     }
 
     #[test]
@@ -3552,8 +4124,8 @@ mod tests {
         // Filtering the typo would yield [:home] and nav_trail_sync would Pop.
         let current = vec!["home".to_string(), "detail".to_string()];
         assert_eq!(
-            nav_trail_sync(&current, &["home".to_string()]),
-            NavTrailOp::Pop
+            nav_trail_sync(&current, &["home".to_string()], &[], true),
+            vec![NavTrailStep::Pop]
         );
 
         let all_unknown = Node {
@@ -3571,8 +4143,8 @@ mod tests {
         assert_eq!(nav_desired(&all_unknown, &catalog).ids(&catalog), None);
         // Filtering an all-unknown trail would yield [] and clear the stack.
         assert_eq!(
-            nav_trail_sync(&current, &[]),
-            NavTrailOp::Rebuild(Vec::new())
+            nav_trail_sync(&current, &[], &[], true),
+            vec![NavTrailStep::Rebuild(Vec::new())]
         );
     }
 
@@ -3586,6 +4158,9 @@ mod tests {
         assert!(nav_clip(Some("hidden"), false));
         assert!(nav_clip(None, true));
         assert!(!nav_clip(Some("visible"), false));
+        assert!(nav_reuse_forward(None));
+        assert!(nav_reuse_forward(Some(true)));
+        assert!(!nav_reuse_forward(Some(false)));
     }
 
     #[test]
@@ -3654,5 +4229,15 @@ mod tests {
         };
         let ids: Vec<String> = nav_catalog(&node).into_iter().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["home".to_string(), "detail".to_string()]);
+        assert!(nav_duplicate_catalog_ids(ids.iter().map(String::as_str)).is_empty());
+    }
+
+    #[test]
+    fn nav_duplicate_catalog_ids_are_sorted_unique() {
+        assert_eq!(
+            nav_duplicate_catalog_ids(["home", "detail", "home", "settings", "detail"]),
+            vec!["detail".to_string(), "home".to_string()]
+        );
+        assert!(nav_duplicate_catalog_ids(["home", "detail"]).is_empty());
     }
 }

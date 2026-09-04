@@ -166,7 +166,7 @@
 (def ^:private callback-keys
   [:on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
-   :on-open-change])
+   :on-open-change :on-forward-change])
 
 (declare sanitize)
 

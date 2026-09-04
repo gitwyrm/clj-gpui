@@ -1226,7 +1226,38 @@
                             (ui/nav-page {:id :home} "Home"))]
     (is (= 0.22 (:duration timed)))
     (is (nil? (:transition-style timed)))
-    (is (nil? (:overflow timed)))))
+    (is (nil? (:overflow timed))))
+  (let [fwd (ui/nav-stack {:id "nav" :stack [:home]
+                           :on-forward-change (fn [_])}
+                          (ui/nav-page {:id :home} "Home")
+                          (ui/nav-page {:id :detail} "Detail"))]
+    (is (fn? (:on-forward-change fwd)))
+    (is (nil? (:reuse-forward fwd)))
+    (is (nil? (:replace-generation fwd)))
+    (is (= "home" (get-in fwd [:children 0 :id])))
+    (is (= "detail" (get-in fwd [:children 1 :id]))))
+  (let [fresh (ui/nav-stack {:id "nav" :stack [:home :detail]
+                             :reuse-forward false
+                             :replace-generation 2}
+                            (ui/nav-page {:id :home} "Home")
+                            (ui/nav-page {:id :detail} "Detail"))]
+    (is (false? (:reuse-forward fresh)))
+    (is (= 2 (:replace-generation fresh)))))
+
+(deftest nav-stack-forward-change-restores-page-ids
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/nav-stack {:id "nav" :stack [:home]
+                                 :on-forward-change #(reset! got %)}
+                                (ui/nav-page {:id :home} "Home")
+                                (ui/nav-page {:id :detail} "Detail")
+                                (ui/nav-page {:id :settings} "Settings")))]
+    (is (string? (:on-forward-change exported)))
+    (is (= {:ok true :id (:on-forward-change exported)}
+           (runtime/invoke-callback! (:on-forward-change exported)
+                                     ["detail" "settings"])))
+    (is (= [:detail :settings] @got))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
