@@ -419,6 +419,11 @@
 (defn- docs-panel [_]
   (ui/vstack
    {:gap 12}
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/progress-circle 68 {:size :large :color "#7aa2f7"})
+    (ui/shimmer "Generating a response…" {:duration 1 :reverse true
+                                          :highlight-color "#c0caf5"}))
    (ui/label "Disk-style horizontal bars (cljdu)" {:font-size 13})
    (ui/horizontal-bar-chart
     [{:id :src :label "src" :value 412}
@@ -467,12 +472,7 @@
                   {:id :b :label "B" :value 5}]
                  {:width 180 :height 160 :inner-radius 42 :labels true})
    (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"
-                {:height 140})
-   (ui/hstack
-    {:gap 12 :align :center}
-    (ui/progress-circle 68 {:size :large :color "#7aa2f7"})
-    (ui/shimmer "Generating a response…" {:duration 1 :reverse true
-                                          :highlight-color "#c0caf5"}))))
+                {:height 140})))
 
 (defn- shell-panel [{:keys [nav sidebar-collapsed setting-notify setting-theme setting-accent split-id]}]
   (ui/vstack
