@@ -18,6 +18,9 @@
   (is (some? (ns-resolve 'gpui.ui 'combobox)))
   (is (some? (ns-resolve 'gpui.ui 'rating)))
   (is (some? (ns-resolve 'gpui.ui 'stepper)))
+  (is (some? (ns-resolve 'gpui.ui 'pagination)))
+  (is (some? (ns-resolve 'gpui.ui 'progress-circle)))
+  (is (some? (ns-resolve 'gpui.ui 'shimmer)))
   (is (some? (ns-resolve 'gpui.ui 'table-header)))
   (is (some? (ns-resolve 'gpui.ui 'table-body)))
   (is (some? (ns-resolve 'gpui.ui 'table-footer)))
@@ -166,6 +169,37 @@
   (testing "progress clamps in host; Clojure passes the number"
     (is (= 45 (:value (ui/progress 45))))
     (is (= 0 (:value (ui/progress nil)))))
+  (testing "progress-circle pagination shimmer"
+    (let [n (ui/progress-circle 45 {:size :large :loading true :color "#3366ff"}
+                                (ui/label "45"))]
+      (is (= :progress-circle (:type n)))
+      (is (= 45 (:value n)))
+      (is (true? (:loading n)))
+      (is (= "large" (:control-size n)))
+      (is (nil? (:size n)))
+      (is (= :label (get-in n [:children 0 :type]))))
+    (let [n (ui/progress-circle 10 (ui/label "a") (ui/label "b"))]
+      (is (= ["a" "b"] (mapv :text (:children n)))))
+    (is (= 0 (:value (ui/progress-circle nil))))
+    (let [n (ui/pagination 3 {:total 12 :compact true :visible-pages 7 :size :small})]
+      (is (= :pagination (:type n)))
+      (is (= 3 (:value n)))
+      (is (= 12 (:total n)))
+      (is (true? (:compact n)))
+      (is (= 7 (:visible-pages n)))
+      (is (= "small" (:control-size n))))
+    (is (= 1 (:value (ui/pagination nil))))
+    (let [n (ui/shimmer "Thinking…" {:duration 1 :spread 0.4 :spread-px 48
+                                     :reverse true :once true
+                                     :highlight-color "#ffffff"})]
+      (is (= :shimmer (:type n)))
+      (is (= "Thinking…" (:text n)))
+      (is (= 1 (:duration n)))
+      (is (= 0.4 (:spread n)))
+      (is (= 48 (:spread-px n)))
+      (is (true? (:reverse n)))
+      (is (true? (:once n)))
+      (is (= "#ffffff" (:highlight-color n)))))
   (testing "separator"
     (is (= :separator (:type (ui/separator))))
     (is (= "or" (:text (ui/separator "or"))))

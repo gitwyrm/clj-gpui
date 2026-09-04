@@ -803,6 +803,33 @@ pub struct Node {
     /// Sankey value labels. Default true (convenience; Kit draws none unless set).
     #[serde(default, rename = "value-label")]
     pub value_label: Option<bool>,
+    /// Pagination total pages. Kit default 1; Kit clamps to ≥1.
+    #[serde(default)]
+    pub total: Option<f32>,
+    /// Pagination visible page buttons. Kit default 5. Omitted leaves Kit's default.
+    #[serde(default, rename = "visible-pages")]
+    pub visible_pages: Option<f32>,
+    /// ProgressCircle indeterminate animation. When true, Kit ignores `value`.
+    #[serde(default)]
+    pub loading: bool,
+    /// ShimmerText sweep duration in seconds. Kit default 2. Omitted leaves Kit's default.
+    #[serde(default)]
+    pub duration: Option<f32>,
+    /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
+    #[serde(default)]
+    pub spread: Option<f32>,
+    /// ShimmerText absolute highlight half-width in pixels. Wins over `spread` when both set.
+    #[serde(default, rename = "spread-px")]
+    pub spread_px: Option<f32>,
+    /// ShimmerText right-to-left sweep. Kit default false.
+    #[serde(default)]
+    pub reverse: bool,
+    /// ShimmerText single sweep instead of a loop. Kit default false.
+    #[serde(default, rename = "once")]
+    pub once: bool,
+    /// ShimmerText highlight hex. Omitted follows theme/text color. Not layout `color`.
+    #[serde(default, rename = "highlight-color")]
+    pub highlight_color: Option<String>,
 }
 
 impl Node {
@@ -1529,6 +1556,56 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
+        assert_eq!(PROTOCOL_VERSION, 10);
+    }
+
+    #[test]
+    fn decodes_pagination_progress_circle_shimmer() {
+        let pagination: Node = serde_json::from_value(json!({
+            "type": "pagination",
+            "value": 3,
+            "total": 10,
+            "visible-pages": 5,
+            "compact": true
+        }))
+        .unwrap();
+        assert_eq!(pagination.kind, "pagination");
+        assert_eq!(pagination.number_value(), Some(3.0));
+        assert_eq!(pagination.total, Some(10.0));
+        assert_eq!(pagination.visible_pages, Some(5.0));
+        assert!(pagination.compact);
+
+        let circle: Node = serde_json::from_value(json!({
+            "type": "progress-circle",
+            "value": 45,
+            "loading": true,
+            "color": "#3366ff",
+            "accessibility-label": "Upload progress"
+        }))
+        .unwrap();
+        assert_eq!(circle.kind, "progress-circle");
+        assert!(circle.loading);
+        assert_eq!(
+            circle.accessibility_label.as_deref(),
+            Some("Upload progress")
+        );
+
+        let shimmer: Node = serde_json::from_value(json!({
+            "type": "shimmer",
+            "text": "Thinking…",
+            "duration": 1.5,
+            "spread": 0.4,
+            "reverse": true,
+            "once": true,
+            "highlight-color": "#ffffff"
+        }))
+        .unwrap();
+        assert_eq!(shimmer.kind, "shimmer");
+        assert_eq!(shimmer.duration, Some(1.5));
+        assert_eq!(shimmer.spread, Some(0.4));
+        assert!(shimmer.reverse);
+        assert!(shimmer.once);
+        assert_eq!(shimmer.highlight_color.as_deref(), Some("#ffffff"));
         assert_eq!(PROTOCOL_VERSION, 10);
     }
 

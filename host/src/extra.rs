@@ -171,6 +171,55 @@ pub fn rating_max_then_value(node: &Node) -> (usize, usize) {
     (max, rating_value(node))
 }
 
+fn finite_usize(value: Option<f32>) -> Option<usize> {
+    value
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+}
+
+/// Pagination current page. Kit default is 1; Kit clamps to ≥1.
+pub fn pagination_current_page(node: &Node) -> usize {
+    finite_usize(node.number_value()).unwrap_or(1)
+}
+
+/// Pagination total pages. Kit default is 1; Kit clamps to ≥1.
+pub fn pagination_total_pages(node: &Node) -> usize {
+    finite_usize(node.total).unwrap_or(1)
+}
+
+/// Pagination visible page buttons. `None` leaves Kit's default (5).
+pub fn pagination_visible_pages(node: &Node) -> Option<usize> {
+    finite_usize(node.visible_pages)
+}
+
+/// ProgressCircle percentage. Kit `.value()` clamps to 0..=100.
+pub fn progress_circle_value(node: &Node) -> f32 {
+    node.number_value().filter(|n| n.is_finite()).unwrap_or(0.0)
+}
+
+/// ShimmerText duration in seconds. `None` leaves Kit's 2s default.
+/// Negative / non-finite values are omitted (`Duration` cannot represent them).
+pub fn shimmer_duration_secs(node: &Node) -> Option<f32> {
+    node.duration.filter(|n| n.is_finite() && *n >= 0.0)
+}
+
+/// ShimmerText highlight half-width. `spread-px` wins when both are set.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShimmerSpreadSpec {
+    Relative(f32),
+    Absolute(f32),
+}
+
+pub fn shimmer_spread(node: &Node) -> Option<ShimmerSpreadSpec> {
+    if let Some(px) = node.spread_px.filter(|n| n.is_finite()) {
+        Some(ShimmerSpreadSpec::Absolute(px))
+    } else {
+        node.spread
+            .filter(|n| n.is_finite())
+            .map(ShimmerSpreadSpec::Relative)
+    }
+}
+
 /// Stepper selected index from a wire id, falling back to a numeric index.
 pub fn stepper_selected_index(items: &[Item], value: Option<&str>) -> usize {
     let Some(value) = value else {
@@ -1737,6 +1786,88 @@ mod tests {
         assert_eq!(stepper_selected_index(&steps, Some("pay")), 1);
         assert_eq!(stepper_selected_index(&steps, Some("0")), 0);
         assert_eq!(stepper_selected_index(&steps, None), 0);
+    }
+
+    #[test]
+    fn pagination_pages_follow_kit_defaults() {
+        let omitted: Node = serde_json::from_value(json!({"type": "pagination"})).unwrap();
+        assert_eq!(pagination_current_page(&omitted), 1);
+        assert_eq!(pagination_total_pages(&omitted), 1);
+        assert_eq!(pagination_visible_pages(&omitted), None);
+        let node: Node = serde_json::from_value(json!({
+            "type": "pagination",
+            "value": 4,
+            "total": 12,
+            "visible-pages": 7,
+            "compact": true
+        }))
+        .unwrap();
+        assert_eq!(pagination_current_page(&node), 4);
+        assert_eq!(pagination_total_pages(&node), 12);
+        assert_eq!(pagination_visible_pages(&node), Some(7));
+        assert!(node.compact);
+        let zero: Node = serde_json::from_value(json!({
+            "type": "pagination",
+            "value": 0,
+            "total": 0
+        }))
+        .unwrap();
+        assert_eq!(pagination_current_page(&zero), 0);
+        assert_eq!(pagination_total_pages(&zero), 0);
+    }
+
+    #[test]
+    fn progress_circle_and_shimmer_options() {
+        let circle: Node = serde_json::from_value(json!({
+            "type": "progress-circle",
+            "value": 72.5,
+            "loading": true,
+            "color": "#3366ff",
+            "accessibility-label": "Upload"
+        }))
+        .unwrap();
+        assert_eq!(progress_circle_value(&circle), 72.5);
+        assert!(circle.loading);
+        assert_eq!(circle.accessibility_label.as_deref(), Some("Upload"));
+        let over: Node = serde_json::from_value(json!({
+            "type": "progress-circle",
+            "value": 150
+        }))
+        .unwrap();
+        assert_eq!(progress_circle_value(&over), 150.0);
+        let shimmer: Node = serde_json::from_value(json!({
+            "type": "shimmer",
+            "text": "Thinking…",
+            "duration": 0,
+            "spread": 0.4,
+            "spread-px": 48,
+            "reverse": true,
+            "once": true,
+            "highlight-color": "#ffffff"
+        }))
+        .unwrap();
+        assert_eq!(shimmer_duration_secs(&shimmer), Some(0.0));
+        match shimmer_spread(&shimmer) {
+            Some(ShimmerSpreadSpec::Absolute(px)) => assert_eq!(px, 48.0),
+            other => panic!("expected spread-px to win, got {other:?}"),
+        }
+        assert!(shimmer.reverse);
+        assert!(shimmer.once);
+        let relative: Node = serde_json::from_value(json!({
+            "type": "shimmer",
+            "spread": 0.12
+        }))
+        .unwrap();
+        match shimmer_spread(&relative) {
+            Some(ShimmerSpreadSpec::Relative(n)) => assert_eq!(n, 0.12),
+            other => panic!("expected relative spread, got {other:?}"),
+        }
+        let bad: Node = serde_json::from_value(json!({
+            "type": "shimmer",
+            "duration": -1
+        }))
+        .unwrap();
+        assert_eq!(shimmer_duration_secs(&bad), None);
     }
 
     #[test]

@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, and `ui/stepper` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, and `ui/shimmer` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -247,6 +247,10 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
                           :on-change set-mode! :orientation :horizontal})
 (ui/slider volume {:min 0 :max 100 :on-change set-volume!})
 (ui/progress 45)
+(ui/progress-circle 45 {:size :large :color "#3366ff"} (ui/label "45"))
+(ui/progress-circle nil {:loading true})
+(ui/shimmer "Thinking…")
+(ui/shimmer "Indexing…" {:duration 1 :spread 0.4 :reverse true})
 (ui/select selected {:options [{:id :clj :label "Clojure"} "Rust"]
                      :placeholder "Language"
                      :searchable true
@@ -304,6 +308,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/rating 3 {:max 5 :on-change set!})
 (ui/stepper :pay {:items [{:id :cart :label "Cart"} {:id :pay :label "Pay"}]
                   :on-change set-step!})
+(ui/pagination 3 {:total 10 :on-change set-page!})
 (ui/tree [{:id :src :label "src" :expanded true
            :items [{:id :lib :label "lib.rs"}]}]
          {:on-change set-node!})

@@ -48,6 +48,7 @@
            :combo-multi [:clj]
            :stars 3
            :step :pay
+           :page 4
            :vlist-sel :r0
            :nav :home
            :sidebar-collapsed false
@@ -61,7 +62,7 @@
   (fn [v]
     (swap! !state assoc k v)))
 
-(defn- general-panel [{:keys [notify? bold? theme-mode volume lang]}]
+(defn- general-panel [{:keys [notify? bold? theme-mode volume lang page]}]
   (ui/vstack
    {:gap 12}
    (ui/hstack
@@ -81,6 +82,18 @@
                        :tooltip "0–100"
                        :on-change (set-key :volume)}))
    (ui/progress volume {:tooltip "Mirrors the slider"})
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/progress-circle volume {:size :large :color "#3366ff"
+                                :accessibility-label "Volume"}
+                        (ui/label (str volume)))
+    (ui/progress-circle nil {:loading true :size :large
+                             :accessibility-label "Syncing"})
+    (ui/shimmer "Indexing project…" {:id "shimmer-index"}))
+   (ui/label (str "Page " page))
+   (ui/pagination page {:id "pages" :total 12 :on-change (set-key :page)})
+   (ui/pagination page {:id "pages-compact" :total 12 :compact true
+                        :on-change (set-key :page)})
    (ui/hstack
     {:gap 8 :align :center}
     (ui/select lang
@@ -406,6 +419,11 @@
 (defn- docs-panel [_]
   (ui/vstack
    {:gap 12}
+   (ui/hstack
+    {:gap 12 :align :center}
+    (ui/progress-circle 68 {:size :large :color "#7aa2f7"})
+    (ui/shimmer "Generating a response…" {:duration 1 :reverse true
+                                          :highlight-color "#c0caf5"}))
    (ui/label "Disk-style horizontal bars (cljdu)" {:font-size 13})
    (ui/horizontal-bar-chart
     [{:id :src :label "src" :value 412}

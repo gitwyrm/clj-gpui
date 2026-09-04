@@ -37,8 +37,9 @@ use gpui_component::{
     list::{List, ListEvent, ListState},
     menu::{ContextMenuExt as _, DropdownMenu as _},
     notification::Notification,
+    pagination::Pagination,
     popover::Popover,
-    progress::Progress,
+    progress::{Progress, ProgressCircle},
     radio::{Radio, RadioGroup},
     rating::Rating,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
@@ -46,6 +47,7 @@ use gpui_component::{
     searchable_list::SearchableListItem,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     separator::Separator,
+    shimmer::ShimmerText,
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
@@ -72,6 +74,7 @@ use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::time::Duration;
 
 struct InputSlot {
     state: Entity<InputState>,
@@ -1262,12 +1265,15 @@ impl RootView {
             "slider" => self.render_slider(node, &key, window, cx),
             "rating" => self.render_rating(node, &key, cx),
             "stepper" => self.render_stepper(node, &key, cx),
+            "pagination" => self.render_pagination(node, &key, cx),
             "progress" => self.render_progress(node, cx),
+            "progress-circle" => self.render_progress_circle(node, path, &key, window, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
             "tag" => self.render_tag(node, cx),
             "alert" => self.render_alert(node, &key, cx),
             "skeleton" => self.render_skeleton(node, cx),
+            "shimmer" => self.render_shimmer(node, cx),
             "kbd" => self.render_kbd(node, cx),
             "link" => self.render_link(node, &key, cx),
             "group-box" => self.render_group_box(node, path, &key, window, cx),
@@ -1507,6 +1513,98 @@ impl RootView {
             cx,
         )
         .into_any_element()
+    }
+
+    fn render_progress_circle(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Kit `transition((id, "value"), …)` keys off this id. Use
+        // `widget_key` (`:id` or path) so reorder/insert does not steal
+        // another circle's animation. `path` still names children.
+        let mut circle = ProgressCircle::new(eid(key))
+            .value(extra::progress_circle_value(node))
+            .loading(node.loading)
+            .with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(color) = node.color.as_deref().and_then(extra::parse_hex_color) {
+            circle = circle.color(color);
+        }
+        if let Some(label) = node
+            .accessibility_label
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            circle = circle.accessibility_label(label.to_string());
+        }
+        apply_style(
+            circle.children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn render_pagination(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let mut pagination = Pagination::new(eid(key))
+            .current_page(extra::pagination_current_page(node))
+            .total_pages(extra::pagination_total_pages(node))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled);
+        if node.compact {
+            pagination = pagination.compact();
+        }
+        if let Some(visible) = extra::pagination_visible_pages(node) {
+            pagination = pagination.visible_pages(visible);
+        }
+        if let Some(id) = node.on_change.clone().or(node.on_click.clone()) {
+            let cmd_tx = self.cmd_tx.clone();
+            pagination = pagination.on_click(move |page, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: id.clone(),
+                    value: Some(json!(*page)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(pagination, node, cx).into_any_element()
+    }
+
+    fn render_shimmer(&self, node: &Node, cx: &App) -> AnyElement {
+        let text = node.text.clone().unwrap_or_default();
+        let mut shimmer = ShimmerText::new(text);
+        if let Some(id) = node.id.clone().filter(|s| !s.is_empty()) {
+            shimmer = shimmer.id(id);
+        }
+        if let Some(secs) = extra::shimmer_duration_secs(node) {
+            shimmer = shimmer.duration(Duration::from_secs_f32(secs));
+        }
+        match extra::shimmer_spread(node) {
+            Some(extra::ShimmerSpreadSpec::Relative(fraction)) => {
+                shimmer = shimmer.spread(fraction);
+            }
+            Some(extra::ShimmerSpreadSpec::Absolute(pixels)) => {
+                shimmer = shimmer.spread(px(pixels));
+            }
+            None => {}
+        }
+        if node.reverse {
+            shimmer = shimmer.reverse(true);
+        }
+        if node.once {
+            shimmer = shimmer.once(true);
+        }
+        if let Some(color) = node
+            .highlight_color
+            .as_deref()
+            .and_then(extra::parse_hex_color)
+        {
+            shimmer = shimmer.highlight_color(color);
+        }
+        apply_style(shimmer, node, cx).into_any_element()
     }
 
     fn render_separator(&self, node: &Node, cx: &App) -> AnyElement {
@@ -3860,6 +3958,37 @@ fn widget_key(node: &Node, path: &str) -> String {
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| path.to_string())
+}
+
+#[cfg(test)]
+mod widget_key_tests {
+    use super::*;
+
+    #[test]
+    fn prefers_non_empty_node_id() {
+        let named = Node {
+            kind: "progress-circle".into(),
+            id: Some("upload".into()),
+            ..Node::default()
+        };
+        assert_eq!(widget_key(&named, "root-0-1"), "upload");
+        let empty = Node {
+            kind: "progress-circle".into(),
+            id: Some(String::new()),
+            ..Node::default()
+        };
+        assert_eq!(widget_key(&empty, "root-0-1"), "root-0-1");
+        assert_eq!(
+            widget_key(
+                &Node {
+                    kind: "progress-circle".into(),
+                    ..Node::default()
+                },
+                "root-0-1"
+            ),
+            "root-0-1"
+        );
+    }
 }
 
 fn parse_color(value: &str) -> Option<u32> {
