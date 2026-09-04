@@ -361,23 +361,33 @@ pub fn nav_bind_replace_token(
     Some((entity?, token?.to_string()))
 }
 
-/// After the trail plan, bind the token to `slot.entries.last()` — the
-/// actual current history entry. After a same-id `Replace` that is the
-/// newly created entity. The first observation (no previous binding)
-/// latches that entity. If navigation revealed a different entry, keep
-/// the previous binding: the first later token bump on the revealed
-/// entity rebinds instead of replacing a distinct same-id instance.
-/// An omitted token does not clear the last binding.
+/// After the trail plan, bind `:replace-generation` from the existing
+/// `(entity, token)` pair and `slot.entries.last()` — never from
+/// `before == after`. No previous binding latches the current entity.
+/// A successful same-id `Replace` binds the newly created entity. If the
+/// current entity already owns the binding, keep it (a changed token on
+/// an unchanged trail already produced `Replace`). If the current entity
+/// differs and the token is unchanged, keep the old binding across any
+/// number of ordinary rerenders. If the current entity differs and the
+/// token changed, that first bump rebinds without `Replace` — including
+/// when navigation and the bump share a render. An omitted token does
+/// not clear the last binding.
 pub fn nav_commit_replace_binding(
     replaced: bool,
-    before: Option<EntityId>,
-    after: Option<EntityId>,
+    current: Option<EntityId>,
     token: Option<&str>,
     last: Option<(EntityId, String)>,
 ) -> Option<(EntityId, String)> {
-    match nav_bind_replace_token(after, token) {
-        Some(bound) if replaced || before == after || last.is_none() => Some(bound),
-        Some(_) | None => last,
+    let Some(bound) = nav_bind_replace_token(current, token) else {
+        return last;
+    };
+    if replaced || last.is_none() {
+        return Some(bound);
+    }
+    match last.as_ref() {
+        Some((entity, _)) if *entity == bound.0 => last,
+        Some((_, prev)) if prev == &bound.1 => last,
+        _ => Some(bound),
     }
 }
 
@@ -3863,7 +3873,16 @@ mod tests {
             Some("1"),
         );
         assert!(!replace);
-        last = nav_commit_replace_binding(replace, Some(detail_b), Some(detail_a), Some("1"), last);
+        last = nav_commit_replace_binding(replace, Some(detail_a), Some("1"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_b), Some("1")));
+
+        last = nav_commit_replace_binding(false, Some(detail_a), Some("1"), last);
+        assert_eq!(
+            last,
+            nav_bind_replace_token(Some(detail_b), Some("1")),
+            "unrelated rerender must not transfer the binding to the revealed entity"
+        );
+        last = nav_commit_replace_binding(false, Some(detail_a), Some("1"), last);
         assert_eq!(last, nav_bind_replace_token(Some(detail_b), Some("1")));
 
         let replace = nav_same_id_replace(
@@ -3877,7 +3896,7 @@ mod tests {
             !replace,
             "first bump on the revealed same-id entity rebinds"
         );
-        last = nav_commit_replace_binding(replace, Some(detail_a), Some(detail_a), Some("2"), last);
+        last = nav_commit_replace_binding(replace, Some(detail_a), Some("2"), last);
         assert_eq!(last, nav_bind_replace_token(Some(detail_a), Some("2")));
 
         let replace = nav_same_id_replace(
@@ -3888,8 +3907,7 @@ mod tests {
             Some("3"),
         );
         assert!(replace);
-        last =
-            nav_commit_replace_binding(replace, Some(detail_a), Some(replacement), Some("3"), last);
+        last = nav_commit_replace_binding(replace, Some(replacement), Some("3"), last);
         assert_eq!(last, nav_bind_replace_token(Some(replacement), Some("3")));
         assert!(!nav_same_id_replace(
             &revealed,
@@ -3916,6 +3934,34 @@ mod tests {
             Some(detail_a),
             last_b.as_ref(),
             Some("2")
+        ));
+
+        assert_eq!(
+            nav_commit_replace_binding(false, Some(detail_a), None, last_b.clone()),
+            last_b
+        );
+
+        let mut same_frame = nav_bind_replace_token(Some(detail_b), Some("1"));
+        let replace = nav_same_id_replace(
+            &stacked,
+            &revealed,
+            Some(detail_b),
+            same_frame.as_ref(),
+            Some("2"),
+        );
+        assert!(!replace);
+        same_frame = nav_commit_replace_binding(replace, Some(detail_a), Some("2"), same_frame);
+        assert_eq!(
+            same_frame,
+            nav_bind_replace_token(Some(detail_a), Some("2")),
+            "navigation plus a token bump in one render rebinds without Replace"
+        );
+        assert!(nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            same_frame.as_ref(),
+            Some("3")
         ));
     }
 

@@ -4226,7 +4226,7 @@ impl RootView {
                 slot.last_dup_catalog = Some(dups);
             }
             let token = extra::nav_replace_token(node.replace_generation.as_ref());
-            let mut replace_bind: Option<(bool, Option<EntityId>)> = None;
+            let mut replacing = None;
             let steps = match extra::nav_desired(node, &catalog_ids) {
                 extra::NavDesired::Invalid { trail, unknown } => {
                     if slot.last_invalid.as_ref() != Some(&trail) {
@@ -4251,19 +4251,19 @@ impl RootView {
                         &forward,
                         extra::nav_reuse_forward(node.reuse_forward),
                     );
-                    let replacing = extra::nav_same_id_replace(
+                    let replace = extra::nav_same_id_replace(
                         &current,
                         &resolved,
                         before,
                         slot.last_replace.as_ref(),
                         token.as_deref(),
                     );
-                    if replacing {
+                    if replace {
                         if let Some(id) = resolved.last() {
                             steps = vec![extra::NavTrailStep::Replace(id.clone())];
                         }
                     }
-                    replace_bind = Some((replacing, before));
+                    replacing = Some(replace);
                     steps
                 }
             };
@@ -4289,10 +4289,9 @@ impl RootView {
                 }
             }
             apply_nav_trail_plan(slot, steps, motion, &catalog_by_id, key, &cmd_tx, cx);
-            if let Some((replacing, before)) = replace_bind {
+            if let Some(replaced) = replacing {
                 slot.last_replace = extra::nav_commit_replace_binding(
-                    replacing,
-                    before,
+                    replaced,
                     slot.entries.last().map(|(_, page)| page.entity_id()),
                     token.as_deref(),
                     slot.last_replace.clone(),

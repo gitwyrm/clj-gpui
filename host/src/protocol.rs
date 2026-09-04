@@ -982,7 +982,9 @@ pub struct Node {
     /// entity and calls `replace()` (forward is kept). Unchanged across
     /// rerenders is a no-op. Bound to that entity (not the catalog id) so
     /// a later navigation cannot apply a stale bump to a different history
-    /// entry, including another instance of the same page id.
+    /// entry, including another instance of the same page id. Unrelated
+    /// rerenders do not transfer the binding; the first later token change
+    /// on the new entity rebinds, and only the next change may `replace()`.
     #[serde(default, rename = "replace-generation")]
     pub replace_generation: Option<Value>,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
