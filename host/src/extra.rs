@@ -215,6 +215,7 @@ pub fn avatar_src(node: &Node) -> Option<&str> {
 }
 
 /// AvatarGroup visible count. `None` leaves Kit's 3.
+#[cfg(test)]
 pub fn avatar_group_limit(node: &Node) -> Option<usize> {
     node.limit
         .filter(|n| n.is_finite())
