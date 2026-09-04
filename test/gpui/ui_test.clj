@@ -906,7 +906,7 @@
       ((:on-change n) ["clj" "rs"])
       (is (= [:clj :rs] @!got))
       ((:on-confirm n) ["rs"])
-      (is (= [:rs] @!got)))))
+      (is (= [:rs] @!got))))
   (testing "rating and stepper"
     (let [n (ui/rating 3 {:max 5})]
       (is (= :rating (:type n)))
