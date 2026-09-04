@@ -337,15 +337,31 @@ impl SliderEventCoalesce {
         true
     }
 
-    /// Take payloads to send. Marks in-flight when either event is pending.
+    /// Drain pending payloads. Does not mark in-flight: a payload with no
+    /// matching callback must not block later gestures.
     pub fn take_pending(&mut self) -> (Option<Value>, Option<Value>) {
         self.flush_scheduled = false;
-        let change = self.pending_change.take();
-        let release = self.pending_release.take();
-        if change.is_some() || release.is_some() {
-            self.in_flight = true;
+        (self.pending_change.take(), self.pending_release.take())
+    }
+
+    /// `in_flight` means an RPC was sent, not merely that an event existed.
+    fn mark_in_flight(&mut self) {
+        self.in_flight = true;
+    }
+
+    /// Drain pending events into callback RPCs. Marks in-flight only when
+    /// at least one handler is installed for a pending payload.
+    pub fn take_outbound(
+        &mut self,
+        on_change: Option<String>,
+        on_release: Option<String>,
+    ) -> Vec<CallbackCall> {
+        let (change, release) = self.take_pending();
+        let calls = slider_event_calls(on_change, on_release, change, release);
+        if !calls.is_empty() {
+            self.mark_in_flight();
         }
-        (change, release)
+        calls
     }
 
     /// New export assigned fresh callback ids. Returns whether to flush
@@ -1372,39 +1388,97 @@ mod tests {
             !c.on_release(json!(42.0)),
             "same-tick Release must ride the Change defer"
         );
-        let (change, release) = c.take_pending();
-        assert_eq!(change, Some(json!(42.0)));
-        assert_eq!(release, Some(json!(42.0)));
+        let calls = c.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "cb-change");
+        assert_eq!(calls[0].value, Some(json!(42.0)));
+        assert_eq!(calls[1].id, "cb-release");
+        assert_eq!(calls[1].value, Some(json!(42.0)));
 
         let mut drag = SliderEventCoalesce::default();
         assert!(drag.on_change(json!(10.0)));
         assert!(!drag.on_change(json!(11.0)));
-        let (change, release) = drag.take_pending();
-        assert_eq!(change, Some(json!(11.0)));
-        assert!(release.is_none());
+        let calls = drag.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].value, Some(json!(11.0)));
 
         let mut late = SliderEventCoalesce::default();
         assert!(late.on_change(json!(1.0)));
-        let _ = late.take_pending();
+        let sent = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(sent.len(), 1);
         assert!(
             !late.on_release(json!(1.0)),
             "Release during in-flight Change waits for new ids"
         );
         assert!(late.on_ids_refreshed());
-        let (change, release) = late.take_pending();
-        assert!(change.is_none());
-        assert_eq!(release, Some(json!(1.0)));
+        let calls = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "cb-release");
+        assert_eq!(calls[0].value, Some(json!(1.0)));
+    }
 
-        let calls = slider_event_calls(
-            Some("cb-change".into()),
-            Some("cb-release".into()),
-            Some(json!(20.0)),
-            Some(json!([20.0, 70.0])),
+    #[test]
+    fn slider_event_coalesce_in_flight_requires_an_outbound_rpc() {
+        let mut change_only = SliderEventCoalesce::default();
+        assert!(change_only.on_change(json!(10.0)));
+        assert!(!change_only.on_release(json!(10.0)));
+        let first = change_only.take_outbound(Some("cb-change".into()), None);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].id, "cb-change");
+        assert!(change_only.on_ids_refreshed() == false);
+        assert!(change_only.on_release(json!(10.0)));
+        let poisoned = change_only.take_outbound(Some("cb-change".into()), None);
+        assert!(
+            poisoned.is_empty(),
+            "Release with no handler must not send and must not mark in-flight"
         );
-        assert_eq!(calls[0].id, "cb-change");
-        assert_eq!(calls[0].value, Some(json!(20.0)));
-        assert_eq!(calls[1].id, "cb-release");
-        assert_eq!(calls[1].value, Some(json!([20.0, 70.0])));
+        assert!(
+            change_only.on_change(json!(11.0)),
+            "a second gesture must still emit Change"
+        );
+        let second = change_only.take_outbound(Some("cb-change".into()), None);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].value, Some(json!(11.0)));
+
+        let mut release_only = SliderEventCoalesce::default();
+        assert!(release_only.on_change(json!(5.0)));
+        let skipped = release_only.take_outbound(None, Some("cb-release".into()));
+        assert!(
+            skipped.is_empty(),
+            "Change with no handler must not mark in-flight"
+        );
+        assert!(
+            release_only.on_release(json!(5.0)),
+            "preceding Change must not block Release"
+        );
+        let released = release_only.take_outbound(None, Some("cb-release".into()));
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].id, "cb-release");
+        assert_eq!(released[0].value, Some(json!(5.0)));
+
+        let mut both = SliderEventCoalesce::default();
+        assert!(both.on_change(json!([20.0, 70.0])));
+        assert!(!both.on_release(json!([20.0, 70.0])));
+        let batch = both.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
+        assert_eq!(
+            batch
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cb-change", "cb-release"]
+        );
+
+        let mut neither = SliderEventCoalesce::default();
+        assert!(neither.on_change(json!(1.0)));
+        assert!(!neither.on_release(json!(1.0)));
+        assert!(neither.take_outbound(None, None).is_empty());
+        assert!(
+            neither.on_change(json!(2.0)),
+            "events with no handlers leave the coalescer idle"
+        );
+        assert!(neither.take_outbound(None, None).is_empty());
+        assert!(neither.on_release(json!(2.0)));
+        assert!(neither.take_outbound(None, None).is_empty());
     }
 
     #[test]

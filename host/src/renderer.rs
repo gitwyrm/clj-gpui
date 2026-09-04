@@ -767,13 +767,9 @@ impl RootView {
         let Some(slot) = self.sliders.get_mut(key) else {
             return;
         };
-        let (change, release) = slot.coalesce.take_pending();
-        let calls = protocol::slider_event_calls(
-            slot.on_change.clone(),
-            slot.on_release.clone(),
-            change,
-            release,
-        );
+        let calls = slot
+            .coalesce
+            .take_outbound(slot.on_change.clone(), slot.on_release.clone());
         if calls.is_empty() {
             return;
         }
