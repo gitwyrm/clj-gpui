@@ -747,27 +747,31 @@ pub struct Node {
     pub selected: bool,
     #[serde(default)]
     pub searchable: bool,
-    /// Select: Kit `Select::cleanable` (clear button when a value is selected).
+    /// Select / Combobox: Kit `cleanable` (clear button when a value is selected).
     #[serde(default)]
     pub cleanable: bool,
     /// Select: Kit `Select::title_prefix`.
     #[serde(default, rename = "title-prefix")]
     pub title_prefix: Option<String>,
-    /// Select: Kit `Select::menu_width` in pixels. Omitted is Kit `Length::Auto`.
+    /// Select / Combobox: Kit `menu_width` in pixels. Omitted is Kit `Length::Auto`.
     #[serde(default, rename = "menu-width")]
     pub menu_width: Option<f32>,
-    /// Select: Kit `Select::menu_max_h` in pixels. Omitted is Kit's 20rem default.
+    /// Select / Combobox: Kit `menu_max_h` in pixels. Omitted is Kit's 20rem default.
     #[serde(default, rename = "menu-max-h")]
     pub menu_max_h: Option<f32>,
-    /// Select: Kit `Select::search_placeholder`.
+    /// Select / Combobox: Kit `search_placeholder`.
     #[serde(default, rename = "search-placeholder")]
     pub search_placeholder: Option<String>,
-    /// Select: string form of Kit `Select::empty` when the list has no
+    /// Combobox: Kit `Combobox::check_icon` (selected-row mark). Select
+    /// has no analogous builder.
+    #[serde(default, rename = "check-icon")]
+    pub check_icon: Option<String>,
+    /// Select / Combobox: string form of Kit `empty` when the list has no
     /// rows. Kit accepts arbitrary `IntoElement`; custom empty widgets
     /// are not wrapped yet.
     #[serde(default)]
     pub empty: Option<String>,
-    /// Select: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
+    /// Select / Combobox: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
     #[serde(default, rename = "focus-ring")]
     pub focus_ring: Option<bool>,
     #[serde(default)]
@@ -971,6 +975,7 @@ pub struct Node {
     #[serde(default, rename = "close-delay")]
     pub close_delay: Option<f32>,
     /// HoverCard default popover chrome. Kit default true. Omitted leaves Kit's default.
+    /// Select / Combobox: Kit `appearance` (Kit default true).
     #[serde(default)]
     pub appearance: Option<bool>,
     /// AvatarGroup overflow ellipsis avatar. Kit default false.
@@ -1357,6 +1362,40 @@ mod tests {
             Some("ClojureScript (cljs)")
         );
         assert!(grouped.collection()[1].items[1].disabled);
+
+        let combo: Node = serde_json::from_value(json!({
+            "type": "combobox",
+            "value": "clj",
+            "searchable": true,
+            "cleanable": true,
+            "menu-width": 280,
+            "menu-max-h": 240,
+            "search-placeholder": "Filter…",
+            "empty": "No languages",
+            "focus-ring": false,
+            "appearance": false,
+            "icon": "search",
+            "check-icon": "check",
+            "options": [
+                {
+                    "label": "clj",
+                    "items": [{"id": "clj", "label": "Clojure"}]
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(combo.kind, "combobox");
+        assert!(combo.cleanable);
+        assert_eq!(combo.menu_width, Some(280.0));
+        assert_eq!(combo.menu_max_h, Some(240.0));
+        assert_eq!(combo.search_placeholder.as_deref(), Some("Filter…"));
+        assert_eq!(combo.empty.as_deref(), Some("No languages"));
+        assert_eq!(combo.focus_ring, Some(false));
+        assert_eq!(combo.appearance, Some(false));
+        assert_eq!(combo.icon.as_deref(), Some("search"));
+        assert_eq!(combo.check_icon.as_deref(), Some("check"));
+        assert_eq!(combo.collection()[0].label_or_id(), "clj");
+        assert_eq!(combo.collection()[0].items[0].id_or_label(), "clj");
     }
 
     #[test]

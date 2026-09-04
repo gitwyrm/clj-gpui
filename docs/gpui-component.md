@@ -14,6 +14,14 @@ Classification:
 | **D** | Not appropriate as a `gpui.ui` widget (window/process internals, forbidden surfaces) |
 | **E** | Helper / trait / layout primitive rather than a user-facing control |
 
+Coverage-table **status** is not Kit public-API parity by itself:
+
+| Mark | Meaning |
+|---|---|
+| ✅ | The clj-gpui API in this row is wrapped and usable. Remaining Kit surface, if any, is on a dedicated ⚠️ row or named as out of scope (LSP, `gpui-shell`). |
+| ⚠️ | Wrapped, but public Kit APIs listed in this row's notes are still remaining. Do not treat as full public-API parity. |
+| ❌ | Not wrapped, or not a `gpui.ui` widget |
+
 `ui/window`, `ui/spacer`, and `ui/hstack` / `ui/vstack` are clj-gpui layout, not 1:1 crate types (`Root`, `h_flex`, `v_flex`).
 
 ## Coverage table
@@ -59,11 +67,11 @@ Classification:
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse |
 | `input::OtpInput` | `ui/otp-input` | ✅ | C | Host-held `OtpState`. `:on-change` only when every cell is filled (crate complete-only). `:count` default 6, clamped 1–12. `:masked` |
 | `input::Editor` / `EditorState` | `ui/editor` | ✅ | C | Kit `Editor` highlighter. `:language` (default `text`). **No LSP**. `tree-sitter-languages` enabled; no Clojure grammar |
-| `select` custom item render | — | ⚠️ | C | Grouped `SelectGroup` options are wrapped on `ui/select`. String `:empty` and option `:display` are the string forms of Kit `Select::empty` / `display_title`; Kit accepts `IntoElement` / `AnyElement`. Custom `SearchableListItem::render` of child widgets and custom section headers are not wrapped. `ui/combobox` still has no grouped `SearchableVec<SelectGroup>` |
+| `select` custom item render | — | ⚠️ | C | Grouped `SelectGroup` options are wrapped on `ui/select` and `ui/combobox`. String `:empty` and option `:display` are the string forms of Kit `Select::empty` / `display_title`; Kit accepts `IntoElement` / `AnyElement`. Custom `SearchableListItem::render` of child widgets and custom section headers are not wrapped. Combobox `render_trigger` / `footer` and `ComboboxState::query` / `set_query` are the same class of remaining custom/state surface |
 | `list::List` | `ui/list` | ✅ | C | `{id, label}` rows; host `ListDelegate`. `:searchable true` filters by label. Selection callbacks restore original Clojure ids |
 | `table::DataTable` | `ui/data-table` | ✅ | C | Columns in `:columns` → wire `options` (not `columns` u32). Rows `{id, cells}`. Host `TableDelegate`. `column()` returns owned `Column` |
 | `table::Table` (declarative) | `ui/table` plus `ui/table-header`, `ui/table-body`, `ui/table-footer`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, `ui/table-caption` | ✅ | C | Not virtualized. Kit primitives on the wire so per-cell `col_span` / align / widget children stay accessible. `{:columns :rows :footer :caption}` is Clojure shorthand that expands into those primitives; column `:span` is header-only. `:accessibility-label` is Kit `Table::accessibility_label` |
-| `combobox::Combobox` | `ui/combobox` | ✅ | C | Host `ComboboxState<SearchableVec>`. Search on by default. `:multiple true` value is a vector. Same-action `Change`+`Confirm` is one callback batch. Native `Change` caches selection so a Clojure echo does not `set_selected_values` (clears query). Item-collection change rebuilds selection so renamed/removed options do not stick |
+| `combobox::Combobox` | `ui/combobox` | ⚠️ | C | Host `ComboboxState<SearchableVec>`. Search on by default. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`SearchableGroup`; leaf values stay `SharedString`). Group titles are not selectable and are not in the callback id map. `:multiple true` value is a vector. Same-action `Change`+`Confirm` is one callback batch. Native `Change` caches selection so a Clojure echo does not `set_selected_values` (clears query). Flat collection change `set_items` plus `set_selected_values` so renamed/removed options do not stick. Grouped collection fingerprint changes rebuild the slot so query text and matched sections agree. Chrome: `:cleanable`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string), `:icon`, `:check-icon`, `:appearance`, `:focus-ring` (omit = Kit true), `Sizable` / `Styled`. Remaining: `render_trigger`, `footer`, empty as `IntoElement`, `ComboboxState::query` / `set_query` |
 | `rating::Rating` | `ui/rating` | ✅ | C | Integer `0..=:max` (default 5). Host `.max` then `.value` (Kit clamps `.value` to the current max). `:on-change` is the new integer. Optional `:color` hex |
 | `stepper::Stepper` | `ui/stepper` | ✅ | C | `value` is selected item id, not index. `:orientation :vertical`. Optional item `:icon` / `:disabled` |
 | `pagination::Pagination` | `ui/pagination` | ✅ | C | 1-based `value` / `:total` (Kit defaults 1; Kit clamps to ≥1). `:on-change` is the new page number. `:compact` is prev/next only. `:visible-pages` omitted leaves Kit's 5 |
@@ -108,7 +116,7 @@ Chat `NavStack` is still a follow-up, as are `Command` / `NativeMenu` / `StatusB
 
 ## Category C — remaining
 
-Grouped searchable `ui/select` (`SelectGroup` / `IndexPath`) is wrapped. Remaining C work is `NavStack`, `Command` / `NativeMenu` / `StatusBar`, Combobox `SelectGroup` sections, custom Select/Combobox row widgets (`Select::empty` as arbitrary `IntoElement`, `display_title` as `AnyElement`, custom row/section `render`), remaining DataTable public extras, MessageScroller `scroll_to_item` / `scroll_to_end`, and an arbitrary MessageScroller row renderer (stateful nodes / RootView re-entry). Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `gpui-shell` and `gpui-wry` are the only intentional subsystem exceptions.
+Grouped searchable `ui/select` and `ui/combobox` (`SelectGroup` / `IndexPath`) are wrapped. Combobox chrome (`cleanable`, `menu_width`, `menu_max_h`, `search_placeholder`, `icon`, `check_icon`, `appearance`, `focus_ring`, string `empty`) is forwarded; Combobox is not fully covered. Remaining C work is `NavStack`, `Command` / `NativeMenu` / `StatusBar`, custom Select/Combobox row widgets (`Select::empty` / Combobox `empty` as arbitrary `IntoElement`, `display_title` as `AnyElement`, custom row/section `render`, Combobox `render_trigger` / `footer`), `ComboboxState::query` / `set_query` (programmatic search text; controlled selection is not a substitute), remaining DataTable public extras, MessageScroller `scroll_to_item` / `scroll_to_end`, and an arbitrary MessageScroller row renderer (stateful nodes / RootView re-entry). Full LSP for the code editor is out of scope; `ui/editor` is the highlighter widget. Kit 0.6 charts are wrapped on `ui/chart` without extra host limits (helpers such as `ui/horizontal-bar-chart` stay). `gpui-shell` and `gpui-wry` are the only intentional subsystem exceptions.
 
 ### Overlay family (dialog, popover, menus, sheet, notification)
 
@@ -132,7 +140,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 
 ## Path to near-complete coverage
 
-Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select (flat or `SelectGroup`), combobox, list, data-table, tree, OTP, color, date, editor, virtual-list, message-scroller, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/hover-card/menus are in-tree. Remaining C work is NavStack / Command chrome / DataTable extras / MessageScroller `scroll_to_item` and `scroll_to_end` / an arbitrary MessageScroller row renderer — not a new architecture. `gpui-shell` and `gpui-wry` are the only intentional subsystem exceptions.
+Clojure stays the semantic owner. Rust holds widget `Entity` state only where GPUI requires it. The slot map now covers input, textarea, slider, select (flat or `SelectGroup`), combobox (flat or `SelectGroup`), list, data-table, tree, OTP, color, date, editor, virtual-list, message-scroller, dock, and resizable. Overlay sync covers dialog, alert-dialog, sheet, and notification; popover/hover-card/menus are in-tree. Remaining C work is NavStack / Command chrome / custom Select/Combobox rendering (`render_trigger`, `footer`, arbitrary empty/`display_title`) / ComboboxState `query`/`set_query` / DataTable extras / MessageScroller `scroll_to_item` and `scroll_to_end` / an arbitrary MessageScroller row renderer — not a new architecture. `gpui-shell` and `gpui-wry` are the only intentional subsystem exceptions.
 
 ## Callback payloads (protocol v10)
 
@@ -141,7 +149,7 @@ Clojure stays the semantic owner. Rust holds widget `Entity` state only where GP
 | `switch` / `toggle` | `:on-change` | boolean |
 | `slider` | `:on-change` / `:on-release` | number, or `[start end]` for range thumbs (Clojure value is applied as-is, then clamped; `step` is drag granularity). `:on-release` is Kit `Release` after a real click/drag; same-gesture Change+Release is one batch. `set_value` emits neither |
 | `select` / `radio-group` / `tabs` / `breadcrumb` | `:on-change` | original Clojure option id. Select groups still send the leaf id, not the section title |
-| `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
+| `combobox` | `:on-change` / `:on-confirm` | original Clojure option id, or a vector of ids when `:multiple true`. Group titles are not in the callback id map (a title that shares a wire id with a leaf restores the leaf). Same-action Kit `Change` then `Confirm` is one batch; `:on-confirm` also fires when the menu closes without a change |
 | `accordion` | `:on-change` | open id, or a vector of ids in original item order when `:multiple true` |
 | `alert` | `:on-close` | none (0-arg) |
 | `clipboard` | `:on-copied` | copied string |

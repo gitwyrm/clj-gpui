@@ -193,6 +193,16 @@ struct ComboOpt {
     disabled: bool,
 }
 
+impl From<extra::SelectLeaf> for ComboOpt {
+    fn from(leaf: extra::SelectLeaf) -> Self {
+        Self {
+            id: SharedString::from(leaf.id),
+            label: SharedString::from(leaf.label),
+            disabled: leaf.disabled,
+        }
+    }
+}
+
 impl SearchableListItem for ComboOpt {
     type Value = SharedString;
 
@@ -209,8 +219,13 @@ impl SearchableListItem for ComboOpt {
     }
 }
 
+enum ComboboxStateHandle {
+    Flat(Entity<ComboboxState<SearchableVec<ComboOpt>>>),
+    Grouped(Entity<ComboboxState<SearchableVec<SelectGroup<ComboOpt>>>>),
+}
+
 struct ComboboxSlot {
-    state: Entity<ComboboxState<SearchableVec<ComboOpt>>>,
+    state: ComboboxStateHandle,
     searchable: bool,
     multiple: bool,
     fingerprint: u64,
@@ -1962,16 +1977,14 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let state = self.combobox_slot(key, node, window, cx);
-        let mut combo = Combobox::new(&state);
-        if let Some(placeholder) = node.placeholder.clone() {
-            combo = combo.placeholder(placeholder);
+        self.combobox_slot(key, node, window, cx);
+        let Some(slot) = self.comboboxes.get(key) else {
+            return div().into_any_element();
+        };
+        match &slot.state {
+            ComboboxStateHandle::Flat(state) => finish_combobox(Combobox::new(state), node, cx),
+            ComboboxStateHandle::Grouped(state) => finish_combobox(Combobox::new(state), node, cx),
         }
-        if node.disabled {
-            combo = combo.disabled(true);
-        }
-        combo = combo.with_size(mapping::parse_scale(node.control_size.as_deref()));
-        apply_style(combo, node, cx).into_any_element()
     }
 
     fn combobox_slot(
@@ -1980,9 +1993,9 @@ impl RootView {
         node: &Node,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<ComboboxState<SearchableVec<ComboOpt>>> {
+    ) {
         self.used_comboboxes.insert(key.to_string());
-        let items = combo_opts(node);
+        let grouped = extra::select_is_grouped(node.collection());
         let fingerprint = extra::combobox_fingerprint(node.collection());
         let selected: Vec<SharedString> = node
             .string_values()
@@ -1990,65 +2003,100 @@ impl RootView {
             .map(SharedString::from)
             .collect();
         if let Some(slot) = self.comboboxes.get_mut(key) {
-            if slot.searchable == node.searchable && slot.multiple == node.multiple {
+            let same_kind = match &slot.state {
+                ComboboxStateHandle::Grouped(_) => grouped,
+                ComboboxStateHandle::Flat(_) => !grouped,
+            };
+            if same_kind && slot.searchable == node.searchable && slot.multiple == node.multiple {
                 slot.on_change = node.on_change.clone();
                 slot.on_confirm = node.on_confirm.clone();
-                let sync = extra::combobox_slot_sync(
-                    slot.fingerprint,
-                    fingerprint,
-                    &slot.selected,
-                    &selected,
-                );
-                if sync.set_items {
-                    slot.fingerprint = fingerprint;
-                }
-                if sync.set_selected {
-                    slot.selected = selected.clone();
-                }
-                let state = slot.state.clone();
-                if sync.set_items || sync.set_selected {
-                    state.update(cx, |state, cx| {
-                        if sync.set_items {
-                            state.set_items(SearchableVec::new(items.clone()), window, cx);
+                if grouped {
+                    match extra::combobox_live_sync(
+                        slot.fingerprint,
+                        fingerprint,
+                        &slot.selected,
+                        &selected,
+                    ) {
+                        extra::ComboboxLiveSync::Leave => return,
+                        extra::ComboboxLiveSync::SetValues => {
+                            slot.selected = selected.clone();
+                            match &slot.state {
+                                ComboboxStateHandle::Flat(state) => {
+                                    apply_combobox_selected_values(state, &selected, window, cx);
+                                }
+                                ComboboxStateHandle::Grouped(state) => {
+                                    apply_combobox_selected_values(state, &selected, window, cx);
+                                }
+                            }
+                            return;
                         }
-                        if sync.set_selected {
-                            // Rebuilds Kit's cloned selection (labels / dropped
-                            // ids). Also clears the search query.
-                            state.set_selected_values(&selected, window, cx);
+                        extra::ComboboxLiveSync::Rebuild => {
+                            // Fall through and recreate so query text cannot
+                            // stay attached to a fresh unfiltered SearchableVec.
                         }
-                    });
+                    }
+                } else {
+                    let sync = extra::combobox_slot_sync(
+                        slot.fingerprint,
+                        fingerprint,
+                        &slot.selected,
+                        &selected,
+                    );
+                    if sync.set_items {
+                        slot.fingerprint = fingerprint;
+                    }
+                    if sync.set_selected {
+                        slot.selected = selected.clone();
+                    }
+                    if let ComboboxStateHandle::Flat(state) = &slot.state {
+                        let state = state.clone();
+                        if sync.set_items || sync.set_selected {
+                            state.update(cx, |state, cx| {
+                                if sync.set_items {
+                                    state.set_items(combo_flat_vec(node), window, cx);
+                                }
+                                if sync.set_selected {
+                                    // Rebuilds Kit's cloned selection (labels /
+                                    // dropped ids). Also clears the search query.
+                                    state.set_selected_values(&selected, window, cx);
+                                }
+                            });
+                        }
+                    }
+                    return;
                 }
-                return state;
             }
         }
         let searchable = node.searchable;
         let multiple = node.multiple;
-        let state = cx.new(|cx| {
-            ComboboxState::new(SearchableVec::new(items), Vec::new(), window, cx)
-                .searchable(searchable)
-                .multiple(multiple)
-        });
-        state.update(cx, |state, cx| {
-            state.set_selected_values(&selected, window, cx);
-        });
         let key_owned = key.to_string();
-        cx.subscribe_in(
-            &state,
-            window,
-            move |this, _, event: &ComboboxEvent<SearchableVec<ComboOpt>>, window, cx| match event {
-                ComboboxEvent::Change(values) => {
-                    emit_combobox_change(this, &key_owned, values, window, cx);
-                }
-                ComboboxEvent::Confirm(values) => {
-                    emit_combobox_confirm(this, &key_owned, values);
-                }
-            },
-        )
-        .detach();
+        let handle = if grouped {
+            let state = cx.new(|cx| {
+                ComboboxState::new(combo_group_vec(node), Vec::new(), window, cx)
+                    .searchable(searchable)
+                    .multiple(multiple)
+            });
+            state.update(cx, |state, cx| {
+                state.set_selected_values(&selected, window, cx);
+            });
+            subscribe_combobox(&state, key_owned, window, cx);
+            ComboboxStateHandle::Grouped(state)
+        } else {
+            let state = cx.new(|cx| {
+                ComboboxState::new(combo_flat_vec(node), Vec::new(), window, cx)
+                    .searchable(searchable)
+                    .multiple(multiple)
+            });
+            state.update(cx, |state, cx| {
+                state.set_selected_values(&selected, window, cx);
+            });
+            subscribe_combobox(&state, key_owned, window, cx);
+            ComboboxStateHandle::Flat(state)
+        };
         self.comboboxes.insert(
             key.to_string(),
             ComboboxSlot {
-                state: state.clone(),
+                state: handle,
                 searchable,
                 multiple,
                 fingerprint,
@@ -2058,7 +2106,6 @@ impl RootView {
                 coalesce: protocol::ComboboxActivationCoalesce::default(),
             },
         );
-        state
     }
 
     fn flush_pending_combobox_change(&mut self, key: &str) {
@@ -4676,14 +4723,113 @@ where
     apply_style(select, node, cx).into_any_element()
 }
 
+fn combo_flat_vec(node: &Node) -> SearchableVec<ComboOpt> {
+    SearchableVec::new(
+        node.collection()
+            .iter()
+            .map(extra::select_leaf_from_item)
+            .map(ComboOpt::from)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn combo_group_vec(node: &Node) -> SearchableVec<SelectGroup<ComboOpt>> {
+    SearchableVec::new(
+        extra::select_sections(node.collection())
+            .into_iter()
+            .map(|section| {
+                SelectGroup::new(section.title).items(section.items.into_iter().map(ComboOpt::from))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn apply_combobox_selected_values<D>(
+    state: &Entity<ComboboxState<D>>,
+    selected: &[SharedString],
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) where
+    D: SearchableListDelegate + 'static,
+    D::Item: SearchableListItem<Value = SharedString>,
+{
+    state.update(cx, |state, cx| {
+        state.set_selected_values(selected, window, cx);
+    });
+}
+
+fn subscribe_combobox<D>(
+    state: &Entity<ComboboxState<D>>,
+    key: String,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) where
+    D: SearchableListDelegate + 'static,
+    D::Item: SearchableListItem<Value = SharedString>,
+{
+    cx.subscribe_in(
+        state,
+        window,
+        move |this, _, event: &ComboboxEvent<D>, window, cx| match event {
+            ComboboxEvent::Change(values) => {
+                emit_combobox_change(this, &key, values, window, cx);
+            }
+            ComboboxEvent::Confirm(values) => {
+                emit_combobox_confirm(this, &key, values);
+            }
+        },
+    )
+    .detach();
+}
+
+fn finish_combobox<D>(mut combo: Combobox<D>, node: &Node, cx: &App) -> AnyElement
+where
+    D: SearchableListDelegate + 'static,
+    <D::Item as SearchableListItem>::Value: PartialEq + Clone,
+{
+    if let Some(placeholder) = node.placeholder.clone() {
+        combo = combo.placeholder(placeholder);
+    }
+    if node.disabled {
+        combo = combo.disabled(true);
+    }
+    combo = combo.with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if node.cleanable {
+        combo = combo.cleanable(true);
+    }
+    if let Some(width) = node.menu_width.filter(|n| n.is_finite() && *n > 0.0) {
+        combo = combo.menu_width(px(width));
+    }
+    if let Some(height) = node.menu_max_h.filter(|n| n.is_finite() && *n > 0.0) {
+        combo = combo.menu_max_h(px(height));
+    }
+    if let Some(placeholder) = node.search_placeholder.clone().filter(|s| !s.is_empty()) {
+        combo = combo.search_placeholder(placeholder);
+    }
+    if let Some(appearance) = node.appearance {
+        combo = combo.appearance(appearance);
+    }
+    if let Some(enabled) = node.focus_ring {
+        combo = combo.focus_ring(enabled);
+    }
+    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        combo = combo.icon(Icon::new(name));
+    }
+    if let Some(name) = node.check_icon.as_deref().and_then(mapping::parse_icon) {
+        combo = combo.check_icon(Icon::new(name));
+    }
+    if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
+        combo = combo.empty(move |_, _| empty.clone());
+    }
+    apply_style(combo, node, cx).into_any_element()
+}
+
+#[cfg(test)]
 fn combo_opts(node: &Node) -> Vec<ComboOpt> {
-    node.collection()
-        .iter()
-        .map(|item| ComboOpt {
-            id: SharedString::from(item.id_or_label()),
-            label: SharedString::from(item.label_or_id()),
-            disabled: item.disabled,
-        })
+    extra::select_sections(node.collection())
+        .into_iter()
+        .flat_map(|section| section.items)
+        .map(ComboOpt::from)
         .collect()
 }
 
@@ -5761,6 +5907,66 @@ mod select_control_tests {
         assert!(!layout.shrink_width);
         assert!(!layout.shrink_height);
         assert!(layout.full_width);
+    }
+}
+
+#[cfg(test)]
+mod combobox_control_tests {
+    use super::{Node, combo_opts};
+    use crate::protocol::Item;
+
+    #[test]
+    fn grouped_combobox_options_flatten_group_children() {
+        let node = Node {
+            kind: "combobox".into(),
+            options: vec![
+                Item {
+                    label: Some("Lisp".into()),
+                    items: vec![Item {
+                        id: Some("clj".into()),
+                        label: Some("Clojure".into()),
+                        ..Item::default()
+                    }],
+                    ..Item::default()
+                },
+                Item {
+                    label: Some("Systems".into()),
+                    items: vec![
+                        Item {
+                            id: Some("rs".into()),
+                            label: Some("Rust".into()),
+                            ..Item::default()
+                        },
+                        Item {
+                            id: Some("go".into()),
+                            label: Some("Go".into()),
+                            disabled: true,
+                            ..Item::default()
+                        },
+                    ],
+                    ..Item::default()
+                },
+            ],
+            ..Node::default()
+        };
+        let items = combo_opts(&node);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].id.as_ref(), "clj");
+        assert_eq!(items[1].id.as_ref(), "rs");
+        assert!(items[2].disabled);
+        let rs = crate::extra::select_index(node.collection(), Some("rs")).unwrap();
+        assert_eq!(rs.section, 1);
+        assert_eq!(rs.row, 0);
+        assert!(crate::extra::select_is_grouped(node.collection()));
+        let groups = extra_combo_sections(&node);
+        assert_eq!(groups, vec!["Lisp", "Systems"]);
+    }
+
+    fn extra_combo_sections(node: &Node) -> Vec<String> {
+        crate::extra::select_sections(node.collection())
+            .into_iter()
+            .map(|section| section.title)
+            .collect()
     }
 }
 
