@@ -356,18 +356,18 @@
                   :transition 0.22
                   :height 180
                   :border "#3b4261"}
-     (ui/nav-page {:id :home :padding 12 :gap 8}
-       (ui/label "Home" {:font-weight :semibold})
-       (ui/button "Open detail" #(swap! !state assoc :trail [:home :detail])))
-     (ui/nav-page {:id :detail :padding 12 :gap 8}
-       (ui/label "Detail" {:font-weight :semibold})
-       (ui/hstack {:gap 8}
-         (ui/button "Back" #(swap! !state assoc :trail [:home]))
-         (ui/button "Replace with settings"
-                    #(swap! !state assoc :trail [:home :settings]))))
-     (ui/nav-page {:id :settings :padding 12 :gap 8}
-       (ui/label "Settings" {:font-weight :semibold})
-       (ui/button "Back to home" #(swap! !state assoc :trail [:home]))))))
+                 (ui/nav-page {:id :home :padding 12 :gap 8}
+                              (ui/label "Home" {:font-weight :semibold})
+                              (ui/button "Open detail" #(swap! !state assoc :trail [:home :detail])))
+                 (ui/nav-page {:id :detail :padding 12 :gap 8}
+                              (ui/label "Detail" {:font-weight :semibold})
+                              (ui/hstack {:gap 8}
+                                         (ui/button "Back" #(swap! !state assoc :trail [:home]))
+                                         (ui/button "Replace with settings"
+                                                    #(swap! !state assoc :trail [:home :settings]))))
+                 (ui/nav-page {:id :settings :padding 12 :gap 8}
+                              (ui/label "Settings" {:font-weight :semibold})
+                              (ui/button "Back to home" #(swap! !state assoc :trail [:home]))))))
 
 (defn- data-panel [{:keys [list-sel list-confirm table-sel table-confirm table-shift tree-sel list-rev batch-shift? vlist-sel]}]
   (let [suffix (when (pos? list-rev) (str " · " list-rev))
