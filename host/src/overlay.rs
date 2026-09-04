@@ -8,7 +8,7 @@
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
-    App, Axis, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
+    App, Axis, Div, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
     Styled, Window, div, px,
 };
 use gpui_component::{
@@ -110,10 +110,35 @@ pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
         .w_full()
 }
 
-/// Kit AvatarGroup layout width: `face + 0.7 * face * (visible - 1)`, plus
-/// the ellipsis avatar and `ml_1` (0.25rem ≈ 4px) when overflow is shown.
+/// Kit AvatarGroup *visual* width after 30% overlap: `face * (1 + 0.7 *
+/// (visible - 1))`, plus the ellipsis avatar and `ml_1` (0.25rem ≈ 4px).
 pub(crate) fn avatar_group_content_width(node: &Node) -> f32 {
     let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    let (visible, ellipsis) = avatar_group_visible(node);
+    if visible == 0 {
+        return if ellipsis { face + 4.0 } else { 0.0 };
+    }
+    let mut width = face * visible as f32 - face * 0.3 * (visible - 1) as f32;
+    if ellipsis {
+        width += face + 4.0;
+    }
+    width
+}
+
+/// Width the inner flex row needs so `flex_shrink_0` avatars fit before
+/// Kit's negative margins overlap them. Taffy does not shrink this by
+/// those margins, so a wrap sized to the visual overlap overflows left.
+pub(crate) fn avatar_group_flex_width(node: &Node) -> f32 {
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    let (visible, ellipsis) = avatar_group_visible(node);
+    let n = visible + usize::from(ellipsis);
+    if n == 0 {
+        return 0.0;
+    }
+    face * n as f32 + if ellipsis { 4.0 } else { 0.0 }
+}
+
+fn avatar_group_visible(node: &Node) -> (usize, bool) {
     let count = node
         .children
         .iter()
@@ -126,14 +151,7 @@ pub(crate) fn avatar_group_content_width(node: &Node) -> f32 {
         .unwrap_or(3);
     let visible = count.min(limit);
     let ellipsis = node.ellipsis && count > limit;
-    if visible == 0 {
-        return if ellipsis { face + 4.0 } else { 0.0 };
-    }
-    let mut width = face * visible as f32 - face * 0.3 * (visible - 1) as f32;
-    if ellipsis {
-        width += face + 4.0;
-    }
-    width
+    (visible, ellipsis)
 }
 
 pub(crate) fn avatar_face_px(size: Size) -> f32 {
@@ -144,6 +162,28 @@ pub(crate) fn avatar_face_px(size: Size) -> f32 {
         Size::XSmall => 16.0,
         Size::Size(px) => px.as_f32(),
     }
+}
+
+/// Host box for AvatarGroup: inner row is wide enough for `flex_shrink_0`
+/// faces, outer clips to Kit's overlapped width and right-aligns so the
+/// leftover (taffy ignores negative margins) is clipped on the left.
+pub(crate) fn avatar_group_element(node: &Node) -> Div {
+    let overlapped = avatar_group_content_width(node);
+    let flex_w = avatar_group_flex_width(node);
+    let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
+    h_flex()
+        .flex_none()
+        .w(px(overlapped))
+        .h(px(face))
+        .overflow_hidden()
+        .justify_end()
+        .child(
+            h_flex()
+                .w(px(flex_w))
+                .h(px(face))
+                .flex_shrink_0()
+                .child(kit_avatar_group(node)),
+        )
 }
 
 fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
@@ -661,16 +701,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             chart_layout(crumb, node).into_any_element()
         }
         "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
-        "avatar-group" => {
-            let width = avatar_group_content_width(node);
-            let face = avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
-            h_flex()
-                .flex_none()
-                .w(px(width))
-                .h(px(face))
-                .child(chart_layout(kit_avatar_group(node), node))
-                .into_any_element()
-        }
+        "avatar-group" => chart_layout(avatar_group_element(node), node).into_any_element(),
         "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
         "progress" => {
             let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
@@ -1555,8 +1586,11 @@ mod tests {
             avatar_group_content_width(&small_overflow),
             24.0 * 4.0 - 24.0 * 0.3 * 3.0 + 24.0 + 4.0
         );
+        assert_eq!(avatar_group_flex_width(&three_medium), 48.0 * 3.0);
+        assert_eq!(avatar_group_flex_width(&small_overflow), 24.0 * 5.0 + 4.0);
 
         let empty = node(json!({"type": "avatar-group"}));
         assert_eq!(avatar_group_content_width(&empty), 0.0);
+        assert_eq!(avatar_group_flex_width(&empty), 0.0);
     }
 }

@@ -2212,7 +2212,7 @@ impl RootView {
     }
 
     fn render_avatar_group(&self, node: &Node, cx: &App) -> AnyElement {
-        row_intrinsic(overlay::kit_avatar_group(node), node, cx)
+        apply_style(overlay::avatar_group_element(node), node, cx).into_any_element()
     }
 
     fn render_hover_card(
@@ -4378,20 +4378,6 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
         wrap = wrap.w_full();
     }
     apply_style(wrap, node, cx).child(el).into_any_element()
-}
-
-/// Keep a compact Kit widget at its intrinsic width in a flex row.
-///
-/// Unlike `content_sized`, omitted width does not stretch (`w_full`).
-/// AvatarGroup's negative child margins make flex min-content about one
-/// avatar; shrinking then stacks the faces on top of each other.
-fn row_intrinsic(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
-    let width = overlay::avatar_group_content_width(node);
-    let face = overlay::avatar_face_px(mapping::parse_scale(node.control_size.as_deref()));
-    apply_style(h_flex().flex_none().w(px(width)).h(px(face)), node, cx)
-        .flex_shrink_0()
-        .child(el)
-        .into_any_element()
 }
 
 /// List/table/tree use crate `size_full()`. They need a bounded viewport or
