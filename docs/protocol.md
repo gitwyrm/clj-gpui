@@ -256,7 +256,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `row-style` | object | `message-scroller`: Kit `with_row_style` |
 | `jump-button-style` | object | `message-scroller`: Kit `with_jump_button_style` |
 | `jump-button-renderer` | object | `message-scroller`: Kit `with_jump_button_renderer` chrome (`text` / Clojure `:label` is Kit `Button::label`; also `variant`, `control-size`, `icon`, `tooltip`) |
-| `scroll-to-item` | string or number | `message-scroller`: Kit `scroll_to_item`. Row id, or a 0-based index if no row has that id. Omitted / JSON null leaves native scroll. Applied after child-list sync. An unresolved or rejected item is not marked applied, so the same request can succeed after append/load. `:scroll-to-end true` wins when both are set |
+| `scroll-to-item` | string or number | `message-scroller`: Kit `scroll_to_item`. Opaque row id (not trimmed), or a 0-based index if no row has that id. Empty string / omitted / JSON null leaves native scroll. Applied after child-list sync. An unresolved or rejected item is not marked applied, so the same request can succeed after append/load. `:scroll-to-end true` wins when both are set |
 | `scroll-to-end` | bool | `message-scroller`: Kit `scroll_to_end` (resume tail follow). True applies; omitted / false leaves native scroll |
 | `scroll-generation` | number or string | `message-scroller`: replay token for `scroll_to_item` / `scroll_to_end`. Same target with a new token re-applies after the user has scrolled away. Omitted still applies the first distinct target |
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |

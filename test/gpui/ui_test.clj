@@ -1349,7 +1349,14 @@
                                           :scroll-generation 1}
                                          (ui/message {:id "m2"} (ui/bubble "Hi"))))]
       (is (= "m2" (:scroll-to-item exported)))
-      (is (= 1 (:scroll-generation exported))))))
+      (is (= 1 (:scroll-generation exported))))
+    (let [n (ui/message-scroller {:id "chat"
+                                  :scroll-to-item " message-1 "}
+                                 (ui/message {:id " message-1 "}
+                                             (ui/bubble "Hi")))]
+      (is (= " message-1 " (:scroll-to-item n))
+          "scroll-to-item keeps leading/trailing space like the row :id")
+      (is (= " message-1 " (:id (first (:children n))))))))
 
 (deftest nav-stack-trail-and-page-catalog
   (let [n (ui/nav-stack {:id "nav" :stack [:home :detail] :transition 0.22

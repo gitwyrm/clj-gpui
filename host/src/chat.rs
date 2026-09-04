@@ -184,11 +184,15 @@ pub fn scroller_scroll_generation(value: Option<&Value>) -> Option<String> {
     }
 }
 
+/// Row ids are opaque identity: leading/trailing space is kept so a
+/// `:scroll-to-item` matches `scroller_item_id` byte-for-byte. Empty
+/// string is still omit (`scroller_item_id` already rejects empty
+/// ids). Replay tokens (`:scroll-generation`) keep trim, same as
+/// nav-stack `:replace-generation`.
 fn scroll_item_spec(value: Option<&Value>) -> Option<String> {
     match value {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => {
-            let s = s.trim();
             if s.is_empty() {
                 None
             } else {
@@ -1013,6 +1017,9 @@ mod tests {
     fn scroller_item_id_prefers_node_id() {
         let named: Node = serde_json::from_value(json!({"type": "message", "id": "m1"})).unwrap();
         assert_eq!(scroller_item_id(&named, 3), "m1");
+        let padded: Node =
+            serde_json::from_value(json!({"type": "message", "id": " message-1 "})).unwrap();
+        assert_eq!(scroller_item_id(&padded, 0), " message-1 ");
         let anon: Node = serde_json::from_value(json!({"type": "message"})).unwrap();
         assert_eq!(scroller_item_id(&anon, 3), "idx:3");
     }
@@ -1046,6 +1053,23 @@ mod tests {
         assert_eq!(scroller_item_index("9", &ids), None);
         assert!(scroller_scroll_request(None, Some(&json!(""))).is_none());
         assert!(scroller_scroll_request(None, Some(&Value::Null)).is_none());
+        let padded = [" message-1 ".into(), "message-1".into()];
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!(" message-1 "))),
+            Some(ScrollerScroll::Item(" message-1 ".into())),
+            "row ids are opaque; leading/trailing space is kept"
+        );
+        assert_eq!(scroller_item_index(" message-1 ", &padded), Some(0));
+        assert_eq!(
+            scroller_item_index("message-1", &padded),
+            Some(1),
+            "trimmed spec is a different id"
+        );
+        assert_eq!(
+            scroller_scroll_request(None, Some(&json!("  "))),
+            Some(ScrollerScroll::Item("  ".into())),
+            "whitespace-only is a valid row id, unlike empty string"
+        );
     }
 
     #[test]
@@ -1079,6 +1103,10 @@ mod tests {
             Some("3")
         );
         assert!(scroller_scroll_generation(Some(&json!(""))).is_none());
+        assert!(
+            scroller_scroll_generation(Some(&json!("  "))).is_none(),
+            "generation still trims, unlike scroll-to-item"
+        );
         let colon_id = scroller_scroll_token(Some(&ScrollerScroll::Item("a:b".into())), Some("c"));
         let colon_gen = scroller_scroll_token(Some(&ScrollerScroll::Item("a".into())), Some("b:c"));
         assert_ne!(

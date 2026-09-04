@@ -2821,7 +2821,8 @@
   (`:variant`, `:size`, `:icon`, `:tooltip`, `:label` / `:text`) for
   `with_jump_button_renderer`; `:label` becomes wire `:text` and is
   Kit `Button::label` (visible / accessible name). `:scroll-to-item`
-  is Kit `scroll_to_item` (row `:id` or 0-based index). `:scroll-to-end`
+  is Kit `scroll_to_item` (opaque row `:id`, not trimmed, or 0-based
+  index). `:scroll-to-end`
   true is Kit `scroll_to_end` (resume tail follow) and wins when both
   are set. Omitted / nil leaves native scroll (user drag, jump button).
   `:scroll-generation` (integer or string) re-applies the same target

@@ -1273,11 +1273,12 @@ pub struct Node {
     /// `text` is Kit `Button::label` (visible / accessible name).
     #[serde(default, rename = "jump-button-renderer")]
     pub jump_button_renderer: Option<Box<Node>>,
-    /// MessageScroller: Kit `scroll_to_item`. Row id or 0-based index.
-    /// Omitted / JSON null leaves native scroll. Applied after child-list
-    /// sync. Unresolved / Kit-rejected items are not marked applied, so
-    /// the same request can succeed after append/load. `:scroll-to-end
-    /// true` wins when both are set.
+    /// MessageScroller: Kit `scroll_to_item`. Opaque row id (not
+    /// trimmed) or 0-based index. Empty string / omitted / JSON null
+    /// leaves native scroll. Applied after child-list sync. Unresolved
+    /// / Kit-rejected items are not marked applied, so the same request
+    /// can succeed after append/load. `:scroll-to-end true` wins when
+    /// both are set.
     #[serde(default, rename = "scroll-to-item")]
     pub scroll_to_item: Option<Value>,
     /// MessageScroller: Kit `scroll_to_end` (resume tail follow).
