@@ -321,6 +321,8 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
   (ui/table-caption "Kit primitives"))
 (ui/combobox selected {:options [{:id :clj :label "Clojure"} :rs]
                        :placeholder "Language"
+                       :cleanable true
+                       :search-placeholder "Filter…"
                        :on-change set-lang!})
 (ui/combobox picked {:options langs :multiple true :on-change set-picked!})
 (ui/rating 3 {:max 5 :on-change set!})
@@ -379,7 +381,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 
-`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select/combobox options by label; nested `:items` are Kit `SelectGroup` sections. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on.
+`:size :small` on controls becomes wire `:control-size` so numeric `:size` stays pixel layout. Option ids are strings on the wire; `:on-change` restores the original Clojure id (`:light` not `"light"`). Two options that share a wire id (`:dark` and `"dark"`) keep the first. `nil` on `ui/select` / `ui/combobox` clears the selection. `:searchable true` filters select/combobox options by label; nested `:items` are Kit `SelectGroup` sections. Group titles are not selectable values and are not in the callback id map, so a title that shares a wire id with a leaf (`{:label "clj" :items [{:id :clj …}]}`) restores the leaf. `:focus-ring false` is Kit `FocusableExt` (omit = Kit true). `ui/combobox` defaults search on and forwards `:cleanable`, `:menu-width` / `:menu-max-h`, `:search-placeholder`, `:icon`, `:check-icon`, `:appearance`, and string `:empty`. `render_trigger`, `footer`, and `ComboboxState::query` / `set_query` are not wrapped.
 
 GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 

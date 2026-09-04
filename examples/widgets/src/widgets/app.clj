@@ -494,6 +494,11 @@
                              :items [{:id :rs :label "Rust"}
                                      {:id :go :label "Go"}]}]
                   :placeholder "Language"
+                  :search-placeholder "Filter languages"
+                  :empty "No languages"
+                  :cleanable true
+                  :check-icon :check
+                  :menu-width 280
                   :flex 1
                   :on-change (set-key :combo)})
     (ui/combobox combo-multi

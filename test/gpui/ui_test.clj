@@ -197,7 +197,14 @@
       (is (= "Lisp" (get-in n [:options 0 :label])))
       (is (= "clj" (get-in n [:options 0 :items 0 :id])))
       (is (= "ClojureScript (cljs)" (get-in n [:options 0 :items 1 :display])))
-      (is (true? (get-in n [:options 1 :items 1 :disabled])))))
+      (is (true? (get-in n [:options 1 :items 1 :disabled]))))
+    (let [!got (atom nil)
+          n (ui/select :clj
+                       {:options [{:label "clj"
+                                   :items [{:id :clj :label "Clojure"}]}]
+                        :on-change #(reset! !got %)})]
+      ((:on-change n) "clj")
+      (is (= :clj @!got))))
   (testing "radio-group"
     (let [n (ui/radio-group :dark {:options [:light :dark]
                                    :orientation :horizontal})]
@@ -840,6 +847,66 @@
                           :on-change #(reset! !got %)})]
       ((:on-change n) ["clj" "rs"])
       (is (= [:clj :rs] @!got))))
+  (testing "combobox chrome builders stay on the node"
+    (let [n (ui/combobox :clj
+                         {:options [{:id :clj :label "Clojure"}]
+                          :cleanable true
+                          :menu-width 280
+                          :menu-max-h 240
+                          :search-placeholder "Filter…"
+                          :empty "No languages"
+                          :icon :search
+                          :check-icon :check
+                          :appearance false
+                          :focus-ring false})]
+      (is (true? (:cleanable n)))
+      (is (= 280 (:menu-width n)))
+      (is (= 240 (:menu-max-h n)))
+      (is (= "Filter…" (:search-placeholder n)))
+      (is (= "No languages" (:empty n)))
+      (is (= :search (:icon n)))
+      (is (= :check (:check-icon n)))
+      (is (false? (:appearance n)))
+      (is (false? (:focus-ring n)))))
+  (testing "group titles that share a wire id do not shadow leaf callbacks"
+    (let [opts [{:label "clj" :items [{:id :clj :label "Clojure"}]}
+                {:label "rs" :items [{:id :rs :label "Rust"}]}]
+          mixed [{:id :go :label "Go"}
+                 {:label "clj" :items [{:id :clj :label "Clojure"}]}]]
+      (is (= [:clj :rs] (mapv ui/option-identity (ui/selectable-option-leaves opts))))
+      (is (= [:go :clj] (mapv ui/option-identity (ui/selectable-option-leaves mixed))))
+      (is (= ["clj" :clj "rs" :rs]
+             (mapv ui/option-identity (ui/flatten-tree-items opts))))
+      (is (= "clj"
+             (ui/resolve-option-id (ui/option-id-map (ui/flatten-tree-items opts)) "clj")))
+      (is (= :clj
+             (ui/resolve-option-id (ui/option-id-map (ui/selectable-option-leaves opts)) "clj"))))
+    (let [!change (atom nil)
+          !confirm (atom nil)
+          n (ui/combobox :clj
+                         {:options [{:label "clj"
+                                     :items [{:id :clj :label "Clojure"}]}
+                                    {:label "rs"
+                                     :items [{:id :rs :label "Rust"}]}]
+                          :on-change #(reset! !change %)
+                          :on-confirm #(reset! !confirm %)})]
+      ((:on-change n) "clj")
+      (is (= :clj @!change))
+      ((:on-confirm n) "clj")
+      (is (= :clj @!confirm)))
+    (let [!got (atom nil)
+          n (ui/combobox [:clj]
+                         {:multiple true
+                          :options [{:label "clj"
+                                     :items [{:id :clj :label "Clojure"}]}
+                                    {:label "rs"
+                                     :items [{:id :rs :label "Rust"}]}]
+                          :on-change #(reset! !got %)
+                          :on-confirm #(reset! !got %)})]
+      ((:on-change n) ["clj" "rs"])
+      (is (= [:clj :rs] @!got))
+      ((:on-confirm n) ["rs"])
+      (is (= [:rs] @!got)))))
   (testing "rating and stepper"
     (let [n (ui/rating 3 {:max 5})]
       (is (= :rating (:type n)))

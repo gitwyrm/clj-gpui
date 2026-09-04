@@ -4794,6 +4794,33 @@ where
         combo = combo.disabled(true);
     }
     combo = combo.with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if node.cleanable {
+        combo = combo.cleanable(true);
+    }
+    if let Some(width) = node.menu_width.filter(|n| n.is_finite() && *n > 0.0) {
+        combo = combo.menu_width(px(width));
+    }
+    if let Some(height) = node.menu_max_h.filter(|n| n.is_finite() && *n > 0.0) {
+        combo = combo.menu_max_h(px(height));
+    }
+    if let Some(placeholder) = node.search_placeholder.clone().filter(|s| !s.is_empty()) {
+        combo = combo.search_placeholder(placeholder);
+    }
+    if let Some(appearance) = node.appearance {
+        combo = combo.appearance(appearance);
+    }
+    if let Some(enabled) = node.focus_ring {
+        combo = combo.focus_ring(enabled);
+    }
+    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        combo = combo.icon(Icon::new(name));
+    }
+    if let Some(name) = node.check_icon.as_deref().and_then(mapping::parse_icon) {
+        combo = combo.check_icon(Icon::new(name));
+    }
+    if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
+        combo = combo.empty(move |_, _| empty.clone());
+    }
     apply_style(combo, node, cx).into_any_element()
 }
 

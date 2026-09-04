@@ -381,7 +381,11 @@
     (contains? opts :selected) (dissoc :selected)))
 
 (defn flatten-tree-items
-  "Depth-first flattening of nested `:items` (menus, trees) for id maps."
+  "Depth-first flattening of nested `:items` (menus, trees) for id maps.
+
+  Parents are included: tree nodes and menu items with submenus are
+  selectable. Select / Combobox `SelectGroup` wrappers are not — use
+  `selectable-option-leaves` for those callbacks."
   [xs]
   (into []
         (mapcat (fn [x]
@@ -389,9 +393,30 @@
                     (cons x (flatten-tree-items (or kids []))))))
         (remove nil? xs)))
 
+(defn selectable-option-leaves
+  "Selectable option identities for Select / Combobox callback restore.
+
+  Top-level flat options are kept. A map with nested `:items` is a Kit
+  `SelectGroup` wrapper (section title), not a value: walk its children
+  and skip the wrapper so a group label cannot shadow a leaf id that
+  shares a wire representation (`{:label \"clj\" :items [{:id :clj …}]}`)."
+  [xs]
+  (into []
+        (mapcat (fn [x]
+                  (cond
+                    (nil? x) []
+                    (and (map? x) (seq (:items x)))
+                    (selectable-option-leaves (:items x))
+                    :else [x])))
+        xs))
+
 (defn- with-nested-option-callback
   [opts xs]
   (with-option-callback opts (flatten-tree-items xs)))
+
+(defn- with-selectable-option-callbacks
+  [opts xs ks]
+  (with-id-callbacks opts (selectable-option-leaves xs) ks))
 
 (defn- merge-widget
   [base opts]
@@ -903,7 +928,8 @@
   `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
   Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
-  `:accessibility-label`. Custom row/section `render` is not wrapped.
+  `:accessibility-label`. Group titles are not selectable and are not
+  in the callback id map. Custom row/section `render` is not wrapped.
 
   (ui/select selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
@@ -923,7 +949,10 @@
   ([value opts]
    (let [opts (if (map? opts) opts {:on-change opts})
          raw (or (:options opts) (:items opts))
-         opts (with-nested-option-callback (dissoc opts :options :items) raw)]
+         opts (with-selectable-option-callbacks
+                (dissoc opts :options :items)
+                raw
+                [:on-change])]
      (merge-widget {:type :select
                     :value (wire-id value)
                     :options (option-items raw)}
@@ -938,8 +967,15 @@
   Nested `:items` are Kit `SelectGroup` sections (`SearchableGroup`;
   leaf values stay the option id). A group is
   `{ :label \"Lisp\" :items [{:id :clj :label \"Clojure\"}] }`.
-  Custom row/section `render` and empty/`display_title` as arbitrary
-  `IntoElement` / `AnyElement` are not wrapped.
+  Group titles are not selectable and are not in the callback id map.
+
+  Kit Combobox chrome: `:cleanable`, `:menu-width` / `:menu-max-h` (px),
+  `:search-placeholder`, `:empty` (string form of Kit `Combobox::empty`;
+  Kit accepts arbitrary `IntoElement`), `:icon` (trigger chevron),
+  `:check-icon` (selected-row mark), `:appearance`, `:focus-ring`
+  (Kit `FocusableExt`; omit = Kit true). Custom `render_trigger` /
+  `footer`, empty as `IntoElement`, and `ComboboxState::query` /
+  `set_query` are not wrapped.
 
   A single-select pick can emit Kit `Change` then `Confirm` for one
   user action. The host sends `:on-change` then `:on-confirm` as one
@@ -978,11 +1014,11 @@
          searchable (if (contains? opts :searchable)
                       (boolean (:searchable opts))
                       true)
-         opts (with-id-callbacks
+         opts (with-selectable-option-callbacks
                 (-> opts
                     (dissoc :options :items)
                     (assoc :searchable searchable))
-                (flatten-tree-items raw)
+                raw
                 [:on-change :on-confirm])]
      (merge-widget {:type :combobox
                     :value (wire-selected value)
