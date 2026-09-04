@@ -839,7 +839,7 @@
                                              {:id :rs :label "Rust"}]}]
                           :on-change #(reset! !got %)})]
       ((:on-change n) ["clj" "rs"])
-      (is (= [:clj :rs] @!got)))))
+      (is (= [:clj :rs] @!got))))
   (testing "rating and stepper"
     (let [n (ui/rating 3 {:max 5})]
       (is (= :rating (:type n)))
