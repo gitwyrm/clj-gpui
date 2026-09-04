@@ -2638,30 +2638,37 @@
     (sequential? op) (mapv nav-item-op op)
     :else op))
 
+(def ^:private nav-item-style-keys
+  [:bg :color :border :border-bottom :align :justify :font-weight :font-family])
+
 (defn- nav-item-case
   [m]
   (when (map? m)
-    (cond-> m
-      (keyword? (:phase m)) (update :phase name)
-      (some? (:operation m)) (update :operation nav-item-op)
-      (keyword? (:bg m)) (update :bg name))))
+    (reduce (fn [m k]
+              (cond-> m (keyword? (get m k)) (update k name)))
+            (cond-> m
+              (keyword? (:phase m)) (update :phase name)
+              (some? (:operation m)) (update :operation nav-item-op))
+            nav-item-style-keys)))
 
 (defn- nav-item-spec
   "Static Kit `NavStack::item` recipe. Not a per-frame callback.
   `:slide` is the showcase recipe. A map / vector of match arms is
   evaluated on the host from live `NavPage` phase, operation, index,
-  and eased progress."
+  and eased progress. A Clojure fn (or any non-recipe value) becomes
+  `false` so an explicit `:item` still suppresses `:transition-style`."
   [item]
   (cond
     (nil? item) nil
-    (fn? item) nil
+    (boolean? item) item
+    (fn? item) false
     (keyword? item) (name item)
     (string? item) item
     (sequential? item) {:match (into [] (keep nav-item-case) item)}
     (map? item) (cond-> (nav-item-case item)
                   (some? (:match item))
                   (update :match #(into [] (keep nav-item-case) %)))
-    :else nil))
+    :else false))
 
 (defn nav-page
   "A page template in a `ui/nav-stack` catalog. `:id` is required
@@ -2729,9 +2736,14 @@
   `:item :slide` (or `:transition-style :slide`) is the showcase
   slide; a map of `:match` arms (or a vector of those arms)
   Styled-refines the same page (`:left` / `:opacity` number or
-  `{:from :to}` lerp by progress). `:item` wins over
-  `:transition-style`. Omitted both keeps Kit's default
-  unchanged `NavPage` renderer. `:overflow :hidden` or
+  `{:from :to}` lerp by progress, plus the ordinary clj-gpui
+  Styled vocabulary: `:padding`, `:bg`, `:color`, `:align`, …).
+  An explicit non-nil `:item` wins over `:transition-style`,
+  including an unknown name or a dropped Clojure fn (`false` on
+  the wire). Those do not fall back to Slide. Omitted both keeps
+  Kit's default unchanged `NavPage` renderer. This is a
+  host-evaluated recipe, not Kit's arbitrary
+  `Fn(NavPage, &mut Window, &mut App) -> AnyElement`. `:overflow :hidden` or
   `:overflow-hidden true` clips; omitted does not. Pages paint
   the overlay static subset (not list / data-table / editor).
 

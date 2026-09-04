@@ -282,7 +282,7 @@ impl NavDesired {
 
 /// Kit `NavStack::item` convenience. `slide` is opt-in; omitted keeps Kit's
 /// default unchanged `NavPage` renderer. Independent of `transition()`.
-/// A nested `item` recipe wins over this name.
+/// A present `item` field (including unknown / `false`) suppresses this.
 pub fn nav_uses_slide(style: Option<&str>) -> bool {
     matches!(
         style.map(crate::catalog::normalize).as_deref(),
@@ -333,7 +333,7 @@ pub fn nav_item_slide_spec() -> NavItemSpec {
 fn nav_item_spec_effective(spec: &NavItemSpec) -> bool {
     spec.left.is_some()
         || spec.opacity.is_some()
-        || spec.bg.is_some()
+        || mapping::has_styled_keys(&spec.style)
         || spec.phase.is_some()
         || spec.operation.is_some()
         || spec.index.is_some()
@@ -343,7 +343,7 @@ fn nav_item_spec_effective(spec: &NavItemSpec) -> bool {
 fn nav_item_from_wire(item: &NavItemWire) -> Option<NavItemSpec> {
     match item {
         NavItemWire::Named(name) if nav_uses_slide(Some(name)) => Some(nav_item_slide_spec()),
-        NavItemWire::Named(_) => None,
+        NavItemWire::Named(_) | NavItemWire::Flag(_) => None,
         NavItemWire::Cases(cases) if !cases.is_empty() => Some(NavItemSpec {
             cases: cases.clone(),
             ..NavItemSpec::default()
@@ -354,12 +354,35 @@ fn nav_item_from_wire(item: &NavItemWire) -> Option<NavItemSpec> {
     }
 }
 
-/// Custom `:item` wins over `:transition-style :slide`. Omitted both is
-/// Kit's default `NavPage` renderer (`None` here means do not install
-/// `NavStack::item`).
+/// Why a present `item` did not become a recipe. Unknown names and dropped
+/// Clojure fns warn once; empty specs are silent. `None` means either
+/// omitted or a usable recipe.
+pub fn nav_item_reject_reason(item: Option<&NavItemWire>) -> Option<String> {
+    let Some(item) = item else {
+        return None;
+    };
+    if nav_item_from_wire(item).is_some() {
+        return None;
+    }
+    match item {
+        NavItemWire::Named(name) => {
+            Some(format!("unknown \"{name}\"; not \"slide\" or a match spec"))
+        }
+        NavItemWire::Flag(false) => {
+            Some("Clojure :item function is not a per-frame callback".into())
+        }
+        NavItemWire::Flag(true) => Some("boolean item is not a recipe".into()),
+        NavItemWire::Cases(_) | NavItemWire::Spec(_) => None,
+    }
+}
+
+/// Custom `:item` wins over `:transition-style :slide`. A present `item`
+/// (including unknown / `false`) never falls through to slide. Omitted
+/// both is Kit's default `NavPage` renderer (`None` here means do not
+/// install `NavStack::item`).
 pub fn nav_item_spec(node: &Node) -> Option<NavItemSpec> {
-    if let Some(item) = node.item.as_ref().and_then(nav_item_from_wire) {
-        return Some(item);
+    if let Some(item) = &node.item {
+        return nav_item_from_wire(item);
     }
     if nav_uses_slide(node.transition_style.as_deref()) {
         Some(nav_item_slide_spec())
@@ -443,7 +466,7 @@ fn nav_item_implicit_case(spec: &NavItemSpec) -> Option<NavItemCase> {
         index: spec.index,
         left: spec.left.clone(),
         opacity: spec.opacity.clone(),
-        bg: spec.bg.clone(),
+        style: spec.style.clone(),
     })
 }
 
@@ -453,7 +476,7 @@ fn nav_item_implicit_case(spec: &NavItemSpec) -> Option<NavItemCase> {
 pub struct NavPagePaint {
     pub left: Option<f32>,
     pub opacity: Option<f32>,
-    pub bg: Option<String>,
+    pub style: Node,
 }
 
 /// Live `phase` / `operation` / `index` / eased `progress` → Styled keys.
@@ -473,7 +496,7 @@ pub fn nav_item_paint(
         NavPagePaint {
             left: spec.left.as_ref().map(|scalar| scalar.resolve(progress)),
             opacity: spec.opacity.as_ref().map(|scalar| scalar.resolve(progress)),
-            bg: spec.bg.clone(),
+            style: spec.style.clone(),
         }
     };
     let cases: &[NavItemCase] = match &implicit {
@@ -490,9 +513,7 @@ pub fn nav_item_paint(
         if let Some(opacity) = &case.opacity {
             paint.opacity = Some(opacity.resolve(progress));
         }
-        if case.bg.is_some() {
-            paint.bg = case.bg.clone();
-        }
+        paint.style = mapping::overlay_styled(&paint.style, &case.style);
     }
     paint
 }
@@ -628,10 +649,7 @@ pub fn nav_stack_item(page: gpui::base::NavPage, spec: &NavItemSpec) -> AnyEleme
         page.progress(),
         spec,
     );
-    let mut page = page;
-    if let Some(bg) = paint.bg.as_deref().and_then(parse_hex_color) {
-        page = page.bg(bg);
-    }
+    let mut page = mapping::apply_styled(page, &paint.style);
     if let Some(left) = paint.left {
         page = page.left(relative(left));
     }
@@ -4462,21 +4480,43 @@ mod tests {
             ..Node::default()
         };
         assert!(nav_item_spec(&omitted).is_none());
+        assert!(nav_item_reject_reason(omitted.item.as_ref()).is_none());
 
+        let empty = Node {
+            kind: "nav-stack".into(),
+            item: Some(NavItemWire::Spec(NavItemSpec::default())),
+            transition_style: Some("slide".into()),
+            ..Node::default()
+        };
+        assert!(nav_item_spec(&empty).is_none());
+        assert!(nav_item_reject_reason(empty.item.as_ref()).is_none());
+    }
+
+    #[test]
+    fn nav_item_spec_unknown_name_does_not_fall_back_to_slide() {
         let unknown = Node {
             kind: "nav-stack".into(),
             item: Some(NavItemWire::Named("fade".into())),
             transition_style: Some("slide".into()),
             ..Node::default()
         };
-        assert_eq!(nav_item_spec(&unknown), Some(nav_item_slide_spec()));
+        assert!(nav_item_spec(&unknown).is_none());
+        let reason = nav_item_reject_reason(unknown.item.as_ref()).expect("unknown item");
+        assert!(reason.contains("fade"));
+        assert!(reason.contains("slide"));
+    }
 
-        let empty = Node {
+    #[test]
+    fn nav_item_spec_dropped_fn_does_not_fall_back_to_slide() {
+        let dropped = Node {
             kind: "nav-stack".into(),
-            item: Some(NavItemWire::Spec(NavItemSpec::default())),
+            item: Some(NavItemWire::Flag(false)),
+            transition_style: Some("slide".into()),
             ..Node::default()
         };
-        assert!(nav_item_spec(&empty).is_none());
+        assert!(nav_item_spec(&dropped).is_none());
+        let reason = nav_item_reject_reason(dropped.item.as_ref()).expect("dropped fn");
+        assert!(reason.contains("function") || reason.contains("callback"));
     }
 
     #[test]
@@ -4484,7 +4524,10 @@ mod tests {
         use gpui::base::NavOperation::Push;
         use gpui::base::motion::PresencePhase::{Entering, Present};
         let spec = NavItemSpec {
-            bg: Some("#111111".into()),
+            style: Node {
+                bg: Some("#111111".into()),
+                ..Node::default()
+            },
             cases: vec![
                 NavItemCase {
                     phase: Some("entering".into()),
@@ -4501,10 +4544,10 @@ mod tests {
         };
         let entering = nav_item_paint(Entering, Some(Push), 0, 0.25, &spec);
         assert_eq!(entering.left, Some(0.75));
-        assert_eq!(entering.bg.as_deref(), Some("#111111"));
+        assert_eq!(entering.style.bg.as_deref(), Some("#111111"));
         let present = nav_item_paint(Present, None, 0, 1.0, &spec);
         assert_eq!(present.left, None);
-        assert_eq!(present.bg.as_deref(), Some("#111111"));
+        assert_eq!(present.style.bg.as_deref(), Some("#111111"));
 
         let by_index = NavItemSpec {
             cases: vec![NavItemCase {
@@ -4522,6 +4565,36 @@ mod tests {
             nav_item_paint(Present, None, 0, 1.0, &by_index).opacity,
             None
         );
+    }
+
+    #[test]
+    fn nav_item_paint_overlays_styled_vocabulary() {
+        use gpui::base::NavOperation::Push;
+        use gpui::base::motion::PresencePhase::{Entering, Present};
+        let spec = NavItemSpec {
+            style: Node {
+                padding: Some(8.0),
+                color: Some("#eeeeee".into()),
+                ..Node::default()
+            },
+            cases: vec![NavItemCase {
+                phase: Some("entering".into()),
+                style: Node {
+                    bg: Some("#111111".into()),
+                    ..Node::default()
+                },
+                ..NavItemCase::default()
+            }],
+            ..NavItemSpec::default()
+        };
+        let entering = nav_item_paint(Entering, Some(Push), 0, 1.0, &spec);
+        assert_eq!(entering.style.padding, Some(8.0));
+        assert_eq!(entering.style.color.as_deref(), Some("#eeeeee"));
+        assert_eq!(entering.style.bg.as_deref(), Some("#111111"));
+        let present = nav_item_paint(Present, None, 0, 1.0, &spec);
+        assert_eq!(present.style.padding, Some(8.0));
+        assert_eq!(present.style.color.as_deref(), Some("#eeeeee"));
+        assert_eq!(present.style.bg, None);
     }
 
     #[test]

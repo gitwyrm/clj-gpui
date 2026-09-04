@@ -133,6 +133,62 @@ pub fn apply_styled<E: Styled>(el: E, node: &Node) -> E {
     apply_box_style(apply_visual_style(el, node), node)
 }
 
+/// True when `node` carries any key `apply_styled` reads.
+pub fn has_styled_keys(node: &Node) -> bool {
+    node.gap.is_some()
+        || node.padding.is_some()
+        || node.font_size.is_some()
+        || node.font_family.is_some()
+        || node.font_weight.is_some()
+        || node.color.is_some()
+        || node.bg.is_some()
+        || node.border.is_some()
+        || node.border_bottom.is_some()
+        || node.strikethrough
+        || node.shadow
+        || node.align.is_some()
+        || node.justify.is_some()
+        || node.width.is_some()
+        || node.height.is_some()
+        || node.size.is_some()
+        || node.flex.is_some()
+}
+
+/// Overlay `over` onto `base` for the Styled vocabulary only.
+/// Set keys on `over` win; omitted keys keep `base`. Bools are or-merged
+/// because the wire cannot distinguish omitted `false` from explicit.
+pub fn overlay_styled(base: &Node, over: &Node) -> Node {
+    Node {
+        gap: over.gap.or(base.gap),
+        padding: over.padding.or(base.padding),
+        font_size: over.font_size.or(base.font_size),
+        font_family: over
+            .font_family
+            .clone()
+            .or_else(|| base.font_family.clone()),
+        font_weight: over
+            .font_weight
+            .clone()
+            .or_else(|| base.font_weight.clone()),
+        color: over.color.clone().or_else(|| base.color.clone()),
+        bg: over.bg.clone().or_else(|| base.bg.clone()),
+        border: over.border.clone().or_else(|| base.border.clone()),
+        border_bottom: over
+            .border_bottom
+            .clone()
+            .or_else(|| base.border_bottom.clone()),
+        strikethrough: over.strikethrough || base.strikethrough,
+        shadow: over.shadow || base.shadow,
+        align: over.align.clone().or_else(|| base.align.clone()),
+        justify: over.justify.clone().or_else(|| base.justify.clone()),
+        width: over.width.or(base.width),
+        height: over.height.or(base.height),
+        size: over.size.or(base.size),
+        flex: over.flex.or(base.flex),
+        ..Node::default()
+    }
+}
+
 /// Build a `StyleRefinement` from a nested Clojure style map.
 pub fn style_refinement(node: Option<&Node>) -> Option<StyleRefinement> {
     let node = node?;
@@ -712,5 +768,27 @@ mod tests {
             tooltip.jump_button_renderer.as_ref().unwrap(),
         );
         let _ = button;
+    }
+
+    #[test]
+    fn overlay_styled_merges_visual_and_box_keys() {
+        let base = Node {
+            padding: Some(8.0),
+            color: Some("#eeeeee".into()),
+            ..Node::default()
+        };
+        let over = Node {
+            padding: Some(4.0),
+            bg: Some("#111111".into()),
+            ..Node::default()
+        };
+        assert!(has_styled_keys(&base));
+        assert!(has_styled_keys(&over));
+        assert!(!has_styled_keys(&Node::default()));
+        let merged = overlay_styled(&base, &over);
+        assert_eq!(merged.padding, Some(4.0));
+        assert_eq!(merged.color.as_deref(), Some("#eeeeee"));
+        assert_eq!(merged.bg.as_deref(), Some("#111111"));
+        assert_eq!(merged.gap, None);
     }
 }

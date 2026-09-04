@@ -321,6 +321,9 @@ struct NavStackSlot {
     /// Repeated ids are distinct entities; a later bump replaces only
     /// that instance.
     last_replace: Option<(EntityId, String)>,
+    /// Last ignored `:item` warning, so an unknown name or dropped fn
+    /// does not reprint every frame.
+    last_item_warn: Option<String>,
     _observe: Subscription,
 }
 
@@ -4207,6 +4210,7 @@ impl RootView {
                     last_dup_catalog: None,
                     last_forward_notified: None,
                     last_replace: None,
+                    last_item_warn: None,
                     _observe: observe,
                 },
             );
@@ -4298,6 +4302,14 @@ impl RootView {
                 );
             }
             notify_nav_forward_change(slot, node.on_forward_change.clone(), &cmd_tx, window, cx);
+            if let Some(reason) = extra::nav_item_reject_reason(node.item.as_ref()) {
+                if slot.last_item_warn.as_ref() != Some(&reason) {
+                    eprintln!("[host] nav-stack: ignoring item; {reason}");
+                    slot.last_item_warn = Some(reason);
+                }
+            } else {
+                slot.last_item_warn = None;
+            }
         }
         let slot = self.nav_stacks.get(key).expect("nav-stack slot");
         let mut nav = gpui::base::NavStack::new(&slot.state).w_full().h_full();
