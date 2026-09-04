@@ -315,6 +315,9 @@ struct NavStackSlot {
     /// Last nearest-first forward id list sent on `:on-forward-change`.
     /// `None` means never notified (empty after first mount is skipped).
     last_forward_notified: Option<Vec<String>>,
+    /// Last applied `:replace-generation` bound to the page that was
+    /// current when we observed it. A later bump replaces only that page.
+    last_replace: Option<(String, String)>,
     _observe: Subscription,
 }
 
@@ -4200,6 +4203,7 @@ impl RootView {
                     last_invalid: None,
                     last_dup_catalog: None,
                     last_forward_notified: None,
+                    last_replace: None,
                     _observe: observe,
                 },
             );
@@ -4218,13 +4222,7 @@ impl RootView {
                 );
                 slot.last_dup_catalog = Some(dups);
             }
-            for (id, entity) in slot.entries.iter().chain(slot.forward.iter()) {
-                if let Some(page_node) = catalog_by_id.get(id) {
-                    entity.update(cx, |page, cx| {
-                        page.replace_live(page_node.clone(), cx);
-                    });
-                }
-            }
+            let token = extra::nav_replace_token(node.replace_generation.as_ref());
             let steps = match extra::nav_desired(node, &catalog_ids) {
                 extra::NavDesired::Invalid { trail, unknown } => {
                     if slot.last_invalid.as_ref() != Some(&trail) {
@@ -4242,14 +4240,52 @@ impl RootView {
                         slot.entries.iter().map(|(id, _)| id.clone()).collect();
                     let forward: Vec<String> =
                         slot.forward.iter().map(|(id, _)| id.clone()).collect();
-                    extra::nav_trail_sync(
+                    let mut steps = extra::nav_trail_sync(
                         &current,
                         &resolved,
                         &forward,
                         extra::nav_reuse_forward(node.reuse_forward),
-                    )
+                    );
+                    if extra::nav_same_id_replace(
+                        &current,
+                        &resolved,
+                        slot.last_replace.as_ref(),
+                        token.as_deref(),
+                    ) {
+                        if let Some(id) = resolved.last() {
+                            steps = vec![extra::NavTrailStep::Replace(id.clone())];
+                        }
+                    }
+                    if let Some(bound) = extra::nav_bind_replace_token(
+                        resolved.last().map(String::as_str),
+                        token.as_deref(),
+                    ) {
+                        slot.last_replace = Some(bound);
+                    }
+                    steps
                 }
             };
+            let skip_current_live = steps
+                .iter()
+                .any(|step| matches!(step, extra::NavTrailStep::Replace(_)));
+            let current_last = slot.entries.len().saturating_sub(1);
+            for (i, (id, entity)) in slot.entries.iter().enumerate() {
+                if skip_current_live && i == current_last {
+                    continue;
+                }
+                if let Some(page_node) = catalog_by_id.get(id) {
+                    entity.update(cx, |page, cx| {
+                        page.replace_live(page_node.clone(), cx);
+                    });
+                }
+            }
+            for (id, entity) in slot.forward.iter() {
+                if let Some(page_node) = catalog_by_id.get(id) {
+                    entity.update(cx, |page, cx| {
+                        page.replace_live(page_node.clone(), cx);
+                    });
+                }
+            }
             apply_nav_trail_plan(slot, steps, motion, &catalog_by_id, key, &cmd_tx, cx);
             notify_nav_forward_change(slot, node.on_forward_change.clone(), &cmd_tx, window, cx);
         }

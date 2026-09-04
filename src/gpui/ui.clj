@@ -2668,8 +2668,15 @@
   unless `:reuse-forward false`, which forces a fresh `push` and
   discards the remainder of the forward branch — the same Kit
   operation you would call yourself. Omitted / true keeps
-  automatic `forward` as the convenient default. Setting the trail
-  to just the root from depth > 2 is one `pop_to_root` transition
+  automatic `forward` as the convenient default. `:replace-generation`
+  is an integer or string token. Changing it while the current page
+  id stays the same creates a fresh page entity and calls Kit
+  `replace()` (forward is kept, `NavOperation::Replace` uses the
+  configured motion). Leaving the token unchanged across rerenders
+  is a no-op, so ordinary callback-id regeneration still only
+  `replace_live`s the existing page. The host binds the token to
+  the current top page; a later navigation cannot apply a stale
+  bump to a different page. Setting the trail to just the root from depth > 2 is one `pop_to_root` transition
   (popped pages join forward, nearest first). `:on-forward-change`
   receives Kit `forward_views()` as a vector of original page ids,
   nearest first (the id `forward` would restore). Empty after first
@@ -2684,9 +2691,10 @@
   unchanged `NavPage` renderer. `:overflow :hidden` or
   `:overflow-hidden true` clips; omitted does not. Custom `item`
   rendering beyond `:slide` is remaining and must include the
-  complete `NavPage` context (index, phase, operation, eased
-  progress), not only a canned transition style. Pages paint the
-  overlay static subset (not list / data-table / editor).
+  complete `NavPage` surface (the mounted `view()`, plus index,
+  phase, operation, eased progress), not only a canned transition
+  style. Pages paint the overlay static subset (not list /
+  data-table / editor).
 
   (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
                  :transition-style :slide :overflow :hidden
@@ -2716,7 +2724,8 @@
                    (assoc :duration (:transition opts)))
                (keyword? (:motion opts)) (update :motion name)
                (keyword? (:transition-style opts)) (update :transition-style name)
-               (keyword? (:overflow opts)) (update :overflow name))]
+               (keyword? (:overflow opts)) (update :overflow name)
+               (keyword? (:replace-generation opts)) (update :replace-generation name))]
     (cond-> (assoc opts
                    :type :nav-stack
                    :children pages)

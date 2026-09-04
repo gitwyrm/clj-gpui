@@ -977,6 +977,13 @@ pub struct Node {
     /// forces a fresh `push()` and discards the forward branch.
     #[serde(default, rename = "reuse-forward")]
     pub reuse_forward: Option<bool>,
+    /// NavStack: same-id Kit `replace()` token. A changed integer or string
+    /// while the current page id is unchanged creates a fresh `CljNavPage`
+    /// and calls `replace()` (forward is kept). Unchanged across rerenders
+    /// is a no-op. Bound to the current top page so a later navigation
+    /// cannot apply a stale bump to a different page.
+    #[serde(default, rename = "replace-generation")]
+    pub replace_generation: Option<Value>,
     /// ShimmerText relative highlight half-width. Kit default 0.3; Kit clamps 0.05..=1.
     #[serde(default)]
     pub spread: Option<f32>,
@@ -2189,6 +2196,7 @@ mod tests {
             "overflow": "hidden",
             "overflow-hidden": true,
             "reuse-forward": false,
+            "replace-generation": 2,
             "on-forward-change": "cb-forward",
             "height": 180,
             "children": [
@@ -2208,6 +2216,7 @@ mod tests {
         assert_eq!(nav.overflow.as_deref(), Some("hidden"));
         assert!(nav.overflow_hidden);
         assert_eq!(nav.reuse_forward, Some(false));
+        assert_eq!(nav.replace_generation, Some(json!(2)));
         assert_eq!(nav.on_forward_change.as_deref(), Some("cb-forward"));
         assert_eq!(nav.children.len(), 2);
         assert_eq!(nav.children[0].kind, "nav-page");

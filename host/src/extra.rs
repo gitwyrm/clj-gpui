@@ -294,6 +294,68 @@ pub fn nav_reuse_forward(flag: Option<bool>) -> bool {
     flag.unwrap_or(true)
 }
 
+/// Wire `replace-generation`: integer or non-empty string. Omitted / null
+/// does not request a same-id `replace()`.
+pub fn nav_replace_token(value: Option<&Value>) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else {
+                let f = n.as_f64()?;
+                if f.is_finite() && f == f.trunc() {
+                    Some((f as i64).to_string())
+                } else {
+                    None
+                }
+            }
+        }
+        Some(_) => None,
+    }
+}
+
+/// Same-id Kit `replace()`: the trail is unchanged, a token is present, and
+/// that token last applied to this same top page with a different value.
+/// The first observation of a token is a latch (no replace). A token last
+/// bound to a different page is not a replace — navigation must not replace
+/// the newly current page. Forward is preserved (Kit `replace` keeps it).
+pub fn nav_same_id_replace(
+    current: &[String],
+    desired: &[String],
+    last: Option<&(String, String)>,
+    token: Option<&str>,
+) -> bool {
+    if current != desired || current.is_empty() {
+        return false;
+    }
+    let Some(top) = current.last() else {
+        return false;
+    };
+    let Some(token) = token else {
+        return false;
+    };
+    match last {
+        Some((page, prev)) if page == top && prev != token => true,
+        _ => false,
+    }
+}
+
+/// Bind the observed token to the page that is current after the plan.
+pub fn nav_bind_replace_token(top: Option<&str>, token: Option<&str>) -> Option<(String, String)> {
+    Some((top?.to_string(), token?.to_string()))
+}
+
 /// Kit clipping is application-owned. Opt in with `overflow: hidden` or
 /// `overflow-hidden: true`. Omitted does not clip.
 pub fn nav_clip(overflow: Option<&str>, overflow_hidden: bool) -> bool {
@@ -313,8 +375,10 @@ pub fn nav_page_path(stack_key: &str, index: usize, page_id: &str) -> String {
 /// Kit showcase slide: push/replace enter from the right, pop exits the
 /// same way, the covered page drifts. Installed only when
 /// `:transition-style :slide`. A later custom `item` wrap must pass the
-/// complete `NavPage` context (`index`, `phase`, `operation`, eased
-/// `progress`), not only a canned transition style.
+/// complete `NavPage` surface: the mounted `view()` plus `index`, `phase`,
+/// `operation`, and eased `progress`. The renderer must keep access to that
+/// retained page element rather than only exposing metadata or painting
+/// unrelated replacement content.
 pub fn nav_stack_slide(page: gpui::base::NavPage) -> AnyElement {
     use gpui::base::NavOperation;
     use gpui::base::motion::PresencePhase;
@@ -3669,6 +3733,90 @@ mod tests {
         apply_id_plan(&mut entries, &mut forward, &steps);
         assert_eq!(entries, owned(&["home", "x"]));
         assert!(forward.is_empty());
+    }
+
+    #[test]
+    fn nav_replace_token_parses_int_and_string() {
+        assert_eq!(nav_replace_token(None), None);
+        assert_eq!(nav_replace_token(Some(&json!(null))), None);
+        assert_eq!(nav_replace_token(Some(&json!(""))), None);
+        assert_eq!(nav_replace_token(Some(&json!(2))), Some("2".into()));
+        assert_eq!(nav_replace_token(Some(&json!(0))), Some("0".into()));
+        assert_eq!(
+            nav_replace_token(Some(&json!("session-9"))),
+            Some("session-9".into())
+        );
+        assert_eq!(nav_replace_token(Some(&json!(true))), None);
+        assert_eq!(
+            nav_bind_replace_token(Some("detail"), Some("2")),
+            Some(("detail".into(), "2".into()))
+        );
+        assert_eq!(nav_bind_replace_token(None, Some("2")), None);
+    }
+
+    #[test]
+    fn nav_same_id_replace_requires_token_change_on_same_top_page() {
+        let trail = owned(&["home", "detail"]);
+        assert!(!nav_same_id_replace(&trail, &trail, None, Some("1")));
+        let last = Some(("detail".to_string(), "1".to_string()));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            last.as_ref(),
+            Some("1")
+        ));
+        assert!(nav_same_id_replace(
+            &trail,
+            &trail,
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(&trail, &trail, last.as_ref(), None));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &owned(&["home"]),
+            last.as_ref(),
+            Some("2")
+        ));
+        let home = owned(&["home"]);
+        assert!(!nav_same_id_replace(&home, &home, last.as_ref(), Some("2")));
+        assert!(!nav_same_id_replace(&[], &[], last.as_ref(), Some("2")));
+    }
+
+    #[test]
+    fn nav_same_id_replace_preserves_forward_branch() {
+        use super::NavTrailStep::*;
+        let trail = owned(&["home", "detail"]);
+        let last = Some(("detail".to_string(), "1".to_string()));
+        assert!(
+            plan(
+                &["home", "detail"],
+                &["home", "detail"],
+                &["settings"],
+                true
+            )
+            .is_empty()
+        );
+        assert!(nav_same_id_replace(
+            &trail,
+            &trail,
+            last.as_ref(),
+            Some("2")
+        ));
+        let mut entries = trail.clone();
+        let mut forward = owned(&["settings"]);
+        apply_id_plan(&mut entries, &mut forward, &[Replace("detail".into())]);
+        assert_eq!(entries, owned(&["home", "detail"]));
+        assert_eq!(forward, owned(&["settings"]));
+        assert_eq!(
+            nav_forward_view_ids(
+                &forward
+                    .iter()
+                    .map(|id| (id.clone(), ()))
+                    .collect::<Vec<_>>()
+            ),
+            owned(&["settings"])
+        );
     }
 
     #[test]
