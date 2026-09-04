@@ -45,12 +45,14 @@ impl CljAction {
 ///
 /// Submenu / group wrappers are skipped; separators are skipped. Callback ids
 /// on the items are ignored — they are not part of the Action.
+#[cfg(test)]
 pub fn clj_leaf_actions(items: &[Item], slot: &str) -> Vec<CljAction> {
     let mut out = Vec::new();
     collect_leaf_actions(items, slot, &mut out);
     out
 }
 
+#[cfg(test)]
 fn collect_leaf_actions(items: &[Item], slot: &str, out: &mut Vec<CljAction>) {
     for item in items {
         if item.is_separator() {
