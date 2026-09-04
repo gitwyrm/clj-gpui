@@ -339,7 +339,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | `Combobox` | `ui/combobox` | Replaces some of the deferred "searchable select sections" C item. |
 | `Rating`, `Stepper`, `Pagination` | `ui/rating`, `ui/stepper`, `ui/pagination` | Straightforward controlled widgets. |
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
-| `HoverCard`, `FocusTrap` | maybe | |
+| `HoverCard`, `AvatarGroup` | `ui/hover-card`, `ui/avatar-group` | Hover-driven card; overlapping avatars. `FocusTrap` still unwrapped. |
 | `Command`, `NativeMenu`, `StatusBar` | maybe | OS menu / palette — think through whether Clojure owns the menu tree. |
 | `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | later | Chat/assistant layout. Large API. |
 | `NavStack` | `ui/nav-stack` | Push/back/forward + motion. Needs host history state. |

@@ -14,7 +14,7 @@ use gpui::{
 use gpui_component::{
     Colorize as _, Disableable as _, Icon, IconName, Sizable as _,
     alert::Alert,
-    avatar::Avatar,
+    avatar::{Avatar, AvatarGroup},
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _},
@@ -22,6 +22,7 @@ use gpui_component::{
     dialog::{AlertDialog, DialogButtonProps},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
+    hover_card::HoverCard,
     kbd::Kbd,
     link::Link,
     menu::{PopupMenu, PopupMenuItem},
@@ -59,6 +60,71 @@ pub fn node_key(node: &Node, path: &str) -> String {
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| path.to_string())
+}
+
+/// Kit `Avatar` from a node. Image `src` is an http URL or file path.
+pub fn kit_avatar(node: &Node) -> Avatar {
+    let mut avatar = Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if let Some(name) = node
+        .text
+        .clone()
+        .or(node.title.clone())
+        .filter(|s| !s.is_empty())
+    {
+        avatar = avatar.name(name);
+    }
+    if let Some(src) = node.src.as_deref().filter(|s| !s.is_empty()) {
+        avatar = avatar.src(src.to_string());
+    }
+    if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        avatar = avatar.placeholder(icon);
+    }
+    avatar
+}
+
+fn kit_avatar_group(node: &Node) -> AvatarGroup {
+    let mut group =
+        AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+    if let Some(limit) = node
+        .limit
+        .filter(|n| n.is_finite())
+        .map(|n| n.round().max(0.0) as usize)
+    {
+        group = group.limit(limit);
+    }
+    if node.ellipsis {
+        group = group.ellipsis();
+    }
+    group.children(
+        node.children
+            .iter()
+            .filter(|child| child.kind == "avatar")
+            .map(kit_avatar),
+    )
+}
+
+fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
+    let mut card = HoverCard::new(SharedString::from(node_key(node, path)));
+    if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+        card = card.anchor(anchor);
+    }
+    if let Some(secs) = node.open_delay.filter(|n| n.is_finite() && *n >= 0.0) {
+        card = card.open_delay(Duration::from_secs_f32(secs));
+    }
+    if let Some(secs) = node.close_delay.filter(|n| n.is_finite() && *n >= 0.0) {
+        card = card.close_delay(Duration::from_secs_f32(secs));
+    }
+    if let Some(appearance) = node.appearance {
+        card = card.appearance(appearance);
+    }
+    if let Some(trigger) = node.trigger.as_deref() {
+        card = card.trigger(paint_chart_element(trigger, &format!("{path}-trigger")));
+    }
+    card.children(
+        node.children.iter().enumerate().map(|(child_ix, child)| {
+            paint_chart_element(child, &static_child_path(path, child_ix))
+        }),
+    )
 }
 
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
@@ -551,14 +617,9 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             }
             chart_layout(crumb, node).into_any_element()
         }
-        "avatar" => {
-            let mut avatar =
-                Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-            if let Some(name) = node.text.clone().or(node.title.clone()) {
-                avatar = avatar.name(name);
-            }
-            chart_layout(avatar, node).into_any_element()
-        }
+        "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
+        "avatar-group" => chart_layout(kit_avatar_group(node), node).into_any_element(),
+        "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
         "progress" => {
             let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
             chart_layout(
@@ -1351,10 +1412,33 @@ mod tests {
             "children": [{"type": "label", "text": "N"}]
         }));
         let _ = paint_chart_label(&badge, "radar-label/0");
-        let avatar = node(json!({"type": "avatar", "text": "AB"}));
+        let avatar = node(json!({
+            "type": "avatar",
+            "text": "AB",
+            "src": "https://example.com/ab.png"
+        }));
         let _ = paint_chart_label(&avatar, "radar-label/1");
         let tag = node(json!({"type": "tag", "text": "Hot", "variant": "primary"}));
         let _ = paint_chart_label(&tag, "radar-label/2");
+        let group = node(json!({
+            "type": "avatar-group",
+            "limit": 2,
+            "ellipsis": true,
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "avatar", "text": "Grace"},
+                {"type": "avatar", "text": "Alan"}
+            ]
+        }));
+        let _ = paint_chart_label(&group, "radar-label/3");
+        let hover = node(json!({
+            "type": "hover-card",
+            "id": "hint",
+            "open-delay": 0.2,
+            "trigger": {"type": "label", "text": "@ada"},
+            "children": [{"type": "label", "text": "Ada Lovelace"}]
+        }));
+        let _ = paint_chart_label(&hover, "radar-label/4");
     }
 
     #[test]

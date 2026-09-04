@@ -91,6 +91,24 @@ pub fn parse_tag_variant(value: Option<&str>) -> TagVariant {
     }
 }
 
+/// HoverCard `Anchor`. Omitted / unknown leaves Kit's `TopCenter`.
+pub fn parse_anchor(value: Option<&str>) -> Option<gpui::Anchor> {
+    match value.map(catalog::normalize) {
+        Some(name) => match name.as_str() {
+            "top left" | "topleft" => Some(gpui::Anchor::TopLeft),
+            "top right" | "topright" => Some(gpui::Anchor::TopRight),
+            "top center" | "topcenter" | "top" => Some(gpui::Anchor::TopCenter),
+            "bottom left" | "bottomleft" => Some(gpui::Anchor::BottomLeft),
+            "bottom right" | "bottomright" => Some(gpui::Anchor::BottomRight),
+            "bottom center" | "bottomcenter" | "bottom" => Some(gpui::Anchor::BottomCenter),
+            "left center" | "leftcenter" | "left" => Some(gpui::Anchor::LeftCenter),
+            "right center" | "rightcenter" | "right" => Some(gpui::Anchor::RightCenter),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
 pub fn parse_placement(value: Option<&str>, default: Placement) -> Placement {
     match value.map(catalog::normalize) {
         Some(name) if name == "left" => Placement::Left,
@@ -290,6 +308,17 @@ mod tests {
             parse_placement(Some("left"), Placement::Right),
             Placement::Left
         );
+        assert_eq!(
+            parse_anchor(Some("top-center")),
+            Some(gpui::Anchor::TopCenter)
+        );
+        assert_eq!(
+            parse_anchor(Some("bottom_left")),
+            Some(gpui::Anchor::BottomLeft)
+        );
+        assert_eq!(parse_anchor(Some("left")), Some(gpui::Anchor::LeftCenter));
+        assert_eq!(parse_anchor(None), None);
+        assert_eq!(parse_anchor(Some("not-an-anchor")), None);
         assert_eq!(parse_placement(None, Placement::Right), Placement::Right);
         assert_eq!(parse_side(Some("right"), Side::Left), Side::Right);
         assert_eq!(parse_side(None, Side::Left), Side::Left);

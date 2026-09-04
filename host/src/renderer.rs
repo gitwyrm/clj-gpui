@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
     accordion::Accordion,
     alert::Alert,
-    avatar::Avatar,
+    avatar::AvatarGroup,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
@@ -28,6 +28,7 @@ use gpui_component::{
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
+    hover_card::HoverCard,
     input::{
         Editor, EditorState, Input, InputEvent, InputState, NumberInput, NumberInputEvent,
         OtpEvent, OtpInput, OtpState, StepAction, Textarea, TextareaState,
@@ -1285,10 +1286,12 @@ impl RootView {
             "clipboard" => self.render_clipboard(node, &key, cx),
             "breadcrumb" => self.render_breadcrumb(node, &key, cx),
             "avatar" => self.render_avatar(node, cx),
+            "avatar-group" => self.render_avatar_group(node, cx),
             "accordion" => self.render_accordion(node, path, &key, window, cx),
             "description-list" => self.render_description_list(node, cx),
             "dialog" | "alert-dialog" => div().into_any_element(),
             "popover" => self.render_popover(node, &key, cx),
+            "hover-card" => self.render_hover_card(node, path, &key, window, cx),
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
@@ -2206,12 +2209,63 @@ impl RootView {
     }
 
     fn render_avatar(&self, node: &Node, cx: &App) -> AnyElement {
-        let mut avatar =
-            Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-        if let Some(name) = node.text.clone().or(node.title.clone()) {
-            avatar = avatar.name(name);
+        apply_style(overlay::kit_avatar(node), node, cx).into_any_element()
+    }
+
+    fn render_avatar_group(&self, node: &Node, cx: &App) -> AnyElement {
+        let mut group =
+            AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
+        if let Some(limit) = extra::avatar_group_limit(node) {
+            group = group.limit(limit);
         }
-        apply_style(avatar, node, cx).into_any_element()
+        if node.ellipsis {
+            group = group.ellipsis();
+        }
+        group = group.children(
+            node.children
+                .iter()
+                .filter(|child| child.kind == "avatar")
+                .map(overlay::kit_avatar),
+        );
+        apply_style(group, node, cx).into_any_element()
+    }
+
+    fn render_hover_card(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut card = HoverCard::new(eid(key));
+        if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+            card = card.anchor(anchor);
+        }
+        if let Some(secs) = extra::hover_card_delay_secs(node.open_delay) {
+            card = card.open_delay(Duration::from_secs_f32(secs));
+        }
+        if let Some(secs) = extra::hover_card_delay_secs(node.close_delay) {
+            card = card.close_delay(Duration::from_secs_f32(secs));
+        }
+        if let Some(appearance) = node.appearance {
+            card = card.appearance(appearance);
+        }
+        if let Some(trigger) = node.trigger.as_deref() {
+            card = card.trigger(self.render_node(trigger, &format!("{path}-trigger"), window, cx));
+        }
+        card = card.children(self.render_children(node, path, window, cx));
+        if let Some(callback_id) = node.on_open_change.clone() {
+            let cmd_tx = self.cmd_tx.clone();
+            card = card.on_open_change(move |open, _, _| {
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(*open)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(card, node, cx).into_any_element()
     }
 
     fn render_accordion(
