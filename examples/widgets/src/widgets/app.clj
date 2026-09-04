@@ -62,7 +62,8 @@
            :setting-theme :dark
            :setting-accent :blue
            :split-id "split-a"
-           :split-sizes nil}))
+           :split-sizes nil
+           :chat-count 3}))
 
 (defn- set-key [k]
   (fn [v]
@@ -523,6 +524,74 @@
    (ui/textarea notes {:id "notes" :rows 4 :on-change (set-key :notes)})
    (ui/editor src {:id "src" :language "clojure" :height 160 :on-change (set-key :src)})))
 
+(defn- chat-row [n]
+  (let [base [{:id "m1" :who :ada :text "Can you review this draft?" :time "10:24 AM"}
+              {:id "m2" :who :you :text "On it — sending comments." :time "10:25 AM" :status "Delivered"}
+              {:id "m3" :who :ada :text "Thanks. Also attached the PDF." :time "10:26 AM"}]
+        extras (map (fn [i]
+                      {:id (str "m" (+ 4 i))
+                       :who :you
+                       :text (str "Follow-up " (inc i))
+                       :time "10:27 AM"
+                       :status "Sent"})
+                    (range (max 0 (- n 3))))]
+    (into base extras)))
+
+(defn- chat-message [{:keys [id who text time status]}]
+  (let [outgoing? (= who :you)]
+    (ui/message {:id id
+                 :alignment (if outgoing? :end :start)
+                 :avatar (ui/avatar (if outgoing? "You" "Ada"))
+                 :header (ui/message-header (if outgoing? "You" "Ada") time)
+                 :footer (when status (ui/message-footer status))}
+                (ui/bubble text (cond-> {:variant (if outgoing? :filled :secondary)}
+                                  (= id "m3") (assoc :reactions (ui/bubble-reactions "👍")))))))
+
+(defn- chat-panel [{:keys [chat-count]}]
+  (ui/vstack
+   {:gap 12}
+   (ui/label "Kit Message / Bubble" {:font-size 16 :font-weight :semibold})
+   (ui/message-group
+    (ui/message {:alignment :start
+                 :stack-style {:gap 6}
+                 :avatar (ui/avatar "Ada")
+                 :header (ui/message-header "Ada" "10:24 AM")}
+                (ui/bubble "Incoming" {:variant :secondary}))
+    (ui/message {:alignment :end
+                 :avatar (ui/avatar "You")
+                 :header (ui/message-header "You" "10:25 AM")
+                 :footer (ui/message-footer "Delivered")}
+                (ui/bubble {}
+                           (ui/bubble-content {:bg "#1a1b26"} "Outgoing")
+                           "edited")))
+   (ui/marker "Today" {:variant :separator :id "day"
+                       :separator-style {:color "#7aa2f7"}})
+   (ui/message {:alignment :start
+                :header (ui/message-header {:content-inset false} "System")}
+               (ui/bubble "Ghost system notice" {:variant :ghost}))
+   (ui/attachment {:id "file-1" :status :uploading :size :small}
+                  (ui/attachment-media (ui/icon :file))
+                  (ui/attachment-content
+                   (ui/attachment-title {:shimmer-style {:duration 1.2}}
+                                        "report.pdf")
+                   (ui/attachment-description "Uploading"))
+                  (ui/attachment-actions (ui/button "Cancel" {:compact true})))
+   (ui/attachment {:id "img-1" :size :small}
+                  (ui/attachment-media {:src "https://avatars.githubusercontent.com/u/5518?s=64"
+                                        :size :lg
+                                        :overlay (ui/icon :search)})
+                  (ui/attachment-content (ui/attachment-title "preview.png")))
+   (ui/hstack
+    {:gap 8 :align :center}
+    (ui/button "Append" #(swap! !state update :chat-count inc))
+    (ui/label (str chat-count " scroller rows") {:font-size 13}))
+   (apply ui/message-scroller
+          {:id "chat" :height 280 :padding 8
+           :jump-button-label "Jump to latest"
+           :content-style {:padding 4}
+           :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}}
+          (map chat-message (chat-row chat-count)))))
+
 (defn- docs-panel [_]
   (ui/vstack
    {:gap 12}
@@ -668,6 +737,7 @@
                         {:id :overlay :label "Overlay"}
                         {:id :data :label "Data"}
                         {:id :forms :label "Forms"}
+                        {:id :chat :label "Chat"}
                         {:id :docs :label "Docs"}
                         {:id :shell :label "Shell"}]
                 :variant :underline
@@ -681,6 +751,7 @@
           :overlay (overlay-panel state)
           :data (data-panel state)
           :forms (forms-panel state)
+          :chat (chat-panel state)
           :docs (docs-panel state)
           :shell (shell-panel state)
           (general-panel state))))))))

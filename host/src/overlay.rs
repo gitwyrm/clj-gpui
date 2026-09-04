@@ -5,6 +5,7 @@
 //! Clojure tree and syncs on the next frame so `RootView::render` never
 //! re-enters `Root`. Notifications are a stack on `Root.notification`.
 
+use crate::chat;
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
@@ -605,22 +606,65 @@ fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElem
         .into_any_element()
 }
 
-fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
+struct ChartPaint<'a> {
+    cmd_tx: Option<&'a mpsc::Sender<Cmd>>,
+}
+
+impl crate::chat::NodePainter for ChartPaint<'_> {
+    fn paint_node(&mut self, node: &Node, path: &str) -> gpui::AnyElement {
+        paint_static_tree(node, path, self.cmd_tx)
+    }
+
+    fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
+        self.cmd_tx.cloned()
+    }
+}
+
+pub(crate) fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
+    paint_static_tree(node, path, None)
+}
+
+pub(crate) fn paint_scroller_tree(
+    node: &Node,
+    path: &str,
+    cmd_tx: &mpsc::Sender<Cmd>,
+) -> gpui::AnyElement {
+    paint_static_tree(node, path, Some(cmd_tx))
+}
+
+fn paint_static_tree(
+    node: &Node,
+    path: &str,
+    cmd_tx: Option<&mpsc::Sender<Cmd>>,
+) -> gpui::AnyElement {
+    if chat::is_chat_kind(&node.kind) {
+        return chat::render_any(&mut ChartPaint { cmd_tx }, node, path);
+    }
     match node.kind.as_str() {
         "button" => {
             let label = node.text.clone().unwrap_or_default();
             let mut button = Button::new(SharedString::from(path.to_string())).label(label);
             button = apply_button_chrome(button, node);
+            if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
+                let tx = tx.clone();
+                button = button.on_click(move |_, _, _| {
+                    let _ = tx.send(Cmd::Callback {
+                        id: id.clone(),
+                        value: None,
+                        seq: None,
+                    });
+                });
+            }
             button.into_any_element()
         }
         "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_chart_element(child, &static_child_path(path, child_ix))
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
             }))
             .into_any_element(),
         "vstack" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_chart_element(child, &static_child_path(path, child_ix))
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
             }))
             .into_any_element(),
         "spacer" => {
@@ -720,7 +764,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             }
             badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
             badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_chart_element(child, &static_child_path(path, child_ix))
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
             }));
             chart_host(badge, node, path)
         }
@@ -775,7 +819,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             }
             chart_layout(
                 circle.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_chart_element(child, &static_child_path(path, child_ix))
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
                 })),
                 node,
             )
@@ -842,7 +886,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             }
             chart_layout(box_, node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_chart_element(child, &static_child_path(path, child_ix))
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
                 }))
                 .into_any_element()
         }
@@ -856,7 +900,7 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
         _ if !node.children.is_empty() => {
             chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_chart_element(child, &static_child_path(path, child_ix))
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
                 }))
                 .into_any_element()
         }

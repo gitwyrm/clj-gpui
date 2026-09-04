@@ -30,6 +30,14 @@
   (is (some? (ns-resolve 'gpui.ui 'table-row)))
   (is (some? (ns-resolve 'gpui.ui 'table-head)))
   (is (some? (ns-resolve 'gpui.ui 'table-cell)))
+  (is (some? (ns-resolve 'gpui.ui 'message)))
+  (is (some? (ns-resolve 'gpui.ui 'message-group)))
+  (is (some? (ns-resolve 'gpui.ui 'bubble)))
+  (is (some? (ns-resolve 'gpui.ui 'bubble-reactions)))
+  (is (some? (ns-resolve 'gpui.ui 'attachment)))
+  (is (some? (ns-resolve 'gpui.ui 'attachment-media-overlay)))
+  (is (some? (ns-resolve 'gpui.ui 'marker)))
+  (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
   (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
@@ -968,6 +976,124 @@
       (is (= :resizable (:type n)))
       (is (= :vertical (:orientation n)))
       (is (= 2 (count (:children n)))))))
+
+(deftest chat-message-bubble-constructors
+  (testing "named message slots expand to children, not sheet footer"
+    (let [n (ui/message {:alignment :end
+                         :avatar (ui/avatar "You")
+                         :header (ui/message-header "You" "10:25 AM")
+                         :footer (ui/message-footer "Delivered")}
+                        (ui/bubble "Outgoing"))]
+      (is (= :message (:type n)))
+      (is (= "end" (:alignment n)))
+      (is (nil? (:footer n)) "message :footer is a child, not the sheet footer field")
+      (is (= :message-avatar (get-in n [:children 0 :type])))
+      (is (= :avatar (get-in n [:children 0 :children 0 :type])))
+      (is (= :message-header (get-in n [:children 1 :type])))
+      (is (= ["You" "10:25 AM"] (mapv :text (get-in n [:children 1 :children]))))
+      (is (= :message-content (get-in n [:children 2 :type])))
+      (is (= :bubble (get-in n [:children 2 :children 0 :type])))
+      (is (= "Outgoing" (get-in n [:children 2 :children 0 :children 0 :text])))
+      (is (= :message-footer (get-in n [:children 3 :type])))))
+  (testing "bubble variants and reactions"
+    (let [n (ui/bubble "Incoming" {:variant :secondary
+                                   :reactions (ui/bubble-reactions "👍")})]
+      (is (= :bubble (:type n)))
+      (is (= "secondary" (:variant n)))
+      (is (= :bubble-reactions (get-in n [:children 1 :type])))
+      (is (= "👍" (get-in n [:children 1 :children 0 :text]))))
+    (is (= "ghost" (:variant (ui/bubble {:variant :ghost} "System")))))
+  (testing "attachment status and marker separator"
+    (let [n (ui/attachment {:id "file-1" :status :uploading :orientation :vertical}
+                           (ui/attachment-media {:src "preview.png"})
+                           (ui/attachment-content
+                            (ui/attachment-title "report.pdf")
+                            (ui/attachment-description "Uploading"))
+                           (ui/attachment-actions (ui/button "Cancel")))]
+      (is (= :attachment (:type n)))
+      (is (= "uploading" (:status n)))
+      (is (= "vertical" (:orientation n)))
+      (is (= :attachment-media (get-in n [:children 0 :type])))
+      (is (= "preview.png" (get-in n [:children 0 :src])))
+      (is (= "report.pdf" (get-in n [:children 1 :children 0 :text])))
+      (is (= :attachment-actions (get-in n [:children 2 :type]))))
+    (let [n (ui/marker "Today" {:variant :separator :id "day" :role :status})]
+      (is (= :marker (:type n)))
+      (is (= "Today" (:text n)))
+      (is (= "separator" (:variant n)))
+      (is (= "status" (:role n)))
+      (is (empty? (:children n)))))
+  (testing "message-scroller keeps row ids"
+    (let [n (ui/message-scroller {:id "chat" :height 400 :jump-button false}
+                                 (ui/message {:id "m1"} (ui/bubble "Hi"))
+                                 (ui/message {:id "m2"} (ui/bubble "There")))]
+      (is (= :message-scroller (:type n)))
+      (is (= "chat" (:id n)))
+      (is (= 400 (:height n)))
+      (is (false? (:jump-button n)))
+      (is (= ["m1" "m2"] (mapv :id (:children n))))))
+  (testing "attachment-media size inherit vs override, and overlay vs child"
+    (let [parent (ui/attachment {:size :small}
+                                (ui/attachment-media {:src "a.png" :size :lg})
+                                (ui/attachment-media {:src "b.png"}))]
+      (is (= "small" (:control-size parent)))
+      (is (= "lg" (get-in parent [:children 0 :control-size])))
+      (is (nil? (get-in parent [:children 1 :control-size]))))
+    (let [with-src (ui/attachment-media {:src "preview.png"} (ui/icon :file))
+          overlay (ui/attachment-media {:src "preview.png"
+                                        :overlay (ui/icon :loader)}
+                                       (ui/icon :file))
+          named (ui/attachment-media-overlay (ui/icon :loader))]
+      (is (= :icon (get-in with-src [:children 0 :type])))
+      (is (= :attachment-media-overlay (get-in overlay [:children 0 :type])))
+      (is (= :icon (get-in overlay [:children 1 :type])))
+      (is (= :attachment-media-overlay (:type named)))))
+  (testing "explicit bubble-content style is kept beside a direct child"
+    (let [n (ui/bubble {}
+                       (ui/bubble-content {:bg "#111111" :padding 8} "hello")
+                       "extra")]
+      (is (= :bubble-content (get-in n [:children 0 :type])))
+      (is (= "#111111" (get-in n [:children 0 :bg])))
+      (is (= 8 (get-in n [:children 0 :padding])))
+      (is (= :label (get-in n [:children 1 :type])))
+      (is (= "extra" (get-in n [:children 1 :text])))))
+  (testing "stack, shimmer, separator, and scroller style slots"
+    (let [msg (ui/message {:stack-style {:gap 8 :padding 4 :bg "#1a1b26"}}
+                          (ui/bubble "Hi"))
+          title (ui/attachment-title {:shimmer-style {:duration 1.5 :reverse true}}
+                                     "report.pdf")
+          marker (ui/marker "Today" {:variant :separator
+                                     :separator-style {:color "#7aa2f7"}
+                                     :shimmer-style {:spread 0.4 :once true}})
+          scroller (ui/message-scroller {:id "chat"
+                                         :content-style {:padding 8}
+                                         :list-style {:gap 4}
+                                         :row-style {:padding 2}
+                                         :jump-button-style {:bg "#111111"}
+                                         :jump-button-renderer {:variant :primary
+                                                                :size :small
+                                                                :icon :arrow-down}}
+                                        (ui/message {:id "m1"} (ui/bubble "Hi")))]
+      (is (= 8 (get-in msg [:stack-style :gap])))
+      (is (= "#1a1b26" (get-in msg [:stack-style :bg])))
+      (is (= 1.5 (get-in title [:shimmer-style :duration])))
+      (is (true? (get-in title [:shimmer-style :reverse])))
+      (is (= "#7aa2f7" (get-in marker [:separator-style :color])))
+      (is (= 0.4 (get-in marker [:shimmer-style :spread])))
+      (is (true? (get-in marker [:shimmer-style :once])))
+      (is (= 8 (get-in scroller [:content-style :padding])))
+      (is (= 4 (get-in scroller [:list-style :gap])))
+      (is (= "primary" (get-in scroller [:jump-button-renderer :variant])))
+      (is (= "small" (get-in scroller [:jump-button-renderer :control-size])))
+      (is (nil? (get-in scroller [:jump-button-renderer :size])))
+      (is (= "arrow-down" (get-in scroller [:jump-button-renderer :icon])))))
+  (testing "jump-button-label is the tooltip; renderer :label is Button.label"
+    (let [n (ui/message-scroller {:id "chat"
+                                  :jump-button-label "Jump tooltip"
+                                  :jump-button-renderer {:label "Latest"}})]
+      (is (= "Jump tooltip" (:jump-button-label n)))
+      (is (= "Latest" (get-in n [:jump-button-renderer :text])))
+      (is (nil? (get-in n [:jump-button-renderer :label]))))))
 
 (deftest overlay-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

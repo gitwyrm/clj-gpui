@@ -1,4 +1,5 @@
 use crate::catalog;
+use crate::chat;
 use crate::extra;
 use crate::mapping;
 use crate::overlay;
@@ -8,7 +9,7 @@ use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
     Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId, PathPromptOptions, Pixels,
-    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, rgb, size,
+    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
@@ -36,6 +37,7 @@ use gpui_component::{
     link::Link,
     list::{List, ListEvent, ListState},
     menu::{ContextMenuExt as _, DropdownMenu as _},
+    message_scroller::{MessageScroller, MessageScrollerState},
     notification::Notification,
     pagination::Pagination,
     popover::Popover,
@@ -221,6 +223,14 @@ struct ComboboxSlot {
     coalesce: protocol::ComboboxActivationCoalesce,
 }
 
+struct MessageScrollerSlot {
+    state: Entity<MessageScrollerState>,
+    items: Rc<RefCell<Vec<Node>>>,
+    last_ids: Vec<String>,
+    last_fps: Vec<u64>,
+    _observe: Subscription,
+}
+
 struct ListSlot {
     state: Entity<ListState<RowListDelegate>>,
     fingerprint: u64,
@@ -378,6 +388,7 @@ pub struct RootView {
     editors: HashMap<String, TextControlSlot<EditorState>>,
     textareas: HashMap<String, TextControlSlot<TextareaState>>,
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
+    scrollers: HashMap<String, MessageScrollerSlot>,
     docks: HashMap<String, DockSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
     used_resizables: HashSet<String>,
@@ -404,6 +415,7 @@ pub struct RootView {
     used_editors: HashSet<String>,
     used_textareas: HashSet<String>,
     used_vlists: HashSet<String>,
+    used_scrollers: HashSet<String>,
     used_docks: HashSet<String>,
     _appearance: Subscription,
     _window_bounds: Subscription,
@@ -413,6 +425,22 @@ pub struct RootView {
     applied_title: String,
     applied_window_size: Option<(i32, i32)>,
     native_window_id: Option<u32>,
+}
+
+struct RenderPaint<'v, 'w, 'cx, 'a> {
+    view: &'v mut RootView,
+    window: &'w mut Window,
+    cx: &'cx mut Context<'a, RootView>,
+}
+
+impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
+    fn paint_node(&mut self, node: &Node, path: &str) -> AnyElement {
+        self.view.render_node(node, path, self.window, self.cx)
+    }
+
+    fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
+        Some(self.view.cmd_tx.clone())
+    }
 }
 
 impl RootView {
@@ -519,6 +547,7 @@ impl RootView {
             editors: HashMap::new(),
             textareas: HashMap::new(),
             vlists: HashMap::new(),
+            scrollers: HashMap::new(),
             docks: HashMap::new(),
             resizables: HashMap::new(),
             used_resizables: HashSet::new(),
@@ -545,6 +574,7 @@ impl RootView {
             used_editors: HashSet::new(),
             used_textareas: HashSet::new(),
             used_vlists: HashSet::new(),
+            used_scrollers: HashSet::new(),
             used_docks: HashSet::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
@@ -1465,6 +1495,36 @@ impl RootView {
             ),
             "dock" => self.render_dock(node, &key, window, cx),
             "resizable" => self.render_resizable(node, path, &key, window, cx),
+            "message-scroller" => self.render_message_scroller(node, path, &key, window, cx),
+            "message"
+            | "message-group"
+            | "message-avatar"
+            | "message-header"
+            | "message-content"
+            | "message-footer"
+            | "bubble"
+            | "bubble-content"
+            | "bubble-group"
+            | "bubble-reactions"
+            | "attachment"
+            | "attachment-media"
+            | "attachment-media-overlay"
+            | "attachment-content"
+            | "attachment-title"
+            | "attachment-description"
+            | "attachment-actions"
+            | "attachment-group"
+            | "marker"
+            | "marker-icon"
+            | "marker-content" => chat::render_any(
+                &mut RenderPaint {
+                    view: self,
+                    window,
+                    cx,
+                },
+                node,
+                path,
+            ),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
@@ -3735,6 +3795,141 @@ impl RootView {
         state
     }
 
+    fn render_message_scroller(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_scrollers.insert(key.to_string());
+        let children = node.children.clone();
+        let ids: Vec<String> = children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| chat::scroller_item_id(child, index))
+            .collect();
+        let fps: Vec<u64> = children.iter().map(chat::node_fingerprint).collect();
+        if !self.scrollers.contains_key(key) {
+            let item_count = children.len();
+            let state = cx.new(|cx| MessageScrollerState::new(item_count, cx));
+            let observe = cx.observe(&state, |_, _, cx| cx.notify());
+            self.scrollers.insert(
+                key.to_string(),
+                MessageScrollerSlot {
+                    state,
+                    items: Rc::new(RefCell::new(children)),
+                    last_ids: ids,
+                    last_fps: fps,
+                    _observe: observe,
+                },
+            );
+        } else if let Some(slot) = self.scrollers.get_mut(key) {
+            match chat::scroller_edit(&slot.last_ids, &ids) {
+                chat::ScrollerEdit::Leave => {
+                    if chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Leave,
+                        &slot.last_fps,
+                        &fps,
+                    ) {
+                        slot.state.update(cx, |state, cx| state.remeasure(cx));
+                    }
+                }
+                chat::ScrollerEdit::Reset { count } => {
+                    slot.state.update(cx, |state, cx| state.reset(count, cx));
+                }
+                chat::ScrollerEdit::Append(n) => {
+                    let survivor_changed = chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Append(n),
+                        &slot.last_fps,
+                        &fps,
+                    );
+                    slot.state.update(cx, |state, cx| {
+                        let _ = state.append(n, cx);
+                        if survivor_changed {
+                            state.remeasure(cx);
+                        }
+                    });
+                }
+                chat::ScrollerEdit::Prepend(n) => {
+                    let survivor_changed = chat::scroller_survivors_changed(
+                        &chat::ScrollerEdit::Prepend(n),
+                        &slot.last_fps,
+                        &fps,
+                    );
+                    slot.state.update(cx, |state, cx| {
+                        let _ = state.prepend(n, cx);
+                        if survivor_changed {
+                            state.remeasure(cx);
+                        }
+                    });
+                }
+            }
+            *slot.items.borrow_mut() = children;
+            slot.last_ids = ids;
+            slot.last_fps = fps;
+        }
+        let slot = self.scrollers.get(key).expect("scroller slot");
+        let items = slot.items.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let row_path = path.to_string();
+        let mut scroller = MessageScroller::new(
+            SharedString::from(key.to_string()),
+            slot.state.clone(),
+            move |index, _, _| {
+                let tree = items.borrow();
+                match tree.get(index) {
+                    Some(row) => {
+                        overlay::paint_scroller_tree(row, &format!("{row_path}.{index}"), &cmd_tx)
+                    }
+                    None => div().into_any_element(),
+                }
+            },
+        );
+        if node.scrollbar == Some(false) {
+            scroller = scroller.scrollbar(false);
+        }
+        if node.jump_button == Some(false) {
+            scroller = scroller.jump_button(false);
+        }
+        if let Some(label) = node.jump_button_label.clone() {
+            scroller = scroller.with_jump_button_label(label);
+        }
+        if let Some(secs) = node
+            .jump_button_transition
+            .filter(|n| n.is_finite() && *n >= 0.0)
+        {
+            scroller = scroller.with_jump_button_transition(Duration::from_secs_f32(secs));
+        }
+        if let Some(fade) = node.bottom_fade.as_deref().and_then(extra::parse_hex_color) {
+            scroller = scroller.with_bottom_fade(fade);
+        }
+        if let Some(style) = mapping::style_refinement(node.content_style.as_deref()) {
+            scroller = scroller.with_content_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.list_style.as_deref()) {
+            scroller = scroller.with_list_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.row_style.as_deref()) {
+            scroller = scroller.with_row_style(style);
+        }
+        if let Some(style) = mapping::style_refinement(node.jump_button_style.as_deref()) {
+            scroller = scroller.with_jump_button_style(style);
+        }
+        if let Some(chrome) = node.jump_button_renderer.clone() {
+            scroller = scroller.with_jump_button_renderer(move |button| {
+                mapping::apply_jump_button_renderer(button, &chrome)
+            });
+        }
+        // Kit's root Styled (padding, gap, font/color, bg, border, shadow,
+        // align/justify) lives on MessageScroller. The host wrapper only
+        // supplies viewport/box geometry so content/list/row slots stay
+        // distinct from the scroller root.
+        let scroller = apply_kit_visual_style(scroller, node, cx);
+        viewport_box_sized(scroller, node, 400.0)
+    }
+
     fn render_virtual_list(
         &mut self,
         node: &Node,
@@ -4079,6 +4274,7 @@ impl Render for RootView {
         self.used_editors.clear();
         self.used_textareas.clear();
         self.used_vlists.clear();
+        self.used_scrollers.clear();
         self.used_docks.clear();
         self.used_resizables.clear();
         let tree = self.tree.clone();
@@ -4128,6 +4324,8 @@ impl Render for RootView {
         self.textareas.retain(|key, _| used_textareas.contains(key));
         let used_vlists = std::mem::take(&mut self.used_vlists);
         self.vlists.retain(|key, _| used_vlists.contains(key));
+        let used_scrollers = std::mem::take(&mut self.used_scrollers);
+        self.scrollers.retain(|key, _| used_scrollers.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
         self.docks.retain(|key, _| used_docks.contains(key));
         let used_resizables = std::mem::take(&mut self.used_resizables);
@@ -4207,11 +4405,6 @@ mod widget_key_tests {
             "root-0-1"
         );
     }
-}
-
-fn parse_color(value: &str) -> Option<u32> {
-    let value = value.trim().trim_start_matches('#');
-    u32::from_str_radix(value, 16).ok()
 }
 
 /// Step is drag granularity. Clojure's controlled value is accepted as-is
@@ -4757,6 +4950,24 @@ fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
+/// Viewport/box geometry only. Visual Styled stays on the inner Kit widget.
+///
+/// Used by `MessageScroller`, whose root `Styled` is a documented style
+/// boundary separate from `with_content_style` / `with_list_style` /
+/// `with_row_style`. List / table / editor still use `viewport_sized`.
+fn viewport_box_sized(el: impl IntoElement, node: &Node, default_h: f32) -> AnyElement {
+    let mut wrap = v_flex().min_h_0();
+    if node.width.is_none() && node.size.is_none() {
+        wrap = wrap.w_full();
+    }
+    if node.height.is_none() && node.size.is_none() && node.flex.unwrap_or(0.0) < 1.0 {
+        wrap = wrap.h(px(default_h));
+    }
+    apply_outer_box_style(wrap, node)
+        .child(el)
+        .into_any_element()
+}
+
 /// Layout contract for `ui/context-menu`.
 ///
 /// The host is a flex column (`v_flex` + `min_h_0`), never a block `div`.
@@ -5012,6 +5223,20 @@ fn viewport_wrap(node: &Node, default_h: f32) -> ViewportWrap {
     }
 }
 
+/// MessageScroller wrap contract: box geometry on the host wrapper, visual
+/// Styled on Kit's MessageScroller root.
+#[cfg(test)]
+fn message_scroller_style_split(node: &Node) -> (ViewportWrap, bool) {
+    let mut wrap = viewport_wrap(node, 400.0);
+    let kit_root_visual = wrap.visual
+        || node.gap.is_some()
+        || node.color.is_some()
+        || node.font_size.is_some()
+        || node.shadow;
+    wrap.visual = false;
+    (wrap, kit_root_visual)
+}
+
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
     let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
         return el;
@@ -5024,62 +5249,8 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
 
 /// Kit `Styled` refinements: gap, padding, type, colors, alignment.
 /// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
-fn apply_kit_visual_style<E: Styled>(mut el: E, node: &Node, cx: &App) -> E {
-    if let Some(gap) = node.gap {
-        el = el.gap(px(gap));
-    }
-    if let Some(padding) = node.padding {
-        el = el.p(px(padding));
-    }
-    if let Some(font_size) = node.font_size {
-        el = el.text_size(px(font_size));
-    }
-    if let Some(family) = &node.font_family {
-        el = el.font_family(family.clone());
-    }
-    if let Some(weight) = &node.font_weight {
-        el = match weight.as_str() {
-            "thin" => el.font_weight(gpui::FontWeight::THIN),
-            "extralight" | "extra-light" | "ultralight" => {
-                el.font_weight(gpui::FontWeight::EXTRA_LIGHT)
-            }
-            "bold" => el.font_weight(gpui::FontWeight::BOLD),
-            "semibold" | "semi-bold" => el.font_weight(gpui::FontWeight::SEMIBOLD),
-            "medium" => el.font_weight(gpui::FontWeight::MEDIUM),
-            "light" => el.font_weight(gpui::FontWeight::LIGHT),
-            _ => el.font_weight(gpui::FontWeight::NORMAL),
-        };
-    }
-    if let Some(color) = node.color.as_deref().and_then(parse_color) {
-        el = el.text_color(rgb(color));
-    }
-    if let Some(bg) = node.bg.as_deref().and_then(parse_color) {
-        el = el.bg(rgb(bg));
-    }
-    if let Some(border) = node.border.as_deref().and_then(parse_color) {
-        el = el.border_1().border_color(rgb(border));
-    }
-    if let Some(border) = node.border_bottom.as_deref().and_then(parse_color) {
-        el = el.border_b_1().border_color(rgb(border));
-    }
-    if node.strikethrough {
-        el = el.line_through();
-    }
-    if node.shadow {
-        el = el.shadow_lg();
-    }
-    match node.align.as_deref() {
-        Some("center") => el = el.items_center(),
-        Some("end") => el = el.items_end(),
-        Some("start") => el = el.items_start(),
-        _ => {}
-    }
-    match node.justify.as_deref() {
-        Some("center") => el = el.justify_center(),
-        Some("end") | Some("right") => el = el.justify_end(),
-        Some("between") => el = el.justify_between(),
-        _ => {}
-    }
+fn apply_kit_visual_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
+    let mut el = mapping::apply_visual_style(el, node);
     if node_theme_pref(node).is_some() {
         if node.color.is_none() {
             el = el.text_color(cx.theme().foreground);
@@ -5821,10 +5992,13 @@ mod accordion_control_tests {
 #[cfg(test)]
 mod widget_wrap_tests {
     use super::{
-        Node, content_wrap, context_menu_wrap, outer_layout, row_intrinsic_wrap, viewport_wrap,
+        Node, content_wrap, context_menu_wrap, message_scroller_style_split, outer_layout,
+        row_intrinsic_wrap, viewport_wrap,
     };
     use crate::extra;
+    use crate::mapping;
     use crate::protocol::Item;
+    use gpui_kit::{Styled, div};
     use serde_json::json;
 
     #[test]
@@ -5971,6 +6145,43 @@ mod widget_wrap_tests {
         assert!(wrap.flex_fill);
         assert!(wrap.fill_width);
         assert_eq!(wrap.default_height, None);
+    }
+
+    #[test]
+    fn message_scroller_root_owns_visual_style() {
+        let node = Node {
+            kind: "message-scroller".into(),
+            padding: Some(8.0),
+            gap: Some(4.0),
+            bg: Some("#112233".into()),
+            border: Some("#445566".into()),
+            height: Some(320.0),
+            ..Node::default()
+        };
+        let (wrap, kit_root_visual) = message_scroller_style_split(&node);
+        assert_eq!(wrap.height, Some(320.0));
+        assert!(wrap.fill_width);
+        assert_eq!(wrap.default_height, None);
+        assert!(
+            !wrap.visual,
+            "visual padding/bg/border must stay on Kit MessageScroller root"
+        );
+        assert!(kit_root_visual);
+
+        let mut root = mapping::apply_visual_style(div(), &node);
+        assert!(root.style().padding.is_some());
+        assert!(root.style().background.is_some());
+
+        let omitted = Node {
+            kind: "message-scroller".into(),
+            padding: Some(8.0),
+            ..Node::default()
+        };
+        let (wrap, kit_root_visual) = message_scroller_style_split(&omitted);
+        assert_eq!(wrap.default_height, Some(400.0));
+        assert!(wrap.fill_width);
+        assert!(!wrap.visual);
+        assert!(kit_root_visual);
     }
 
     #[test]

@@ -223,7 +223,7 @@ docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
 
 ## Clojure UI API
 
-Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, and `ui/avatar-group` are new.
+Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui/text-field` → `ui/input`, `ui/divider` → `ui/separator`, `ui/table` → `ui/data-table`. Data tables stay `ui/data-table`. `ui/table` is Kit's declarative (non-virtualized) Table, with Kit primitives (`ui/table-header`, `ui/table-row`, `ui/table-head`, `ui/table-cell`, …) and a `{:columns :rows}` shorthand. `ui/textarea`, `ui/alert-dialog`, `ui/combobox`, `ui/rating`, `ui/stepper`, `ui/pagination`, `ui/progress-circle`, `ui/shimmer`, `ui/hover-card`, `ui/avatar-group`, `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, and `ui/message-scroller` are new.
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
@@ -356,6 +356,26 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/dock {:items [{:id :files :side :left :label "Files"
                    :content (ui/markdown "…")}]})
 (ui/resizable {:orientation :horizontal} pane-a pane-b)
+(ui/message {:id "m1" :alignment :start
+             :avatar (ui/avatar "Ada")
+             :header (ui/message-header "Ada" "10:24 AM")
+             :footer (ui/message-footer "Just now")}
+  (ui/bubble "Hello from Kit.")
+  (ui/bubble {:variant :ghost} "A quieter follow-up."))
+(ui/message {:id "m2" :alignment :end}
+  (ui/bubble "Outgoing"))
+(ui/attachment {:id "file-1" :status :uploading :on-click open-file!}
+  (ui/attachment-media {:src "preview.png" :size :lg
+                        :overlay (ui/icon :loader)})
+  (ui/attachment-title "notes.pdf")
+  (ui/attachment-description "Uploading"))
+(ui/marker "Today" {:variant :separator
+                    :separator-style {:color "#7aa2f7"}})
+(ui/message-scroller {:id "thread" :height 320 :padding 8
+                      :jump-button-label "Jump to latest"
+                      :jump-button-renderer {:label "Latest" :size :small :icon :arrow-down}}
+  (ui/message {:id "row-1" :alignment :start} (ui/bubble "First"))
+  (ui/message {:id "row-2" :alignment :end} (ui/bubble "Second")))
 (ui/button "Save" save! {:tooltip "Write the file"})
 ```
 

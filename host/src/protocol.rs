@@ -603,7 +603,7 @@ impl Item {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Node {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub kind: String,
     #[serde(default)]
     pub id: Option<String>,
@@ -983,6 +983,62 @@ pub struct Node {
     /// Not sankey `value-scale`. Logarithmic needs `min > 0`; otherwise linear.
     #[serde(default)]
     pub scale: Option<String>,
+    /// Message header/footer: Kit `content_inset`. Omitted inherits from a
+    /// ghost bubble (Kit strips inset). Not sheet `footer`.
+    #[serde(default, rename = "content-inset")]
+    pub content_inset: Option<bool>,
+    /// Attachment lifecycle: `pending`, `uploading`, `processing`, `failed`,
+    /// `complete` (default).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// MessageScroller: Kit `scrollbar`. Omitted leaves Kit's true.
+    #[serde(default)]
+    pub scrollbar: Option<bool>,
+    /// MessageScroller: Kit `jump_button`. Omitted leaves Kit's true.
+    #[serde(default, rename = "jump-button")]
+    pub jump_button: Option<bool>,
+    /// MessageScroller: Kit `with_jump_button_label` (tooltip only).
+    /// The Button visible/accessible name is `jump-button-renderer` `text`.
+    #[serde(default, rename = "jump-button-label")]
+    pub jump_button_label: Option<String>,
+    /// MessageScroller: Kit `with_jump_button_transition` in seconds.
+    /// Omitted leaves Kit's 200ms. Zero disables the transition.
+    #[serde(default, rename = "jump-button-transition")]
+    pub jump_button_transition: Option<f32>,
+    /// MessageScroller: Kit `with_bottom_fade` hex color.
+    #[serde(default, rename = "bottom-fade")]
+    pub bottom_fade: Option<String>,
+    /// Marker: Kit `MarkerLoadingStyle` (`spinner` default, `shimmer`).
+    #[serde(default, rename = "loading-style")]
+    pub loading_style: Option<String>,
+    /// Marker: Kit `role` (`status`, `alert`, `log`). Takes effect with `id`.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Message: Kit `with_stack_style`. Nested style map, not a child widget.
+    #[serde(default, rename = "stack-style")]
+    pub stack_style: Option<Box<Node>>,
+    /// AttachmentTitle / Marker: Kit `ShimmerStyle` (duration, highlight, spread).
+    #[serde(default, rename = "shimmer-style")]
+    pub shimmer_style: Option<Box<Node>>,
+    /// Marker: Kit `separator_style`.
+    #[serde(default, rename = "separator-style")]
+    pub separator_style: Option<Box<Node>>,
+    /// MessageScroller: Kit `with_content_style`.
+    #[serde(default, rename = "content-style")]
+    pub content_style: Option<Box<Node>>,
+    /// MessageScroller: Kit `with_list_style`.
+    #[serde(default, rename = "list-style")]
+    pub list_style: Option<Box<Node>>,
+    /// MessageScroller: Kit `with_row_style`.
+    #[serde(default, rename = "row-style")]
+    pub row_style: Option<Box<Node>>,
+    /// MessageScroller: Kit `with_jump_button_style`.
+    #[serde(default, rename = "jump-button-style")]
+    pub jump_button_style: Option<Box<Node>>,
+    /// MessageScroller: Kit `with_jump_button_renderer` chrome.
+    /// `text` is Kit `Button::label` (visible / accessible name).
+    #[serde(default, rename = "jump-button-renderer")]
+    pub jump_button_renderer: Option<Box<Node>>,
 }
 
 impl Node {
@@ -1025,6 +1081,38 @@ impl Node {
                 .is_some_and(|node| node.contains_text(needle))
             || self
                 .footer
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .stack_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .shimmer_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .separator_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .content_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .list_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .row_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .jump_button_style
+                .as_ref()
+                .is_some_and(|node| node.contains_text(needle))
+            || self
+                .jump_button_renderer
                 .as_ref()
                 .is_some_and(|node| node.contains_text(needle))
     }
@@ -1974,6 +2062,158 @@ mod tests {
         assert!(group.ellipsis);
         assert_eq!(group.children.len(), 2);
         assert_eq!(PROTOCOL_VERSION, 10);
+
+        let message: Node = serde_json::from_value(json!({
+            "type": "message",
+            "id": "m1",
+            "alignment": "end",
+            "children": [
+                {"type": "message-header", "text": "You", "content-inset": false},
+                {"type": "message-content", "children": [
+                    {"type": "bubble", "variant": "ghost", "text": "Hi"}
+                ]},
+                {"type": "message-footer", "text": "Delivered"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(message.kind, "message");
+        assert_eq!(message.alignment.as_deref(), Some("end"));
+        assert_eq!(message.children[0].content_inset, Some(false));
+        assert_eq!(
+            message.children[1].children[0].variant.as_deref(),
+            Some("ghost")
+        );
+
+        let attachment: Node = serde_json::from_value(json!({
+            "type": "attachment",
+            "id": "file-1",
+            "status": "uploading",
+            "orientation": "vertical",
+            "on-click": "cb-att"
+        }))
+        .unwrap();
+        assert_eq!(attachment.status.as_deref(), Some("uploading"));
+        assert_eq!(attachment.on_click.as_deref(), Some("cb-att"));
+
+        let scroller: Node = serde_json::from_value(json!({
+            "type": "message-scroller",
+            "id": "chat",
+            "scrollbar": false,
+            "jump-button": false,
+            "jump-button-label": "Latest",
+            "jump-button-transition": 0.0,
+            "bottom-fade": "#1a1b26",
+            "height": 400
+        }))
+        .unwrap();
+        assert_eq!(scroller.kind, "message-scroller");
+        assert_eq!(scroller.scrollbar, Some(false));
+        assert_eq!(scroller.jump_button, Some(false));
+        assert_eq!(scroller.jump_button_label.as_deref(), Some("Latest"));
+        assert_eq!(scroller.jump_button_transition, Some(0.0));
+        assert_eq!(scroller.bottom_fade.as_deref(), Some("#1a1b26"));
+
+        let marker: Node = serde_json::from_value(json!({
+            "type": "marker",
+            "text": "Today",
+            "variant": "separator",
+            "loading": true,
+            "loading-style": "shimmer",
+            "role": "status",
+            "id": "day"
+        }))
+        .unwrap();
+        assert_eq!(marker.loading_style.as_deref(), Some("shimmer"));
+        assert_eq!(marker.role.as_deref(), Some("status"));
+        assert!(marker.loading);
+
+        let styled: Node = serde_json::from_value(json!({
+            "type": "message",
+            "stack-style": {"gap": 8, "padding": 4, "bg": "#111111"},
+            "children": [{"type": "bubble-content", "bg": "#222222", "text": "hi"}]
+        }))
+        .unwrap();
+        assert_eq!(styled.stack_style.as_ref().unwrap().gap, Some(8.0));
+        assert_eq!(styled.stack_style.as_ref().unwrap().padding, Some(4.0));
+        assert_eq!(
+            styled.stack_style.as_ref().unwrap().bg.as_deref(),
+            Some("#111111")
+        );
+        assert!(styled.stack_style.as_ref().unwrap().kind.is_empty());
+
+        let scroller_styles: Node = serde_json::from_value(json!({
+            "type": "message-scroller",
+            "jump-button-label": "Jump tooltip",
+            "content-style": {"padding": 8},
+            "list-style": {"gap": 4},
+            "row-style": {"padding": 2},
+            "jump-button-style": {"bg": "#1a1b26"},
+            "jump-button-renderer": {
+                "text": "Latest",
+                "variant": "primary",
+                "control-size": "small",
+                "icon": "arrow-down"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            scroller_styles.jump_button_label.as_deref(),
+            Some("Jump tooltip")
+        );
+        assert_eq!(
+            scroller_styles
+                .jump_button_renderer
+                .as_ref()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("Latest")
+        );
+        assert_eq!(
+            scroller_styles.content_style.as_ref().unwrap().padding,
+            Some(8.0)
+        );
+        assert_eq!(scroller_styles.list_style.as_ref().unwrap().gap, Some(4.0));
+        assert_eq!(
+            scroller_styles.row_style.as_ref().unwrap().padding,
+            Some(2.0)
+        );
+        assert_eq!(
+            scroller_styles
+                .jump_button_renderer
+                .as_ref()
+                .unwrap()
+                .control_size
+                .as_deref(),
+            Some("small")
+        );
+
+        let marker_style: Node = serde_json::from_value(json!({
+            "type": "marker",
+            "shimmer-style": {
+                "duration": 1.5,
+                "spread": 0.4,
+                "reverse": true,
+                "once": true,
+                "highlight-color": "#ffffff"
+            },
+            "separator-style": {"color": "#7aa2f7"}
+        }))
+        .unwrap();
+        assert_eq!(
+            marker_style.shimmer_style.as_ref().unwrap().duration,
+            Some(1.5)
+        );
+        assert!(marker_style.shimmer_style.as_ref().unwrap().reverse);
+        assert_eq!(
+            marker_style
+                .separator_style
+                .as_ref()
+                .unwrap()
+                .color
+                .as_deref(),
+            Some("#7aa2f7")
+        );
     }
 
     #[test]

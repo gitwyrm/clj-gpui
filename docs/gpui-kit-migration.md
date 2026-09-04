@@ -346,7 +346,7 @@ These are the places 0.5.1 already had subtle host logic. A green `cargo test` i
 | `ProgressCircle`, `Shimmer` | `ui/progress-circle`, `ui/shimmer` | Feedback. |
 | `HoverCard`, `AvatarGroup` | `ui/hover-card`, `ui/avatar-group` | Hover-driven card; overlapping avatars. `FocusTrap` still unwrapped. |
 | `Command`, `NativeMenu`, `StatusBar` | maybe | OS menu / palette — think through whether Clojure owns the menu tree. |
-| `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | later | Chat/assistant layout. Large API. |
+| `Message`, `Bubble`, `Attachment`, `Marker`, `MessageScroller` | `ui/message`, `ui/bubble`, `ui/attachment`, `ui/marker`, `ui/message-scroller` | First-class Kit nodes (not `{from, text}`). Host-held `MessageScrollerState`. Nested style maps for `with_stack_style` / scroller `with_*_style` / jump-button renderer / Marker `ShimmerStyle`. Remaining: `scroll_to_item` / `scroll_to_end`, and an arbitrary row renderer. |
 | `NavStack` | `ui/nav-stack` | Push/back/forward + motion. Needs host history state. |
 | `DataTable` extras | flags on `ui/data-table` | Multi-row headers, cell selection, custom row heights, export. |
 | `RadarChart`, `SankeyChart`, candlestick, bar `:alignment` | `:kind` on `ui/chart` | Protocol 10. `:alignment :left` is horizontal bars for cljdu. Stacked bars stay a story-only `Plot`. |

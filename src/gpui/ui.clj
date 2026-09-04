@@ -2121,3 +2121,460 @@
     (merge-widget {:type :resizable
                    :children (flatten-children kids)}
                   (apply-control-size opts))))
+
+(defn- node-type?
+  [x expected]
+  (and (ui-node? x) (= (name (:type x)) expected)))
+
+(defn- text-then-opts
+  "Split `(text)`, `(text opts)`, `(opts & children)`, or children."
+  [args]
+  (let [a (first args)
+        b (second args)]
+    (cond
+      (and (string? a) (map? b) (not (ui-node? b)))
+      [b (cons a (drop 2 args))]
+      :else (leading-opts args))))
+
+(defn- style-slot
+  "Nested Kit style / shimmer / jump-button-renderer map. Named `:size`
+  becomes `:control-size` so pixel `:size` stays numeric. `:label` is
+  rewritten to `:text` so a jump-button renderer can use Kit
+  `Button::label` (the scroller `:jump-button-label` is the tooltip)."
+  [m]
+  (when (map? m)
+    (let [m (apply-control-size m)
+          label (:label m)
+          text (cond
+                 (contains? m :text) (:text m)
+                 (keyword? label) (name label)
+                 (some? label) (str label)
+                 :else nil)]
+      (cond-> (dissoc m :label)
+        (some? text) (assoc :text text)
+        (keyword? (:variant m)) (update :variant name)
+        (keyword? (:icon m)) (update :icon wire-id)
+        (keyword? (:align m)) (update :align name)
+        (keyword? (:justify m)) (update :justify name)
+        (keyword? (:font-weight m)) (update :font-weight name)
+        (keyword? (:font-family m)) (update :font-family str)))))
+
+(defn- chat-opts
+  [opts]
+  (let [opts (apply-control-size (or opts {}))]
+    (cond-> opts
+      (keyword? (:alignment opts)) (update :alignment name)
+      (keyword? (:variant opts)) (update :variant name)
+      (keyword? (:side opts)) (update :side name)
+      (keyword? (:status opts)) (update :status name)
+      (keyword? (:orientation opts)) (update :orientation name)
+      (keyword? (:loading-style opts)) (update :loading-style name)
+      (keyword? (:role opts)) (update :role name)
+      (some? (:icon opts)) (assoc :icon (wire-id (:icon opts)))
+      (some? (:stack-style opts)) (update :stack-style style-slot)
+      (some? (:shimmer-style opts)) (update :shimmer-style style-slot)
+      (some? (:separator-style opts)) (update :separator-style style-slot)
+      (some? (:content-style opts)) (update :content-style style-slot)
+      (some? (:list-style opts)) (update :list-style style-slot)
+      (some? (:row-style opts)) (update :row-style style-slot)
+      (some? (:jump-button-style opts)) (update :jump-button-style style-slot)
+      (some? (:jump-button-renderer opts)) (update :jump-button-renderer style-slot))))
+
+(defn- ensure-slot
+  [pred ctor x]
+  (cond
+    (nil? x) nil
+    (pred x) x
+    (and (sequential? x) (not (string? x)) (not (ui-node? x))) (apply ctor x)
+    :else (ctor x)))
+
+(defn message-avatar
+  "Circular sender slot beside a `ui/message`. Children are typically
+  `ui/avatar`. Kit `.avatar` wraps any element; this node is
+  `.avatar_slot`.
+
+  (ui/message-avatar (ui/avatar \"Ada\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-avatar
+           :children (flatten-children children))))
+
+(defn message-header
+  "Muted extra-small metadata row (sender, timestamp). `:content-inset`
+  is Kit `content_inset`; omit to inherit from a ghost bubble.
+
+  (ui/message-header \"Ada\" \"10:24 AM\")
+  (ui/message-header {:content-inset false} \"Ada\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-header
+           :children (flatten-children children))))
+
+(defn message-footer
+  "Muted extra-small footer (delivery, actions). Same `:content-inset`
+  as `ui/message-header`. This is a child node, not sheet `:footer`.
+
+  (ui/message-footer \"Delivered\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-footer
+           :children (flatten-children children))))
+
+(defn message-content
+  "Message body. A `ui/bubble` child is Kit `MessageContent::bubble` so
+  a Ghost variant still strips header/footer inset. Other children are
+  arbitrary widgets.
+
+  (ui/message-content (ui/bubble \"Hello\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-content
+           :children (flatten-children children))))
+
+(defn bubble-content
+  "Visible bubble surface (padding, radius, colors). Direct children of
+  `ui/bubble` append through Kit `ParentElement` after an explicit
+  content slot, so this node's style is kept.
+
+  (ui/bubble-content {:bg \"#1a1b26\"} \"Hello\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)]
+    (assoc (chat-opts opts)
+           :type :bubble-content
+           :children (flatten-children children))))
+
+(defn bubble-reactions
+  "Reaction pill on a bubble edge. `:side` is `:top` / `:bottom`
+  (Kit default bottom). `:alignment` is `:start` / `:end` (Kit default
+  end). `ui/button` children use Kit `.action` (pill geometry).
+
+  (ui/bubble-reactions \"👍\")
+  (ui/bubble-reactions {:side :top} (ui/button \"👍\" tap!))"
+  [& args]
+  (let [[opts children] (text-then-opts args)]
+    (assoc (chat-opts opts)
+           :type :bubble-reactions
+           :children (flatten-children children))))
+
+(defn bubble
+  "Chat surface. `:variant` is `:filled` (default), `:secondary`,
+  `:muted`, `:tinted`, `:outline`, `:ghost`, or `:destructive`.
+  `:alignment` is `:start` / `:end`; leave unset inside `ui/message`
+  so the row owns placement. `:reactions` expands to
+  `ui/bubble-reactions`.
+
+  (ui/bubble \"Outgoing\")
+  (ui/bubble \"Incoming\" {:variant :secondary})
+  (ui/bubble {:variant :ghost :reactions (ui/bubble-reactions \"👍\")}
+    \"System\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)
+        reactions (ensure-slot #(node-type? % "bubble-reactions")
+                               bubble-reactions
+                               (:reactions opts))
+        opts (chat-opts (dissoc opts :reactions))
+        kids (cond-> (flatten-children children)
+               reactions (conj reactions))]
+    (assoc opts :type :bubble :children kids)))
+
+(defn bubble-group
+  "Vertical stack of bubbles from one sender. Kit default `gap_2`.
+
+  (ui/bubble-group (ui/bubble \"One\") (ui/bubble \"Two\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :bubble-group
+           :children (flatten-children children))))
+
+(defn- ensure-message-avatar
+  [x]
+  (cond
+    (nil? x) nil
+    (node-type? x "message-avatar") x
+    (node-type? x "avatar") (message-avatar x)
+    (string? x) (message-avatar (avatar x))
+    :else (ensure-slot #(node-type? % "message-avatar") message-avatar x)))
+
+(defn message
+  "Aligned chat row. Kit `Message`. Named `:avatar`, `:header`,
+  `:content`, and `:footer` expand to slot nodes; they are not sheet
+  `:footer`. `:alignment` is `:start` (default) or `:end`.   Bare
+  children wrap in `ui/message-content`. A `ui/bubble` inside content
+  is typed so Ghost still strips header/footer inset. `:stack-style` is
+  a nested style map for Kit `with_stack_style`.
+
+  (ui/message {:alignment :end
+               :stack-style {:gap 8}
+               :avatar (ui/avatar \"You\")
+               :header (ui/message-header \"You\" \"10:25 AM\")
+               :footer (ui/message-footer \"Delivered\")}
+    (ui/bubble \"Outgoing\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        named-avatar (ensure-message-avatar (:avatar opts))
+        named-header (ensure-slot #(node-type? % "message-header")
+                                  message-header
+                                  (:header opts))
+        named-content (ensure-slot #(node-type? % "message-content")
+                                   message-content
+                                   (:content opts))
+        named-footer (ensure-slot #(node-type? % "message-footer")
+                                  message-footer
+                                  (:footer opts))
+        opts (chat-opts (dissoc opts :avatar :header :content :footer))
+        kids (flatten-children children)
+        slot-names #{"message-avatar" "message-header" "message-content" "message-footer"}
+        from-kids (group-by #(name (:type %))
+                            (filter #(slot-names (name (:type %))) kids))
+        rest (vec (remove #(slot-names (name (:type %))) kids))
+        avatar (or (first (from-kids "message-avatar")) named-avatar)
+        header (or (first (from-kids "message-header")) named-header)
+        footer (or (first (from-kids "message-footer")) named-footer)
+        contents (cond-> (vec (concat (when named-content [named-content])
+                                      (from-kids "message-content")))
+                   (seq rest) (conj (apply message-content rest)))
+        children (cond-> []
+                   avatar (conj avatar)
+                   header (conj header)
+                   true (into contents)
+                   footer (conj footer))]
+    (assoc opts :type :message :children (vec children))))
+
+(defn message-group
+  "Vertical stack of messages. Kit default `gap_2`.
+
+  (ui/message-group (ui/message …) (ui/message …))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-group
+           :children (flatten-children children))))
+
+(defn attachment-media-overlay
+  "Kit `AttachmentMedia::overlay` — an absolute centered layer. Ordinary
+  children of `ui/attachment-media` stay `ParentElement::child`, even
+  when `:src` is set.
+
+  (ui/attachment-media {:src \"preview.png\"}
+    (ui/attachment-media-overlay (ui/icon :loader)))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment-media-overlay
+           :children (flatten-children children))))
+
+(defn attachment-media
+  "Attachment preview. `:src` is a Kit image (http URL or file path).
+  Ordinary children are always `ParentElement::child`. Kit `.overlay`
+  is `ui/attachment-media-overlay` or the named `:overlay` slot. Named
+  `:size` becomes `:control-size`; omit it so media inherits the parent
+  `ui/attachment` size.
+
+  (ui/attachment-media {:src \"preview.png\" :size :lg})
+  (ui/attachment-media {:src \"preview.png\"
+                        :overlay (ui/icon :loader)})
+  (ui/attachment-media (ui/icon :file))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        src (when-let [s (:src opts)]
+              (let [text (str s)]
+                (when (seq text) text)))
+        overlay (:overlay opts)
+        overlays (cond
+                   (nil? overlay) []
+                   (and (sequential? overlay)
+                        (not (string? overlay))
+                        (not (ui-node? overlay)))
+                   (mapv #(ensure-slot (fn [x] (node-type? x "attachment-media-overlay"))
+                                       attachment-media-overlay
+                                       %)
+                         overlay)
+                   :else [(ensure-slot (fn [x] (node-type? x "attachment-media-overlay"))
+                                       attachment-media-overlay
+                                       overlay)])
+        kids (into overlays (flatten-children children))]
+    (cond-> (assoc (chat-opts (dissoc opts :src :overlay))
+                   :type :attachment-media
+                   :children kids)
+      (some? src) (assoc :src src))))
+
+(defn attachment-title
+  "Attachment title. In-progress status inherits a loading shimmer from
+  the parent attachment. `:shimmer-style` is Kit `ShimmerStyle`
+  (`:duration`, `:highlight-color`, `:spread` / `:spread-px`,
+  `:reverse`, `:once`).
+
+  (ui/attachment-title \"report.pdf\")
+  (ui/attachment-title {:shimmer-style {:duration 1.5}} \"report.pdf\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)
+        opts (chat-opts opts)
+        kids (flatten-children children)
+        text (or (:text opts)
+                 (when (and (= 1 (count kids))
+                            (node-type? (first kids) "label"))
+                   (:text (first kids))))]
+    (cond-> (assoc (dissoc opts :text)
+                   :type :attachment-title
+                   :children (if text [] kids))
+      text (assoc :text (str text)))))
+
+(defn attachment-description
+  "Attachment description or status line.
+
+  (ui/attachment-description \"Uploading\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)
+        opts (chat-opts opts)
+        kids (flatten-children children)
+        text (or (:text opts)
+                 (when (and (= 1 (count kids))
+                            (node-type? (first kids) "label"))
+                   (:text (first kids))))]
+    (cond-> (assoc (dissoc opts :text)
+                   :type :attachment-description
+                   :children (if text [] kids))
+      text (assoc :text (str text)))))
+
+(defn attachment-content
+  "Attachment metadata slot. Typed `ui/attachment-title` /
+  `ui/attachment-description` inherit status shimmer.
+
+  (ui/attachment-content
+    (ui/attachment-title \"report.pdf\")
+    (ui/attachment-description \"Uploading\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment-content
+           :children (flatten-children children))))
+
+(defn attachment-actions
+  "Buttons on an attachment. Painted above the card click layer.
+
+  (ui/attachment-actions (ui/button \"Cancel\" cancel!))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment-actions
+           :children (flatten-children children))))
+
+(defn attachment
+  "File or image card. `:status` is `:pending`, `:uploading`,
+  `:processing`, `:failed`, or `:complete` (default). `:orientation`
+  is `:horizontal` (default) or `:vertical`. Whole-card `:on-click`
+  needs `:id` as well (Kit). Named size is `control-size`.
+
+  (ui/attachment {:id \"file-1\" :status :uploading :on-click open!}
+    (ui/attachment-media {:src \"preview.png\"})
+    (ui/attachment-content (ui/attachment-title \"report.pdf\")
+                           (ui/attachment-description \"Uploading\"))
+    (ui/attachment-actions (ui/button \"Cancel\")))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment
+           :children (flatten-children children))))
+
+(defn attachment-group
+  "Horizontally scrollable row of attachments. Kit requires an id.
+
+  (ui/attachment-group {:id \"files\"}
+    (ui/attachment {:id \"a\"} …))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :attachment-group
+           :children (flatten-children children))))
+
+(defn marker-icon
+  "Decorative icon slot inside `ui/marker`. `:icon` is a Kit icon name.
+
+  (ui/marker-icon {:icon :info})"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :marker-icon
+           :children (flatten-children children))))
+
+(defn marker-content
+  "Marker text slot. A string becomes Kit `MarkerContent::text` so a
+  shimmer loading style can sweep it.
+
+  (ui/marker-content \"Today\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)
+        opts (chat-opts opts)
+        kids (flatten-children children)
+        text (or (:text opts)
+                 (when (and (= 1 (count kids))
+                            (node-type? (first kids) "label"))
+                   (:text (first kids))))]
+    (cond-> (assoc (dissoc opts :text)
+                   :type :marker-content
+                   :children (if text [] kids))
+      text (assoc :text (str text)))))
+
+(defn marker
+  "Conversation status / day separator. `:variant` is `:plain`
+  (default), `:separator`, or `:border`. `:loading true` plus
+  `:loading-style` `:spinner` (default) or `:shimmer`. `:role :status`
+  takes effect with `:id`. `:shimmer-style` is Kit `ShimmerStyle`.
+  `:separator-style` is a nested style map for the decorative lines.
+
+  (ui/marker \"Today\" {:variant :separator})
+  (ui/marker {:variant :plain :loading true
+              :shimmer-style {:duration 1.2 :reverse true}}
+    \"Thinking…\")"
+  [& args]
+  (let [[opts children] (text-then-opts args)
+        opts (chat-opts opts)
+        kids (flatten-children children)
+        text (or (:text opts)
+                 (when (and (= 1 (count kids))
+                            (node-type? (first kids) "label"))
+                   (:text (first kids))))]
+    (cond-> (assoc (dissoc opts :text)
+                   :type :marker
+                   :children (if text [] kids))
+      text (assoc :text (str text)))))
+
+(defn message-scroller
+  "Virtualized transcript (Kit `MessageScroller`). Host-held
+  `MessageScrollerState` follows the tail by default. Children are
+  rows (usually `ui/message`). Stable `:id` on each row is required
+  for prepend (history) or append without `reset`. Index-only keys
+  make prepend look like a replace. Omitted `:scrollbar` /
+  `:jump-button` keep Kit true. `:jump-button-transition` is seconds
+  (Kit default 0.2). `:bottom-fade` is a hex color. Nested style maps
+  `:content-style`, `:list-style`, `:row-style`, and
+  `:jump-button-style` are Kit `with_*_style`. Ordinary visual keys
+  (`:padding`, `:gap`, `:bg`, `:border`, …) are Kit's MessageScroller
+  root `Styled`, not the host viewport wrapper. `:jump-button-label`
+  is the jump button tooltip. `:jump-button-renderer` is button chrome
+  (`:variant`, `:size`, `:icon`, `:tooltip`, `:label` / `:text`) for
+  `with_jump_button_renderer`; `:label` becomes wire `:text` and is
+  Kit `Button::label` (visible / accessible name). `scroll_to_item` /
+  `scroll_to_end` are not wrapped; child-list sync cannot express
+  programmatic navigation to an existing row. Kit's constructor takes
+  an arbitrary row renderer (`IntoElement`); scroller rows here paint
+  the static overlay subset plus this chat family (not list /
+  data-table / editor) because they cannot re-enter `RootView`.
+
+  (ui/message-scroller {:id \"chat\" :height 400
+                        :jump-button-label \"Jump tooltip\"
+                        :jump-button-renderer {:label \"Latest\"
+                                              :variant :primary
+                                              :size :small
+                                              :icon :arrow-down}}
+    (ui/message {:id \"m1\"} (ui/bubble \"Hi\")))"
+  [& args]
+  (let [[opts children] (leading-opts args)]
+    (assoc (chat-opts opts)
+           :type :message-scroller
+           :children (flatten-children children))))
