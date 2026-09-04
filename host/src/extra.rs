@@ -8,9 +8,9 @@ use crate::mapping;
 use crate::protocol::{self, ChartLabelLine, Cmd, Item, Node};
 use chrono::NaiveDate;
 use gpui::{
-    AnyElement, App, Axis, Context, Corners, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, linear_color_stop,
-    prelude::*, px, relative, size,
+    AnyElement, App, Axis, Context, Corners, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
+    linear_color_stop, prelude::*, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
@@ -326,34 +326,59 @@ pub fn nav_replace_token(value: Option<&Value>) -> Option<String> {
 }
 
 /// Same-id Kit `replace()`: the trail is unchanged, a token is present, and
-/// that token last applied to this same top page with a different value.
-/// The first observation of a token is a latch (no replace). A token last
-/// bound to a different page is not a replace — navigation must not replace
-/// the newly current page. Forward is preserved (Kit `replace` keeps it).
+/// that token last applied to this same `CljNavPage` entity with a different
+/// value. Catalog page ids are not identity — `[detail, detail]` is two
+/// entities. The first observation of a token is a latch (no replace). A
+/// token last bound to a different entity is not a replace, even when the
+/// catalog id matches. Forward is preserved (Kit `replace` keeps it).
 pub fn nav_same_id_replace(
     current: &[String],
     desired: &[String],
-    last: Option<&(String, String)>,
+    current_entity: Option<EntityId>,
+    last: Option<&(EntityId, String)>,
     token: Option<&str>,
 ) -> bool {
     if current != desired || current.is_empty() {
         return false;
     }
-    let Some(top) = current.last() else {
+    let Some(entity) = current_entity else {
         return false;
     };
     let Some(token) = token else {
         return false;
     };
     match last {
-        Some((page, prev)) if page == top && prev != token => true,
+        Some((id, prev)) if *id == entity && prev != token => true,
         _ => false,
     }
 }
 
-/// Bind the observed token to the page that is current after the plan.
-pub fn nav_bind_replace_token(top: Option<&str>, token: Option<&str>) -> Option<(String, String)> {
-    Some((top?.to_string(), token?.to_string()))
+/// Bind the observed token to a history-entry entity.
+pub fn nav_bind_replace_token(
+    entity: Option<EntityId>,
+    token: Option<&str>,
+) -> Option<(EntityId, String)> {
+    Some((entity?, token?.to_string()))
+}
+
+/// After the trail plan, bind the token to `slot.entries.last()` — the
+/// actual current history entry. After a same-id `Replace` that is the
+/// newly created entity. The first observation (no previous binding)
+/// latches that entity. If navigation revealed a different entry, keep
+/// the previous binding: the first later token bump on the revealed
+/// entity rebinds instead of replacing a distinct same-id instance.
+/// An omitted token does not clear the last binding.
+pub fn nav_commit_replace_binding(
+    replaced: bool,
+    before: Option<EntityId>,
+    after: Option<EntityId>,
+    token: Option<&str>,
+    last: Option<(EntityId, String)>,
+) -> Option<(EntityId, String)> {
+    match nav_bind_replace_token(after, token) {
+        Some(bound) if replaced || before == after || last.is_none() => Some(bound),
+        Some(_) | None => last,
+    }
 }
 
 /// Kit clipping is application-owned. Opt in with `overflow: hidden` or
@@ -2287,6 +2312,7 @@ pub fn sync_input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::EntityId;
     use gpui_component::plot::shape::{BarAlignment, SankeyAlign, SankeyValueScale};
     use serde_json::json;
 
@@ -3747,47 +3773,158 @@ mod tests {
             Some("session-9".into())
         );
         assert_eq!(nav_replace_token(Some(&json!(true))), None);
+        let detail = EntityId::from(7u64);
         assert_eq!(
-            nav_bind_replace_token(Some("detail"), Some("2")),
-            Some(("detail".into(), "2".into()))
+            nav_bind_replace_token(Some(detail), Some("2")),
+            Some((detail, "2".into()))
         );
         assert_eq!(nav_bind_replace_token(None, Some("2")), None);
     }
 
     #[test]
-    fn nav_same_id_replace_requires_token_change_on_same_top_page() {
+    fn nav_same_id_replace_requires_token_change_on_same_entity() {
         let trail = owned(&["home", "detail"]);
-        assert!(!nav_same_id_replace(&trail, &trail, None, Some("1")));
-        let last = Some(("detail".to_string(), "1".to_string()));
+        let detail = EntityId::from(10u64);
+        let other = EntityId::from(11u64);
         assert!(!nav_same_id_replace(
             &trail,
             &trail,
+            Some(detail),
+            None,
+            Some("1")
+        ));
+        let last = nav_bind_replace_token(Some(detail), Some("1"));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
             last.as_ref(),
             Some("1")
         ));
         assert!(nav_same_id_replace(
             &trail,
             &trail,
+            Some(detail),
             last.as_ref(),
             Some("2")
         ));
-        assert!(!nav_same_id_replace(&trail, &trail, last.as_ref(), None));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(detail),
+            last.as_ref(),
+            None
+        ));
         assert!(!nav_same_id_replace(
             &trail,
             &owned(&["home"]),
+            Some(detail),
             last.as_ref(),
             Some("2")
         ));
         let home = owned(&["home"]);
-        assert!(!nav_same_id_replace(&home, &home, last.as_ref(), Some("2")));
-        assert!(!nav_same_id_replace(&[], &[], last.as_ref(), Some("2")));
+        assert!(!nav_same_id_replace(
+            &home,
+            &home,
+            Some(other),
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(
+            &trail,
+            &trail,
+            Some(other),
+            last.as_ref(),
+            Some("2")
+        ));
+        assert!(!nav_same_id_replace(
+            &[],
+            &[],
+            None,
+            last.as_ref(),
+            Some("2")
+        ));
+    }
+
+    #[test]
+    fn nav_replace_generation_rebinds_after_pop_of_repeated_id() {
+        let stacked = owned(&["home", "detail", "detail"]);
+        let revealed = owned(&["home", "detail"]);
+        let detail_a = EntityId::from(2u64);
+        let detail_b = EntityId::from(3u64);
+        let replacement = EntityId::from(4u64);
+        let mut last = nav_bind_replace_token(Some(detail_b), Some("1"));
+
+        let replace = nav_same_id_replace(
+            &stacked,
+            &revealed,
+            Some(detail_b),
+            last.as_ref(),
+            Some("1"),
+        );
+        assert!(!replace);
+        last = nav_commit_replace_binding(replace, Some(detail_b), Some(detail_a), Some("1"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_b), Some("1")));
+
+        let replace = nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last.as_ref(),
+            Some("2"),
+        );
+        assert!(
+            !replace,
+            "first bump on the revealed same-id entity rebinds"
+        );
+        last = nav_commit_replace_binding(replace, Some(detail_a), Some(detail_a), Some("2"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(detail_a), Some("2")));
+
+        let replace = nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last.as_ref(),
+            Some("3"),
+        );
+        assert!(replace);
+        last =
+            nav_commit_replace_binding(replace, Some(detail_a), Some(replacement), Some("3"), last);
+        assert_eq!(last, nav_bind_replace_token(Some(replacement), Some("3")));
+        assert!(!nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(replacement),
+            last.as_ref(),
+            Some("3")
+        ));
+
+        let last_b = nav_bind_replace_token(Some(detail_b), Some("1"));
+        assert!(
+            nav_same_id_replace(
+                &stacked,
+                &stacked,
+                Some(detail_b),
+                last_b.as_ref(),
+                Some("2")
+            ),
+            "forward back to the retained entity is a replace of that instance"
+        );
+        assert!(!nav_same_id_replace(
+            &revealed,
+            &revealed,
+            Some(detail_a),
+            last_b.as_ref(),
+            Some("2")
+        ));
     }
 
     #[test]
     fn nav_same_id_replace_preserves_forward_branch() {
         use super::NavTrailStep::*;
         let trail = owned(&["home", "detail"]);
-        let last = Some(("detail".to_string(), "1".to_string()));
+        let detail = EntityId::from(10u64);
+        let last = nav_bind_replace_token(Some(detail), Some("1"));
         assert!(
             plan(
                 &["home", "detail"],
@@ -3800,6 +3937,7 @@ mod tests {
         assert!(nav_same_id_replace(
             &trail,
             &trail,
+            Some(detail),
             last.as_ref(),
             Some("2")
         ));

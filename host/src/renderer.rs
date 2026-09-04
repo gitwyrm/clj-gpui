@@ -8,8 +8,9 @@ use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
-    Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId, PathPromptOptions, Pixels,
-    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, size,
+    EntityId, Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
+    PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window, canvas, div, prelude::*,
+    px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
@@ -315,9 +316,11 @@ struct NavStackSlot {
     /// Last nearest-first forward id list sent on `:on-forward-change`.
     /// `None` means never notified (empty after first mount is skipped).
     last_forward_notified: Option<Vec<String>>,
-    /// Last applied `:replace-generation` bound to the page that was
-    /// current when we observed it. A later bump replaces only that page.
-    last_replace: Option<(String, String)>,
+    /// Last applied `:replace-generation` bound to the `CljNavPage`
+    /// entity that was current when we observed it — not the catalog id.
+    /// Repeated ids are distinct entities; a later bump replaces only
+    /// that instance.
+    last_replace: Option<(EntityId, String)>,
     _observe: Subscription,
 }
 
@@ -4223,6 +4226,7 @@ impl RootView {
                 slot.last_dup_catalog = Some(dups);
             }
             let token = extra::nav_replace_token(node.replace_generation.as_ref());
+            let mut replace_bind: Option<(bool, Option<EntityId>)> = None;
             let steps = match extra::nav_desired(node, &catalog_ids) {
                 extra::NavDesired::Invalid { trail, unknown } => {
                     if slot.last_invalid.as_ref() != Some(&trail) {
@@ -4240,28 +4244,26 @@ impl RootView {
                         slot.entries.iter().map(|(id, _)| id.clone()).collect();
                     let forward: Vec<String> =
                         slot.forward.iter().map(|(id, _)| id.clone()).collect();
+                    let before = slot.entries.last().map(|(_, page)| page.entity_id());
                     let mut steps = extra::nav_trail_sync(
                         &current,
                         &resolved,
                         &forward,
                         extra::nav_reuse_forward(node.reuse_forward),
                     );
-                    if extra::nav_same_id_replace(
+                    let replacing = extra::nav_same_id_replace(
                         &current,
                         &resolved,
+                        before,
                         slot.last_replace.as_ref(),
                         token.as_deref(),
-                    ) {
+                    );
+                    if replacing {
                         if let Some(id) = resolved.last() {
                             steps = vec![extra::NavTrailStep::Replace(id.clone())];
                         }
                     }
-                    if let Some(bound) = extra::nav_bind_replace_token(
-                        resolved.last().map(String::as_str),
-                        token.as_deref(),
-                    ) {
-                        slot.last_replace = Some(bound);
-                    }
+                    replace_bind = Some((replacing, before));
                     steps
                 }
             };
@@ -4287,6 +4289,15 @@ impl RootView {
                 }
             }
             apply_nav_trail_plan(slot, steps, motion, &catalog_by_id, key, &cmd_tx, cx);
+            if let Some((replacing, before)) = replace_bind {
+                slot.last_replace = extra::nav_commit_replace_binding(
+                    replacing,
+                    before,
+                    slot.entries.last().map(|(_, page)| page.entity_id()),
+                    token.as_deref(),
+                    slot.last_replace.clone(),
+                );
+            }
             notify_nav_forward_change(slot, node.on_forward_change.clone(), &cmd_tx, window, cx);
         }
         let slot = self.nav_stacks.get(key).expect("nav-stack slot");

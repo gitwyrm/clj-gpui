@@ -2675,8 +2675,10 @@
   configured motion). Leaving the token unchanged across rerenders
   is a no-op, so ordinary callback-id regeneration still only
   `replace_live`s the existing page. The host binds the token to
-  the current top page; a later navigation cannot apply a stale
-  bump to a different page. Setting the trail to just the root from depth > 2 is one `pop_to_root` transition
+  the current `CljNavPage` entity (not the catalog page id); a later
+  navigation to another history entry — including another instance
+  of the same page id — rebinds on the next generation bump rather
+  than replacing that other entity. Setting the trail to just the root from depth > 2 is one `pop_to_root` transition
   (popped pages join forward, nearest first). `:on-forward-change`
   receives Kit `forward_views()` as a vector of original page ids,
   nearest first (the id `forward` would restore). Empty after first
