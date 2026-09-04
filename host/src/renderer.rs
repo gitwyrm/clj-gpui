@@ -4386,9 +4386,9 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
 /// AvatarGroup's negative child margins make flex min-content about one
 /// avatar; shrinking then stacks the faces on top of each other.
 fn row_intrinsic(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
-    h_flex()
-        .flex_none()
-        .child(apply_style(el, node, cx))
+    apply_style(h_flex().flex_none(), node, cx)
+        .flex_shrink_0()
+        .child(el)
         .into_any_element()
 }
 
