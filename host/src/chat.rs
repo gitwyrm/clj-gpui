@@ -138,6 +138,21 @@ pub enum ScrollerScroll {
     Item(String),
 }
 
+/// Replay identity for a programmatic scroll. Structured so a row id
+/// that contains `:` cannot collide with a generation that contains `:`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollerScrollToken {
+    pub request: ScrollerScroll,
+    pub generation: Option<String>,
+}
+
+/// Kit call to make once a request is new and the target exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScrollerScrollApply {
+    End,
+    Item(usize),
+}
+
 /// Wire `scroll-generation`: integer or non-empty string, same shape as
 /// nav-stack `replace-generation`. Omitted / null is not a replay token.
 pub fn scroller_scroll_generation(value: Option<&Value>) -> Option<String> {
@@ -223,26 +238,55 @@ pub fn scroller_item_index(spec: &str, ids: &[String]) -> Option<usize> {
 pub fn scroller_scroll_token(
     request: Option<&ScrollerScroll>,
     generation: Option<&str>,
-) -> Option<String> {
-    let request = request?;
-    let mut token = match request {
-        ScrollerScroll::End => "end".to_string(),
-        ScrollerScroll::Item(spec) => format!("item:{spec}"),
-    };
-    if let Some(generation) = generation {
-        token.push(':');
-        token.push_str(generation);
-    }
-    Some(token)
+) -> Option<ScrollerScrollToken> {
+    Some(ScrollerScrollToken {
+        request: request?.clone(),
+        generation: generation.map(str::to_string),
+    })
 }
 
-/// Apply when the token is present and differs from the last applied
-/// request. Omitted token leaves native scroll.
-pub fn should_apply_scroller_scroll(last: Option<&str>, token: Option<&str>) -> bool {
+/// Apply when the token is present and differs from the last
+/// *successfully applied* request. Omitted token leaves native scroll.
+pub fn should_apply_scroller_scroll(
+    last: Option<&ScrollerScrollToken>,
+    token: Option<&ScrollerScrollToken>,
+) -> bool {
     match token {
         Some(token) => last != Some(token),
         None => false,
     }
+}
+
+/// Resolve a present request against current row ids. `None` means do
+/// not call Kit: omit, or `:scroll-to-item` is not in this list yet.
+pub fn scroller_scroll_apply(
+    request: Option<&ScrollerScroll>,
+    ids: &[String],
+) -> Option<ScrollerScrollApply> {
+    match request {
+        None => None,
+        Some(ScrollerScroll::End) => Some(ScrollerScrollApply::End),
+        Some(ScrollerScroll::Item(spec)) => {
+            scroller_item_index(spec, ids).map(ScrollerScrollApply::Item)
+        }
+    }
+}
+
+/// Plan a Kit scroll for this tree. Unresolved items return `None` so
+/// the host does not record a last-applied token; the same request can
+/// succeed after append/load. A successful Kit call then binds `token`.
+pub fn scroller_scroll_plan(
+    last: Option<&ScrollerScrollToken>,
+    request: Option<&ScrollerScroll>,
+    generation: Option<&str>,
+    ids: &[String],
+) -> Option<(ScrollerScrollApply, ScrollerScrollToken)> {
+    let token = scroller_scroll_token(request, generation)?;
+    if !should_apply_scroller_scroll(last, Some(&token)) {
+        return None;
+    }
+    let apply = scroller_scroll_apply(request, ids)?;
+    Some((apply, token))
 }
 
 pub fn node_fingerprint(node: &Node) -> u64 {
@@ -1009,17 +1053,17 @@ mod tests {
         let end = ScrollerScroll::End;
         let item = ScrollerScroll::Item("m1".into());
         let first = scroller_scroll_token(Some(&item), Some("1"));
-        assert!(should_apply_scroller_scroll(None, first.as_deref()));
+        assert!(should_apply_scroller_scroll(None, first.as_ref()));
         assert!(!should_apply_scroller_scroll(
-            first.as_deref(),
-            first.as_deref()
+            first.as_ref(),
+            first.as_ref()
         ));
         let again = scroller_scroll_token(Some(&item), Some("2"));
         assert!(
-            should_apply_scroller_scroll(first.as_deref(), again.as_deref()),
+            should_apply_scroller_scroll(first.as_ref(), again.as_ref()),
             "generation bump re-applies the same row"
         );
-        assert!(!should_apply_scroller_scroll(first.as_deref(), None));
+        assert!(!should_apply_scroller_scroll(first.as_ref(), None));
         let shifted = scroller_scroll_token(Some(&item), Some("1"));
         assert_eq!(
             shifted, first,
@@ -1027,14 +1071,49 @@ mod tests {
         );
         let to_end = scroller_scroll_token(Some(&end), Some("1"));
         assert!(should_apply_scroller_scroll(
-            first.as_deref(),
-            to_end.as_deref()
+            first.as_ref(),
+            to_end.as_ref()
         ));
         assert_eq!(
             scroller_scroll_generation(Some(&json!(3))).as_deref(),
             Some("3")
         );
         assert!(scroller_scroll_generation(Some(&json!(""))).is_none());
+        let colon_id = scroller_scroll_token(Some(&ScrollerScroll::Item("a:b".into())), Some("c"));
+        let colon_gen = scroller_scroll_token(Some(&ScrollerScroll::Item("a".into())), Some("b:c"));
+        assert_ne!(
+            colon_id, colon_gen,
+            "row id and generation are not flattened through `:`"
+        );
+    }
+
+    #[test]
+    fn unresolved_scroll_to_item_is_not_applied_until_the_row_exists() {
+        let request = scroller_scroll_request(None, Some(&json!("m9")));
+        let mut last = None;
+        let absent = ["m1".into(), "m2".into()];
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &absent).is_none(),
+            "absent row must not consume the request"
+        );
+        assert!(
+            last.is_none(),
+            "failed resolve does not record a last-applied token"
+        );
+
+        let loaded = ["m1".into(), "m2".into(), "m9".into()];
+        let (apply, token) = scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded)
+            .expect("same request is attempted once the row exists");
+        assert_eq!(apply, ScrollerScrollApply::Item(2));
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded).is_some(),
+            "Kit reject (token not stored) retries the same request"
+        );
+        last = Some(token);
+        assert!(
+            scroller_scroll_plan(last.as_ref(), request.as_ref(), None, &loaded).is_none(),
+            "successful apply then echoes"
+        );
     }
 
     #[test]

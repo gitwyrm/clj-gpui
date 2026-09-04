@@ -2826,7 +2826,9 @@
   are set. Omitted / nil leaves native scroll (user drag, jump button).
   `:scroll-generation` (integer or string) re-applies the same target
   after the user has scrolled away — same shape as nav-stack
-  `:replace-generation`. Requests run after child-list sync. Kit's
+  `:replace-generation`. An unresolved or rejected `:scroll-to-item`
+  is not marked applied, so the same request can succeed after
+  append/load. Requests run after child-list sync. Kit's
   constructor takes an arbitrary row renderer (`IntoElement`); scroller
   rows here paint the static overlay subset plus this chat family
   (not list / data-table / editor) because they cannot re-enter

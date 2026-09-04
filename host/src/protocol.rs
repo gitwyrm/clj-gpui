@@ -1275,7 +1275,9 @@ pub struct Node {
     pub jump_button_renderer: Option<Box<Node>>,
     /// MessageScroller: Kit `scroll_to_item`. Row id or 0-based index.
     /// Omitted / JSON null leaves native scroll. Applied after child-list
-    /// sync. `:scroll-to-end true` wins when both are set.
+    /// sync. Unresolved / Kit-rejected items are not marked applied, so
+    /// the same request can succeed after append/load. `:scroll-to-end
+    /// true` wins when both are set.
     #[serde(default, rename = "scroll-to-item")]
     pub scroll_to_item: Option<Value>,
     /// MessageScroller: Kit `scroll_to_end` (resume tail follow).

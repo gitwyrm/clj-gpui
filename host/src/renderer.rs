@@ -261,9 +261,11 @@ struct MessageScrollerSlot {
     items: Rc<RefCell<Vec<Node>>>,
     last_ids: Vec<String>,
     last_fps: Vec<u64>,
-    /// Last applied `scroll_to_item` / `scroll_to_end` token. Omitted
-    /// Clojure request leaves native scroll (jump button, user drag).
-    last_scroll: Option<String>,
+    /// Last successfully applied `scroll_to_item` / `scroll_to_end`
+    /// request. Unresolved items are not stored, so the same request can
+    /// succeed after append/load. Omitted Clojure request leaves native
+    /// scroll (jump button, user drag).
+    last_scroll: Option<chat::ScrollerScrollToken>,
     _observe: Subscription,
 }
 
@@ -4266,24 +4268,26 @@ impl RootView {
         let request =
             chat::scroller_scroll_request(node.scroll_to_end, node.scroll_to_item.as_ref());
         let generation = chat::scroller_scroll_generation(node.scroll_generation.as_ref());
-        let token = chat::scroller_scroll_token(request.as_ref(), generation.as_deref());
-        if !chat::should_apply_scroller_scroll(slot.last_scroll.as_deref(), token.as_deref()) {
+        let Some((apply, token)) = chat::scroller_scroll_plan(
+            slot.last_scroll.as_ref(),
+            request.as_ref(),
+            generation.as_deref(),
+            ids,
+        ) else {
             return;
-        }
-        match request {
-            Some(chat::ScrollerScroll::End) => {
+        };
+        let applied = match apply {
+            chat::ScrollerScrollApply::End => {
                 slot.state.update(cx, |state, cx| state.scroll_to_end(cx));
+                true
             }
-            Some(chat::ScrollerScroll::Item(spec)) => {
-                if let Some(index) = chat::scroller_item_index(&spec, ids) {
-                    slot.state.update(cx, |state, cx| {
-                        let _ = state.scroll_to_item(index, cx);
-                    });
-                }
-            }
-            None => {}
+            chat::ScrollerScrollApply::Item(index) => slot
+                .state
+                .update(cx, |state, cx| state.scroll_to_item(index, cx)),
+        };
+        if applied {
+            slot.last_scroll = Some(token);
         }
-        slot.last_scroll = token;
     }
 
     fn render_message_scroller(
