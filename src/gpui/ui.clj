@@ -1542,10 +1542,13 @@
   The host consumes Kit `Command::render` (`install_model`) before
   applying those controlled fields, so an initial `:selected` and a
   same-tree item replacement resolve against the current model, not
-  the empty default. Native `:on-select` / `:on-query` hold an echo
+  the empty default.   Native `:on-select` / `:on-query` hold an echo
   latch until the matching callback-seq tree; that tree's Clojure
   value then wins even when it differs from what native emitted.
-  Unrelated `request-render` trees do not release it.
+  The latch is bound when the callback batch is actually sent
+  (including a delayed flush after an in-flight callback), not only
+  when the native event first queued. Unrelated `request-render`
+  trees do not release it.
   `:focus` focuses the query field when searchable. `:loading` is the
   search-field spinner. `:bordered false` drops Kit's surrounding
   chrome (default true). `:menu-max-h` is Kit `Command::max_h` in px

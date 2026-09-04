@@ -246,9 +246,11 @@ struct CommandSlot {
     state: Entity<CommandState>,
     suppress_select: bool,
     pending_select: Option<Vec<String>>,
-    /// Last query sent to Clojure `:on-query`, held until that callback's seq.
+    /// Last query actually sent as `:on-query`, held until that callback's seq.
+    /// Bound in `flush_callback_queue`, including a delayed flush.
     query_latch: Option<action_bridge::CommandEchoLatch<String>>,
-    /// Last path sent to Clojure `:on-select`, held until that callback's seq.
+    /// Last path actually sent as `:on-select`, held until that callback's seq.
+    /// Bound in `flush_callback_queue`, including a delayed flush.
     selected_latch: Option<action_bridge::CommandEchoLatch<Vec<String>>>,
     programmatic_query: Option<String>,
 }
@@ -878,15 +880,40 @@ impl RootView {
     }
 
     fn flush_callback_queue(&mut self) -> Option<u64> {
-        let tree = self.tree.as_ref()?;
-        let calls = self.callback_queue.next(tree)?;
+        let outbound = {
+            let tree = self.tree.as_ref()?;
+            self.callback_queue.next_outbound(tree)?
+        };
         // Share the existing sequence allocator with input-submit responses.
         // The matching Tree is the barrier, not a timer or an arbitrary paint.
         self.next_submit_seq = self.next_submit_seq.saturating_add(1);
         let seq = self.next_submit_seq;
         self.callback_queue.sent(seq);
-        protocol::send_callbacks_seq(&self.cmd_tx, calls, Some(seq));
+        protocol::send_callbacks_seq(&self.cmd_tx, outbound.calls, Some(seq));
+        // Command echo latches belong to the seq that actually left the
+        // queue. A later HostEvent::Tree flush must bind them too, or a
+        // queued CommandQuery/CommandSelect would render without a latch.
+        self.install_command_echo_latch(seq, outbound.command_echo);
         Some(seq)
+    }
+
+    fn install_command_echo_latch(&mut self, seq: u64, echo: Option<overlay::CommandEcho>) {
+        match echo {
+            Some(overlay::CommandEcho::Select { key, item_path }) => {
+                if let Some(slot) = self.commands.get_mut(&key) {
+                    slot.selected_latch = Some(action_bridge::CommandEchoLatch {
+                        seq,
+                        value: item_path,
+                    });
+                }
+            }
+            Some(overlay::CommandEcho::Query { key, query }) => {
+                if let Some(slot) = self.commands.get_mut(&key) {
+                    slot.query_latch = Some(action_bridge::CommandEchoLatch { seq, value: query });
+                }
+            }
+            None => {}
+        }
     }
 
     fn schedule_input_change_flush(
@@ -2938,16 +2965,9 @@ impl RootView {
                     this.callback_queue
                         .push(overlay::QueuedAction::CommandSelect {
                             key: key.clone(),
-                            item_path: item_path.clone(),
+                            item_path,
                         });
-                    if let Some(seq) = this.flush_callback_queue()
-                        && let Some(slot) = this.commands.get_mut(&key)
-                    {
-                        slot.selected_latch = Some(action_bridge::CommandEchoLatch {
-                            seq,
-                            value: item_path,
-                        });
-                    }
+                    this.flush_callback_queue();
                 });
             });
         }
@@ -2992,14 +3012,9 @@ impl RootView {
                     this.callback_queue
                         .push(overlay::QueuedAction::CommandQuery {
                             key: key.clone(),
-                            query: query.clone(),
+                            query,
                         });
-                    if let Some(seq) = this.flush_callback_queue()
-                        && let Some(slot) = this.commands.get_mut(&key)
-                    {
-                        slot.query_latch =
-                            Some(action_bridge::CommandEchoLatch { seq, value: query });
-                    }
+                    this.flush_callback_queue();
                 });
             });
         }

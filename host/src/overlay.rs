@@ -378,6 +378,39 @@ pub enum QueuedAction {
 
 pub type ActionEmitter = Rc<dyn Fn(QueuedAction, &mut App)>;
 
+/// Native Command value that left the queue in this callback batch.
+///
+/// Bound to the seq assigned at send time so a delayed flush (after
+/// `wait_for_seq`) still installs the echo latch for the action that
+/// was actually transmitted, not the one that originally tried to flush.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandEcho {
+    Select { key: String, item_path: Vec<String> },
+    Query { key: String, query: String },
+}
+
+impl CommandEcho {
+    fn from_action(action: &QueuedAction) -> Option<Self> {
+        match action {
+            QueuedAction::CommandSelect { key, item_path } => Some(Self::Select {
+                key: key.clone(),
+                item_path: item_path.clone(),
+            }),
+            QueuedAction::CommandQuery { key, query } => Some(Self::Query {
+                key: key.clone(),
+                query: query.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Calls plus Command echo metadata for one dequeued batch.
+pub struct OutboundCallbacks {
+    pub calls: Vec<protocol::CallbackCall>,
+    pub command_echo: Option<CommandEcho>,
+}
+
 #[derive(Default)]
 pub struct CallbackQueue {
     pending: VecDeque<QueuedAction>,
@@ -389,7 +422,17 @@ impl CallbackQueue {
         self.pending.push_back(action);
     }
 
+    #[cfg(test)]
     pub fn next(&mut self, tree: &Node) -> Option<Vec<protocol::CallbackCall>> {
+        self.next_outbound(tree).map(|outbound| outbound.calls)
+    }
+
+    /// Dequeue the next sendable batch, including Command echo metadata.
+    ///
+    /// `flush_callback_queue` binds that metadata to the seq it assigns,
+    /// whether the flush ran from the original `on_select` / `on_query`
+    /// or later from `HostEvent::Tree`.
+    pub fn next_outbound(&mut self, tree: &Node) -> Option<OutboundCallbacks> {
         if self.wait_for_seq.is_some() {
             return None;
         }
@@ -408,7 +451,10 @@ impl CallbackQueue {
                 calls.extend(confirm.resolve(tree));
             }
             if !calls.is_empty() {
-                return Some(calls);
+                return Some(OutboundCallbacks {
+                    calls,
+                    command_echo: CommandEcho::from_action(&action),
+                });
             }
         }
         None
@@ -1464,6 +1510,7 @@ pub fn notification_autohide(node: &Node) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action_bridge::{CommandEchoLatch, should_apply_command_echo};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1924,6 +1971,158 @@ mod tests {
         assert!(
             queue.next(&tree).is_none(),
             "no Clojure :on-select means no callback and no echo to wait for"
+        );
+    }
+
+    #[test]
+    fn queued_command_query_echo_binds_when_the_blocked_batch_is_sent() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "on-query": "cb-query",
+            "items": [{"id": "find", "label": "Find"}]
+        }]}));
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandQuery {
+            key: "palette".into(),
+            query: "f".into(),
+        });
+        let first = queue.next_outbound(&tree).unwrap();
+        assert_eq!(first.calls[0].value, Some(json!("f")));
+        assert_eq!(
+            first.command_echo,
+            Some(CommandEcho::Query {
+                key: "palette".into(),
+                query: "f".into(),
+            })
+        );
+        queue.sent(7);
+
+        queue.push(QueuedAction::CommandQuery {
+            key: "palette".into(),
+            query: "fi".into(),
+        });
+        assert!(
+            queue.next_outbound(&tree).is_none(),
+            "an in-flight callback batch must not send the later query"
+        );
+
+        queue.tree_installed(Some(7));
+        let second = queue.next_outbound(&tree).unwrap();
+        assert_eq!(second.calls[0].value, Some(json!("fi")));
+        assert_eq!(
+            second.command_echo,
+            Some(CommandEcho::Query {
+                key: "palette".into(),
+                query: "fi".into(),
+            }),
+            "the delayed flush must still describe the query that was actually sent"
+        );
+        queue.sent(8);
+
+        let latch_a = CommandEchoLatch {
+            seq: 7,
+            value: "f".to_string(),
+        };
+        let latch_b = CommandEchoLatch {
+            seq: 8,
+            value: "fi".to_string(),
+        };
+        assert!(
+            should_apply_command_echo(Some(&latch_a), Some(&"fi".to_string()), Some(7)),
+            "keeping A's latch would let seq 7 overwrite the later native query"
+        );
+        assert!(
+            !should_apply_command_echo(Some(&latch_b), Some(&"fi".to_string()), Some(7)),
+            "B's latch must protect native fi from A's tree"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&"fi".to_string()), Some(8)),
+            "B's matching tree is then authoritative"
+        );
+        assert!(should_apply_command_echo(
+            Some(&latch_b),
+            Some(&"find".to_string()),
+            Some(8)
+        ));
+    }
+
+    #[test]
+    fn queued_command_select_echo_binds_when_the_blocked_batch_is_sent() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "on-select": "cb-sel",
+            "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project"}
+                ]}
+            ]
+        }]}));
+        let file = vec!["file".to_string(), "open".to_string()];
+        let project = vec!["project".to_string(), "open".to_string()];
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: file.clone(),
+        });
+        let first = queue.next_outbound(&tree).unwrap();
+        assert_eq!(first.calls[0].value, Some(json!(["file", "open"])));
+        assert_eq!(
+            first.command_echo,
+            Some(CommandEcho::Select {
+                key: "palette".into(),
+                item_path: file.clone(),
+            })
+        );
+        queue.sent(7);
+
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: project.clone(),
+        });
+        assert!(
+            queue.next_outbound(&tree).is_none(),
+            "an in-flight callback batch must not send the later highlight"
+        );
+
+        queue.tree_installed(Some(7));
+        let second = queue.next_outbound(&tree).unwrap();
+        assert_eq!(second.calls[0].value, Some(json!(["project", "open"])));
+        assert_eq!(
+            second.command_echo,
+            Some(CommandEcho::Select {
+                key: "palette".into(),
+                item_path: project.clone(),
+            }),
+            "the delayed flush must still describe the highlight that was actually sent"
+        );
+        queue.sent(8);
+
+        let latch_a = CommandEchoLatch {
+            seq: 7,
+            value: file.clone(),
+        };
+        let latch_b = CommandEchoLatch {
+            seq: 8,
+            value: project.clone(),
+        };
+        assert!(
+            should_apply_command_echo(Some(&latch_a), Some(&project), Some(7)),
+            "keeping A's latch would let seq 7 overwrite the later native highlight"
+        );
+        assert!(
+            !should_apply_command_echo(Some(&latch_b), Some(&project), Some(7)),
+            "B's latch must protect native project/open from A's tree"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&project), Some(8)),
+            "B's matching tree is then authoritative"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&file), Some(8)),
+            "the matching seq may echo, reject, or replace the highlight"
         );
     }
 
