@@ -82,7 +82,7 @@ pub fn kit_avatar(node: &Node) -> Avatar {
     avatar
 }
 
-fn kit_avatar_group(node: &Node) -> AvatarGroup {
+pub(crate) fn kit_avatar_group(node: &Node) -> AvatarGroup {
     let mut group =
         AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
     if let Some(limit) = node
@@ -95,12 +95,17 @@ fn kit_avatar_group(node: &Node) -> AvatarGroup {
     if node.ellipsis {
         group = group.ellipsis();
     }
-    group.children(
-        node.children
-            .iter()
-            .filter(|child| child.kind == "avatar")
-            .map(kit_avatar),
-    )
+    // Kit Avatar is flex_shrink_0; AvatarGroup is not. Negative child
+    // margins make flex min-content ≈ one face, so a shrinking group
+    // stacks every avatar on the same spot.
+    group
+        .children(
+            node.children
+                .iter()
+                .filter(|child| child.kind == "avatar")
+                .map(kit_avatar),
+        )
+        .flex_shrink_0()
 }
 
 fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
@@ -618,7 +623,10 @@ fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
             chart_layout(crumb, node).into_any_element()
         }
         "avatar" => chart_layout(kit_avatar(node), node).into_any_element(),
-        "avatar-group" => chart_layout(kit_avatar_group(node), node).into_any_element(),
+        "avatar-group" => h_flex()
+            .flex_none()
+            .child(chart_layout(kit_avatar_group(node), node))
+            .into_any_element(),
         "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
         "progress" => {
             let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);

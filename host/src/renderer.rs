@@ -15,7 +15,6 @@ use gpui_component::{
     WindowExt as _,
     accordion::Accordion,
     alert::Alert,
-    avatar::AvatarGroup,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle, ToggleVariants as _},
@@ -2213,21 +2212,7 @@ impl RootView {
     }
 
     fn render_avatar_group(&self, node: &Node, cx: &App) -> AnyElement {
-        let mut group =
-            AvatarGroup::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-        if let Some(limit) = extra::avatar_group_limit(node) {
-            group = group.limit(limit);
-        }
-        if node.ellipsis {
-            group = group.ellipsis();
-        }
-        group = group.children(
-            node.children
-                .iter()
-                .filter(|child| child.kind == "avatar")
-                .map(overlay::kit_avatar),
-        );
-        apply_style(group, node, cx).into_any_element()
+        row_intrinsic(overlay::kit_avatar_group(node), node, cx)
     }
 
     fn render_hover_card(
@@ -4395,6 +4380,18 @@ fn content_sized(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
     apply_style(wrap, node, cx).child(el).into_any_element()
 }
 
+/// Keep a compact Kit widget at its intrinsic width in a flex row.
+///
+/// Unlike `content_sized`, omitted width does not stretch (`w_full`).
+/// AvatarGroup's negative child margins make flex min-content about one
+/// avatar; shrinking then stacks the faces on top of each other.
+fn row_intrinsic(el: impl IntoElement, node: &Node, cx: &App) -> AnyElement {
+    h_flex()
+        .flex_none()
+        .child(apply_style(el, node, cx))
+        .into_any_element()
+}
+
 /// List/table/tree use crate `size_full()`. They need a bounded viewport or
 /// they collapse to zero / steal leftover column height.
 ///
@@ -4627,6 +4624,20 @@ fn content_wrap(node: &Node) -> ContentWrap {
         flex_fill: layout.flex_fill,
         fill_width: layout.width.is_none() && layout.size.is_none(),
         flex_none: !layout.flex_fill,
+    }
+}
+
+/// Testable layout contract for `row_intrinsic` wrappers.
+#[cfg(test)]
+fn row_intrinsic_wrap(node: &Node) -> ContentWrap {
+    let layout = outer_layout(node);
+    ContentWrap {
+        width: layout.width,
+        height: layout.height,
+        size: layout.size,
+        flex_fill: false,
+        fill_width: false,
+        flex_none: true,
     }
 }
 
@@ -5299,10 +5310,36 @@ mod accordion_control_tests {
 
 #[cfg(test)]
 mod widget_wrap_tests {
-    use super::{Node, content_wrap, context_menu_wrap, outer_layout, viewport_wrap};
+    use super::{
+        Node, content_wrap, context_menu_wrap, outer_layout, row_intrinsic_wrap, viewport_wrap,
+    };
     use crate::extra;
     use crate::protocol::Item;
     use serde_json::json;
+
+    #[test]
+    fn avatar_group_row_is_flex_none_without_full_width() {
+        let node = Node {
+            kind: "avatar-group".into(),
+            ..Node::default()
+        };
+        let row = row_intrinsic_wrap(&node);
+        let column = content_wrap(&node);
+        assert!(row.flex_none);
+        assert!(!row.fill_width);
+        assert!(!row.flex_fill);
+        assert!(column.fill_width);
+
+        let grow = Node {
+            kind: "avatar-group".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let row = row_intrinsic_wrap(&grow);
+        assert!(row.flex_none);
+        assert!(!row.fill_width);
+        assert!(!row.flex_fill);
+    }
 
     #[test]
     fn accordion_default_is_full_width_flex_none() {
