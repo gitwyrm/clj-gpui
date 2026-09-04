@@ -1,3 +1,4 @@
+use crate::action_bridge;
 use crate::catalog;
 use crate::chat;
 use crate::extra;
@@ -24,6 +25,7 @@ use gpui_component::{
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     combobox::{Combobox, ComboboxEvent, ComboboxState},
+    command::{Command as KitCommand, CommandState},
     date_picker::{DatePicker, DatePickerEvent, DatePickerState},
     description_list::DescriptionList,
     dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle},
@@ -55,6 +57,7 @@ use gpui_component::{
     skeleton::Skeleton,
     slider::{Slider, SliderEvent, SliderScale, SliderState, SliderValue},
     spinner::Spinner,
+    status_bar::StatusBar,
     stepper::{Stepper, StepperItem},
     switch::Switch,
     tab::{Tab, TabBar},
@@ -237,6 +240,19 @@ struct ComboboxSlot {
     on_change: Option<String>,
     on_confirm: Option<String>,
     coalesce: protocol::ComboboxActivationCoalesce,
+}
+
+struct CommandSlot {
+    state: Entity<CommandState>,
+    suppress_select: bool,
+    pending_select: Option<Vec<String>>,
+    /// Last query actually sent as `:on-query`, held until that callback's seq.
+    /// Bound in `flush_callback_queue`, including a delayed flush.
+    query_latch: Option<action_bridge::CommandEchoLatch<String>>,
+    /// Last path actually sent as `:on-select`, held until that callback's seq.
+    /// Bound in `flush_callback_queue`, including a delayed flush.
+    selected_latch: Option<action_bridge::CommandEchoLatch<Vec<String>>>,
+    programmatic_query: Option<String>,
 }
 
 struct MessageScrollerSlot {
@@ -425,6 +441,7 @@ pub struct RootView {
     sliders: HashMap<String, SliderSlot>,
     selects: HashMap<String, SelectSlot>,
     comboboxes: HashMap<String, ComboboxSlot>,
+    commands: HashMap<String, CommandSlot>,
     lists: HashMap<String, ListSlot>,
     tables: HashMap<String, TableSlot>,
     trees: HashMap<String, TreeSlot>,
@@ -453,6 +470,7 @@ pub struct RootView {
     used_inputs: HashSet<String>,
     used_selects: HashSet<String>,
     used_comboboxes: HashSet<String>,
+    used_commands: HashSet<String>,
     used_lists: HashSet<String>,
     used_tables: HashSet<String>,
     used_trees: HashSet<String>,
@@ -465,6 +483,7 @@ pub struct RootView {
     used_scrollers: HashSet<String>,
     used_docks: HashSet<String>,
     used_nav_stacks: HashSet<String>,
+    native_menu_open: HashMap<String, bool>,
     _appearance: Subscription,
     _window_bounds: Subscription,
     _keystrokes: Subscription,
@@ -586,6 +605,7 @@ impl RootView {
             sliders: HashMap::new(),
             selects: HashMap::new(),
             comboboxes: HashMap::new(),
+            commands: HashMap::new(),
             lists: HashMap::new(),
             tables: HashMap::new(),
             trees: HashMap::new(),
@@ -614,6 +634,7 @@ impl RootView {
             used_inputs: HashSet::new(),
             used_selects: HashSet::new(),
             used_comboboxes: HashSet::new(),
+            used_commands: HashSet::new(),
             used_lists: HashSet::new(),
             used_tables: HashSet::new(),
             used_trees: HashSet::new(),
@@ -626,6 +647,7 @@ impl RootView {
             used_scrollers: HashSet::new(),
             used_docks: HashSet::new(),
             used_nav_stacks: HashSet::new(),
+            native_menu_open: HashMap::new(),
             _appearance: appearance,
             _window_bounds: window_bounds,
             _keystrokes: keystrokes,
@@ -839,19 +861,59 @@ impl RootView {
         })
     }
 
-    fn flush_callback_queue(&mut self) {
-        let Some(tree) = self.tree.as_ref() else {
-            return;
-        };
-        let Some(calls) = self.callback_queue.next(tree) else {
-            return;
+    fn handle_clj_action(&mut self, action: &action_bridge::CljAction) {
+        let key = action.slot.clone();
+        let item_path = action.item_path.clone();
+        let is_command = self.commands.contains_key(&key);
+        if is_command {
+            if let Some(slot) = self.commands.get_mut(&key) {
+                slot.pending_select = Some(item_path.clone());
+            }
+        }
+        self.callback_queue
+            .push(overlay::QueuedAction::CljSelect { key, item_path });
+        // Command confirm is Kit Action then deferred on_confirm. Leave
+        // CljSelect queued so the confirm callback can share one batch.
+        if !is_command {
+            self.flush_callback_queue();
+        }
+    }
+
+    fn flush_callback_queue(&mut self) -> Option<u64> {
+        let outbound = {
+            let tree = self.tree.as_ref()?;
+            self.callback_queue.next_outbound(tree)?
         };
         // Share the existing sequence allocator with input-submit responses.
         // The matching Tree is the barrier, not a timer or an arbitrary paint.
         self.next_submit_seq = self.next_submit_seq.saturating_add(1);
         let seq = self.next_submit_seq;
         self.callback_queue.sent(seq);
-        protocol::send_callbacks_seq(&self.cmd_tx, calls, Some(seq));
+        protocol::send_callbacks_seq(&self.cmd_tx, outbound.calls, Some(seq));
+        // Command echo latches belong to the seq that actually left the
+        // queue. A later HostEvent::Tree flush must bind them too, or a
+        // queued CommandQuery/CommandSelect would render without a latch.
+        self.install_command_echo_latch(seq, outbound.command_echo);
+        Some(seq)
+    }
+
+    fn install_command_echo_latch(&mut self, seq: u64, echo: Option<overlay::CommandEcho>) {
+        match echo {
+            Some(overlay::CommandEcho::Select { key, item_path }) => {
+                if let Some(slot) = self.commands.get_mut(&key) {
+                    slot.selected_latch = Some(action_bridge::CommandEchoLatch {
+                        seq,
+                        value: item_path,
+                    });
+                }
+            }
+            Some(overlay::CommandEcho::Query { key, query }) => {
+                if let Some(slot) = self.commands.get_mut(&key) {
+                    slot.query_latch = Some(action_bridge::CommandEchoLatch { seq, value: query });
+                }
+            }
+            None => {}
+        }
     }
 
     fn schedule_input_change_flush(
@@ -1496,6 +1558,9 @@ impl RootView {
             "dropdown-menu" => self.render_dropdown_menu(node, &key, window, cx),
             "dropdown-button" => self.render_dropdown_button(node, path, &key, window, cx),
             "context-menu" => self.render_context_menu(node, path, &key, window, cx),
+            "native-menu" => div().into_any_element(),
+            "command" => self.render_command(node, &key, window, cx),
+            "status-bar" => self.render_status_bar(node, path, &key, window, cx),
             "list" => self.render_list(node, &key, window, cx),
             "data-table" => self.render_data_table(node, &key, window, cx),
             "table" => self.render_table(node, path, window, cx),
@@ -2719,6 +2784,282 @@ impl RootView {
         .into_any_element()
     }
 
+    fn command_slot(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<CommandState> {
+        self.used_commands.insert(key.to_string());
+        if let Some(slot) = self.commands.get(key) {
+            return slot.state.clone();
+        }
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        self.commands.insert(
+            key.to_string(),
+            CommandSlot {
+                state: state.clone(),
+                suppress_select: false,
+                pending_select: None,
+                query_latch: None,
+                selected_latch: None,
+                programmatic_query: None,
+            },
+        );
+        state
+    }
+
+    fn sync_command_state(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.commands.get(key).map(|slot| slot.state.clone()) else {
+            return;
+        };
+        let mut suppress = false;
+        let tree_seq = self.tree_seq;
+        if let Some(desired) = node.query.as_ref() {
+            let current = state.read(cx).query(cx).to_string();
+            if current != *desired {
+                let latch = self
+                    .commands
+                    .get(key)
+                    .and_then(|slot| slot.query_latch.as_ref());
+                if action_bridge::should_apply_command_echo(latch, Some(&current), tree_seq) {
+                    if let Some(slot) = self.commands.get_mut(key) {
+                        slot.programmatic_query = Some(desired.clone());
+                        slot.suppress_select = true;
+                    }
+                    suppress = true;
+                    let desired = desired.clone();
+                    state.update(cx, |cmd, cx| {
+                        cmd.set_query(desired, window, cx);
+                    });
+                }
+            }
+        }
+        match action_bridge::command_value_path(node.value.as_ref()) {
+            None => {}
+            Some(path) => {
+                let desired_ix = if path.is_empty() {
+                    None
+                } else {
+                    action_bridge::command_index_path(&node.items, &path)
+                };
+                let current_ix = state.read(cx).selected_index();
+                if current_ix != desired_ix {
+                    let current_path =
+                        current_ix.and_then(|ix| action_bridge::command_item_path(&node.items, ix));
+                    let latch = self
+                        .commands
+                        .get(key)
+                        .and_then(|slot| slot.selected_latch.as_ref());
+                    if action_bridge::should_apply_command_echo(
+                        latch,
+                        current_path.as_ref(),
+                        tree_seq,
+                    ) {
+                        if let Some(slot) = self.commands.get_mut(key) {
+                            slot.suppress_select = true;
+                        }
+                        suppress = true;
+                        state.update(cx, |cmd, cx| {
+                            cmd.set_selected_index(desired_ix, window, cx);
+                        });
+                    }
+                }
+            }
+        }
+        // The matching callback-seq tree consumes the latch even when
+        // Clojure omits `:query` / `:selected` or returns a different
+        // value. Unrelated trees leave it in place.
+        if let Some(slot) = self.commands.get_mut(key) {
+            if slot
+                .query_latch
+                .as_ref()
+                .is_some_and(|latch| tree_seq == Some(latch.seq))
+            {
+                slot.query_latch = None;
+            }
+            if slot
+                .selected_latch
+                .as_ref()
+                .is_some_and(|latch| tree_seq == Some(latch.seq))
+            {
+                slot.selected_latch = None;
+            }
+        }
+        let loading = node.loading;
+        if state.read(cx).is_loading() != loading {
+            state.update(cx, |cmd, cx| {
+                cmd.set_loading(loading, window, cx);
+            });
+        }
+        if node.focus {
+            state.update(cx, |cmd, cx| {
+                cmd.focus(window, cx);
+            });
+        }
+        if suppress {
+            let key = key.to_string();
+            let entity = cx.entity();
+            cx.defer(move |app| {
+                let _ = entity.update(app, |this, _cx| {
+                    if let Some(slot) = this.commands.get_mut(&key) {
+                        slot.suppress_select = false;
+                    }
+                });
+            });
+        }
+    }
+
+    fn render_command(
+        &mut self,
+        node: &Node,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.command_slot(key, window, cx);
+        let emit = Self::action_emitter(cx);
+        let entity = cx.weak_entity();
+        let mut command =
+            action_bridge::apply_command_entries(KitCommand::new(&state), &node.items, key);
+        command = command.searchable(node.searchable);
+        command = command.filterable(node.filterable.unwrap_or(true));
+        if let Some(bordered) = node.bordered {
+            command = command.bordered(bordered);
+        }
+        if let Some(placeholder) = node.placeholder.clone().filter(|s| !s.is_empty()) {
+            command = command.placeholder(placeholder);
+        }
+        if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
+            command = command.empty(move |_, _, _| empty.clone());
+        }
+        if let Some(h) = node.menu_max_h.filter(|h| *h > 0.0) {
+            command = command.max_h(px(h));
+        }
+        if node.on_select.is_some() {
+            let entity = entity.clone();
+            let key = key.to_string();
+            let items = node.items.clone();
+            command = command.on_select(move |index_path, _, cx| {
+                let _ = entity.update(cx, |this, _| {
+                    if this
+                        .commands
+                        .get(&key)
+                        .is_some_and(|slot| slot.suppress_select)
+                    {
+                        return;
+                    }
+                    if this.callback_queue.has_clj_select(&key) {
+                        return;
+                    }
+                    let Some(item_path) = action_bridge::command_item_path(&items, index_path)
+                    else {
+                        return;
+                    };
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandSelect {
+                            key: key.clone(),
+                            item_path,
+                        });
+                    this.flush_callback_queue();
+                });
+            });
+        }
+        {
+            let entity = entity.clone();
+            let key = key.to_string();
+            let items = node.items.clone();
+            command = command.on_confirm(move |index_path, _, cx| {
+                let _ = entity.update(cx, |this, _| {
+                    let item_path = this
+                        .commands
+                        .get_mut(&key)
+                        .and_then(|slot| slot.pending_select.take())
+                        .or_else(|| action_bridge::command_item_path(&items, index_path))
+                        .unwrap_or_default();
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandConfirm {
+                            key: key.clone(),
+                            item_path,
+                        });
+                    this.flush_callback_queue();
+                });
+            });
+        }
+        if node.on_query.is_some() {
+            let entity = entity.clone();
+            let key = key.to_string();
+            command = command.on_query(move |query, _, cx| {
+                let query = query.to_string();
+                let _ = entity.update(cx, |this, _| {
+                    if this
+                        .commands
+                        .get(&key)
+                        .and_then(|slot| slot.programmatic_query.as_ref())
+                        == Some(&query)
+                    {
+                        if let Some(slot) = this.commands.get_mut(&key) {
+                            slot.programmatic_query = None;
+                        }
+                        return;
+                    }
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandQuery {
+                            key: key.clone(),
+                            query,
+                        });
+                    this.flush_callback_queue();
+                });
+            });
+        }
+        if node.on_cancel.is_some() {
+            let emit = emit.clone();
+            let key = key.to_string();
+            command = command.on_cancel(move |_, cx| {
+                emit(
+                    overlay::QueuedAction::CommandCancel { key: key.clone() },
+                    cx,
+                );
+            });
+        }
+        let _ = emit;
+        let command = apply_style(command, node, cx);
+        // Command::render calls install_model. Controlled query/selection
+        // resolve against that matched list, so they must run after this.
+        // RenderOnce returns `impl IntoElement`, which in edition 2024
+        // captures the `&mut Window` / `&mut App` lifetimes; convert to
+        // an owned AnyElement so the later sync can borrow them again.
+        let element = command.render(window, cx).into_any_element();
+        self.sync_command_state(key, node, window, cx);
+        element
+    }
+
+    fn render_status_bar(
+        &mut self,
+        node: &Node,
+        path: &str,
+        _key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut bar = StatusBar::new();
+        for (index, child) in node.left.iter().enumerate() {
+            bar = bar.left(self.render_node(child, &format!("{path}-left-{index}"), window, cx));
+        }
+        for (index, child) in node.right.iter().enumerate() {
+            bar = bar.right(self.render_node(child, &format!("{path}-right-{index}"), window, cx));
+        }
+        apply_style(bar, node, cx)
+            .children(self.render_children(node, path, window, cx))
+            .into_any_element()
+    }
+
     fn render_list(
         &mut self,
         node: &Node,
@@ -3034,6 +3375,38 @@ impl RootView {
             },
         );
         state
+    }
+
+    fn sync_native_menus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let menus = self
+            .tree
+            .as_ref()
+            .map(overlay::collect_native_menus)
+            .unwrap_or_default();
+        let mut to_show = Vec::new();
+        let mut live_keys = HashSet::new();
+        for (key, node) in menus {
+            let open = node.open.unwrap_or(false);
+            let was = self.native_menu_open.get(&key).copied().unwrap_or(false);
+            if action_bridge::native_menu_should_show(was, open) {
+                to_show.push((key.clone(), node));
+            }
+            live_keys.insert(key.clone());
+            self.native_menu_open.insert(key, open);
+        }
+        self.native_menu_open
+            .retain(|key, _| live_keys.contains(key));
+        if to_show.is_empty() {
+            return;
+        }
+        let emit = Self::action_emitter(cx);
+        window.on_next_frame(move |window, cx| {
+            for (key, node) in to_show {
+                let position = action_bridge::native_menu_position(&node, window);
+                action_bridge::fill_native_menu(&node.items, &key).show(position, window, cx);
+                emit(overlay::QueuedAction::PopoverOpen { key, open: false }, cx);
+            }
+        });
     }
 
     fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4435,7 +4808,11 @@ impl RootView {
             .into_iter()
             .enumerate()
             .filter_map(|(index, child)| {
-                if child.kind == "dialog" || child.kind == "sheet" || child.kind == "notification" {
+                if child.kind == "dialog"
+                    || child.kind == "sheet"
+                    || child.kind == "notification"
+                    || child.kind == "native-menu"
+                {
                     None
                 } else {
                     Some(self.render_node(&child, &format!("{path}-{index}"), window, cx))
@@ -4489,6 +4866,7 @@ impl Render for RootView {
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_comboboxes.clear();
+        self.used_commands.clear();
         self.used_lists.clear();
         self.used_tables.clear();
         self.used_trees.clear();
@@ -4531,6 +4909,8 @@ impl Render for RootView {
         let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
         self.comboboxes
             .retain(|key, _| used_comboboxes.contains(key));
+        let used_commands = std::mem::take(&mut self.used_commands);
+        self.commands.retain(|key, _| used_commands.contains(key));
         let used_lists = std::mem::take(&mut self.used_lists);
         self.lists.retain(|key, _| used_lists.contains(key));
         let used_tables = std::mem::take(&mut self.used_tables);
@@ -4563,6 +4943,7 @@ impl Render for RootView {
         self.sync_dialogs(window, cx);
         self.sync_sheet(window, cx);
         self.sync_notifications(window, cx);
+        self.sync_native_menus(window, cx);
 
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
@@ -5964,6 +6345,12 @@ pub fn open_window(
         },
         |window, cx| {
             let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, window, cx));
+            let weak = view.downgrade();
+            cx.on_action(move |action: &action_bridge::CljAction, app| {
+                let _ = weak.update(app, |this, _cx| {
+                    this.handle_clj_action(action);
+                });
+            });
             let root = cx.new(|cx| Root::new(view, window, cx));
             window.on_window_should_close(cx, |_, cx| {
                 quit_host(cx);

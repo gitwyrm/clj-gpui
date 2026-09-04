@@ -48,6 +48,11 @@ impl RegistryPeer {
              "items": [{"id": "inspect", "label": "Inspect"}]},
             {"type": "button", "id": "rerender", "text": "Rerender",
              "on-click": self.id("rerender")},
+            {"type": "native-menu", "id": "os-menu", "open": false,
+             "on-change": self.id("native"),
+             "items": [{"id": "wrap", "label": "Word wrap", "on-click": self.id("wrap")}]},
+            {"type": "command", "id": "palette", "on-change": self.id("command"),
+             "items": [{"id": "find", "label": "Find"}]},
             {"type": "sheet", "id": "inspect", "open": true,
              "children": [{"type": "button", "text": "Ping", "on-click": self.id("sheet-body")}],
              "footer": {"type": "button", "text": "Done", "on-click": self.id("sheet-footer")}},
@@ -109,7 +114,7 @@ impl Fixture {
             writeln!(
                 server,
                 "{}",
-                json!({"op": "ready", "protocol-version": 10,
+                json!({"op": "ready", "protocol-version": 11,
                 "nrepl": 0, "app": "overlay-regression"})
             )
             .unwrap();
@@ -256,6 +261,14 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
             key: "context".into(),
             item_path: vec!["inspect".into()],
         },
+        QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["wrap".into()],
+        },
+        QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["find".into()],
+        },
     ];
     let mut queue = CallbackQueue::default();
     for (index, action) in retained_actions.into_iter().enumerate() {
@@ -277,8 +290,11 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
             ("copy".into(), Value::Null, true),
             ("menu".into(), json!("copy"), true),
             ("link".into(), Value::Null, true),
-            ("menu".into(), json!("link"), true),
+            ("menu".into(), json!(["share", "link"]), true),
             ("context".into(), json!("inspect"), false),
+            ("wrap".into(), Value::Null, true),
+            ("native".into(), json!("wrap"), true),
+            ("command".into(), json!("find"), false),
         ]
     );
 }
@@ -445,8 +461,8 @@ fn retained_static_overlay_buttons_use_replacement_registry() {
     let tree_a = fixture.initial_tree();
     let old_dialog = tree_a.children[0].children[1].on_click.clone().unwrap();
     let old_popover = tree_a.children[1].children[1].on_click.clone().unwrap();
-    let old_sheet = tree_a.children[5].children[0].on_click.clone().unwrap();
-    let old_footer = tree_a.children[5]
+    let old_sheet = tree_a.children[7].children[0].on_click.clone().unwrap();
+    let old_footer = tree_a.children[7]
         .footer
         .as_ref()
         .unwrap()
@@ -487,8 +503,8 @@ fn retained_static_overlay_buttons_use_replacement_registry() {
         let current = match key {
             "ask/content/1" => tree.children[0].children[1].on_click.clone(),
             "hint/content/1" => tree.children[1].children[1].on_click.clone(),
-            "inspect/content/0" => tree.children[5].children[0].on_click.clone(),
-            "inspect/footer/0" => tree.children[5].footer.as_ref().unwrap().on_click.clone(),
+            "inspect/content/0" => tree.children[7].children[0].on_click.clone(),
+            "inspect/footer/0" => tree.children[7].footer.as_ref().unwrap().on_click.clone(),
             _ => None,
         };
         assert_eq!(calls[0].id, current.unwrap(), "{key} -> {role}");
@@ -538,7 +554,7 @@ fn queued_static_overlay_button_skips_removed_disabled_or_replaced() {
 }
 
 fn nav_go_click_id(tree: &Node) -> String {
-    tree.children[6].children[0].children[0]
+    tree.children[8].children[0].children[0]
         .on_click
         .clone()
         .expect("nav-go on-click")

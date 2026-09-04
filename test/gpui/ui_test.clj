@@ -40,6 +40,9 @@
   (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
   (is (some? (ns-resolve 'gpui.ui 'nav-stack)))
   (is (some? (ns-resolve 'gpui.ui 'nav-page)))
+  (is (some? (ns-resolve 'gpui.ui 'native-menu)))
+  (is (some? (ns-resolve 'gpui.ui 'command)))
+  (is (some? (ns-resolve 'gpui.ui 'status-bar)))
   (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
   (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
@@ -685,6 +688,95 @@
       (is (= :button (get-in drop [:trigger :type])))
       (is (= :context-menu (:type ctx)))
       (is (= :label (get-in ctx [:children 0 :type]))))
+    (let [native (ui/native-menu
+                  [{:id :copy :label "Copy"} :- {:id :wrap :label "Word wrap" :checked true}]
+                  {:id "edit-menu" :open? true :position [120 40] :on-change (fn [_])})]
+      (is (= :native-menu (:type native)))
+      (is (true? (:open native)))
+      (is (nil? (:open? native)))
+      (is (= [120 40] (:position native)))
+      (is (true? (get-in native [:items 1 :separator])))
+      (is (true? (get-in native [:items 2 :checked])))
+      (is (fn? (:on-change native))))
+    (let [disabled-share (ui/native-menu
+                          [{:id :copy :label "Copy"}
+                           {:id :share :label "Share" :disabled true
+                            :items [{:id :link :label "Copy link"}]}]
+                          {:id "edit-menu"})
+          exported (runtime/export-tree disabled-share)]
+      (is (true? (get-in disabled-share [:items 1 :disabled]))
+          "submenu wrappers keep :disabled")
+      (is (= "link" (get-in disabled-share [:items 1 :items 0 :id])))
+      (is (true? (get-in exported [:items 1 :disabled]))))
+    (let [cmd (ui/command
+               [{:id :copy :label "Copy" :icon :copy :keywords [:duplicate]}
+                :-
+                {:label "Edit" :items [{:id :find :label "Find"}]}]
+               {:placeholder "Type a command…" :menu-max-h 220
+                :selected :find :query "fi" :bordered false
+                :on-change (fn [_]) :on-select (fn [_]) :on-confirm (fn [_])
+                :on-query (fn [_])})]
+      (is (= :command (:type cmd)))
+      (is (true? (:searchable cmd)))
+      (is (= "Type a command…" (:placeholder cmd)))
+      (is (= 220 (:menu-max-h cmd)))
+      (is (nil? (:height cmd)))
+      (is (= "fi" (:query cmd)))
+      (is (false? (:bordered cmd)))
+      (is (= "find" (:value cmd)))
+      (is (nil? (:selected cmd)))
+      (is (= "copy" (get-in cmd [:items 0 :icon])))
+      (is (= ["duplicate"] (get-in cmd [:items 0 :keywords])))
+      (is (true? (get-in cmd [:items 1 :separator])))
+      (is (= "find" (get-in cmd [:items 2 :items 0 :id])))
+      (is (fn? (:on-change cmd)))
+      (is (fn? (:on-select cmd)))
+      (is (fn? (:on-confirm cmd))))
+    (let [items [{:id :file :label "File" :items [{:id :open :label "Open file"}]}
+                 {:id :project :label "Project" :items [{:id :open :label "Open project"}]}]
+          !selected (atom nil)
+          cmd (ui/command items {:selected @!selected
+                                 :on-select #(reset! !selected %)
+                                 :on-change #(reset! !selected %)
+                                 :on-confirm #(reset! !selected %)})]
+      ((:on-select cmd) ["project" "open"])
+      (is (= [:project :open] @!selected))
+      (let [echo (ui/command items {:selected @!selected
+                                    :on-select #(reset! !selected %)})]
+        (is (= ["project" "open"] (:value echo))
+            "echoing the grouped payload as :selected must stay a path"))
+      ((:on-change cmd) ["file" "open"])
+      (is (= [:file :open] @!selected))
+      ((:on-confirm cmd) "copy")
+      (is (= "copy" @!selected)
+          "unknown wire ids stay as received"))
+    (let [!got (atom nil)
+          n (ui/native-menu
+             [{:id :file :label "File" :items [{:id :open :label "Open file"}]}
+              {:id :project :label "Project" :items [{:id :open :label "Open project"}]}]
+             {:on-change #(reset! !got %)})]
+      ((:on-change n) ["project" "open"])
+      (is (= [:project :open] @!got))
+      ((:on-change n) "copy")
+      (is (= "copy" @!got)))
+    (let [!got (atom nil)
+          n (ui/dropdown-menu
+             [{:id :share :label "Share"
+               :items [{:id :link :label "Copy link"}]}]
+             {:on-change #(reset! !got %)}
+             (ui/button "Edit"))]
+      ((:on-change n) ["share" "link"])
+      (is (= [:share :link] @!got))
+      ((:on-change n) "copy")
+      (is (= "copy" @!got)))
+    (let [bar (ui/status-bar {:left (ui/label "Ln 1")
+                              :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
+                             (ui/label "Ready"))]
+      (is (= :status-bar (:type bar)))
+      (is (= :label (get-in bar [:left 0 :type])))
+      (is (= "Ln 1" (get-in bar [:left 0 :text])))
+      (is (= 2 (count (:right bar))))
+      (is (= :label (get-in bar [:children 0 :type]))))
     (let [split (ui/dropdown-button [{:id :csv :label "CSV"} :- {:id :pdf :label "PDF"}]
                                     {:on-change (fn [_]) :variant :primary :size :small
                                      :anchor :bottom-left}
@@ -1358,7 +1450,21 @@
                                    :on-change #(reset! got %)})
                    (ui/tree [{:id :src :label "src"
                               :items [{:id :lib :label "lib.rs"}]}]
-                            {:on-change #(reset! got %)})))
+                            {:on-change #(reset! got %)})
+                   (ui/native-menu [{:id :copy :label "Copy"}]
+                                   {:id "edit-menu"
+                                    :open? true
+                                    :on-change #(reset! got %)
+                                    :on-open-change #(reset! got %)})
+                   (ui/command [{:id :find :label "Find"}]
+                               {:id "palette"
+                                :on-change #(reset! got %)
+                                :on-select #(reset! got [:select %])
+                                :on-confirm #(reset! got [:confirm %])
+                                :on-query #(reset! got %)
+                                :on-cancel #(reset! got :cancel)})
+                   (ui/status-bar {:left (ui/button "Ln" #(reset! got :left))}
+                                  (ui/label "Ready"))))
         children (:children exported)]
     (is (string? (get-in children [0 :on-close])))
     (is (string? (get-in children [0 :on-ok])))
@@ -1387,7 +1493,33 @@
     (is (= :ada @got))
     (is (= {:ok true :id (get-in children [5 :on-change])}
            (runtime/invoke-callback! (get-in children [5 :on-change]) "lib")))
-    (is (= :lib @got))))
+    (is (= :lib @got))
+    (is (string? (get-in children [6 :on-change])))
+    (is (string? (get-in children [6 :on-open-change])))
+    (is (= {:ok true :id (get-in children [6 :on-change])}
+           (runtime/invoke-callback! (get-in children [6 :on-change]) "copy")))
+    (is (= :copy @got))
+    (is (string? (get-in children [7 :on-change])))
+    (is (string? (get-in children [7 :on-select])))
+    (is (string? (get-in children [7 :on-confirm])))
+    (is (string? (get-in children [7 :on-query])))
+    (is (string? (get-in children [7 :on-cancel])))
+    (is (= {:ok true :id (get-in children [7 :on-select])}
+           (runtime/invoke-callback! (get-in children [7 :on-select]) "find")))
+    (is (= [:select :find] @got))
+    (is (= {:ok true :id (get-in children [7 :on-confirm])}
+           (runtime/invoke-callback! (get-in children [7 :on-confirm]) "find")))
+    (is (= [:confirm :find] @got))
+    (is (= {:ok true :id (get-in children [7 :on-query])}
+           (runtime/invoke-callback! (get-in children [7 :on-query]) "fi")))
+    (is (= "fi" @got))
+    (is (= {:ok true :id (get-in children [7 :on-cancel])}
+           (runtime/invoke-callback! (get-in children [7 :on-cancel]))))
+    (is (= :cancel @got))
+    (is (string? (get-in children [8 :left 0 :on-click])))
+    (is (= {:ok true :id (get-in children [8 :left 0 :on-click])}
+           (runtime/invoke-callback! (get-in children [8 :left 0 :on-click]))))
+    (is (= :left @got))))
 
 (deftest product-widget-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

@@ -256,6 +256,34 @@ pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
     out
 }
 
+/// Every `native-menu` node, open or closed. Show is a rising-edge snapshot.
+pub fn collect_native_menus(root: &Node) -> Vec<(String, Node)> {
+    let mut out = Vec::new();
+    walk_nodes(root, "root", &mut |node, path| {
+        if node.kind == "native-menu" {
+            out.push((node_key(node, path), node.clone()));
+        }
+    });
+    out
+}
+
+/// Exact-path walk used by PopupMenu `item_path` and the CljAction bridge.
+/// Each segment is `Item::id_or_label()`. Disabled / separator hops fail.
+/// The path must end on a leaf (empty nested `:items`).
+pub fn item_at_path<'a>(items: &'a [Item], path: &[String]) -> Option<&'a Item> {
+    let mut items = items;
+    let mut selected = None;
+    for identity in path {
+        let item = items.iter().find(|item| item.id_or_label() == *identity)?;
+        if item.disabled || item.is_separator() {
+            return None;
+        }
+        selected = Some(item);
+        items = &item.items;
+    }
+    selected.filter(|item| item.items.is_empty())
+}
+
 fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
     visit(node, path);
     if let Some(trigger) = node.trigger.as_ref() {
@@ -266,6 +294,12 @@ fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
     }
     for (index, child) in node.children.iter().enumerate() {
         walk_nodes(child, &format!("{path}-{index}"), visit);
+    }
+    for (index, child) in node.left.iter().enumerate() {
+        walk_nodes(child, &format!("{path}-left-{index}"), visit);
+    }
+    for (index, child) in node.right.iter().enumerate() {
+        walk_nodes(child, &format!("{path}-right-{index}"), visit);
     }
     for (index, item) in node.items.iter().enumerate() {
         if let Some(content) = item.content.as_ref() {
@@ -302,13 +336,80 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 /// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedAction {
-    ButtonClick { key: String },
-    DialogClose { key: String, ok: Option<bool> },
-    PopoverOpen { key: String, open: bool },
-    MenuSelect { key: String, item_path: Vec<String> },
+    ButtonClick {
+        key: String,
+    },
+    DialogClose {
+        key: String,
+        ok: Option<bool>,
+    },
+    PopoverOpen {
+        key: String,
+        open: bool,
+    },
+    MenuSelect {
+        key: String,
+        item_path: Vec<String>,
+    },
+    /// NativeMenu / Command Action dispatch. `item_path` is the semantic
+    /// path (submenu / group identities, then the leaf id).
+    CljSelect {
+        key: String,
+        item_path: Vec<String>,
+    },
+    /// Command Kit `on_select` (highlight). Distinct from confirm.
+    CommandSelect {
+        key: String,
+        item_path: Vec<String>,
+    },
+    /// Command Kit `on_confirm` after Action dispatch.
+    CommandConfirm {
+        key: String,
+        item_path: Vec<String>,
+    },
+    CommandQuery {
+        key: String,
+        query: String,
+    },
+    CommandCancel {
+        key: String,
+    },
 }
 
 pub type ActionEmitter = Rc<dyn Fn(QueuedAction, &mut App)>;
+
+/// Native Command value that left the queue in this callback batch.
+///
+/// Bound to the seq assigned at send time so a delayed flush (after
+/// `wait_for_seq`) still installs the echo latch for the action that
+/// was actually transmitted, not the one that originally tried to flush.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandEcho {
+    Select { key: String, item_path: Vec<String> },
+    Query { key: String, query: String },
+}
+
+impl CommandEcho {
+    fn from_action(action: &QueuedAction) -> Option<Self> {
+        match action {
+            QueuedAction::CommandSelect { key, item_path } => Some(Self::Select {
+                key: key.clone(),
+                item_path: item_path.clone(),
+            }),
+            QueuedAction::CommandQuery { key, query } => Some(Self::Query {
+                key: key.clone(),
+                query: query.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Calls plus Command echo metadata for one dequeued batch.
+pub struct OutboundCallbacks {
+    pub calls: Vec<protocol::CallbackCall>,
+    pub command_echo: Option<CommandEcho>,
+}
 
 #[derive(Default)]
 pub struct CallbackQueue {
@@ -321,17 +422,48 @@ impl CallbackQueue {
         self.pending.push_back(action);
     }
 
+    #[cfg(test)]
     pub fn next(&mut self, tree: &Node) -> Option<Vec<protocol::CallbackCall>> {
+        self.next_outbound(tree).map(|outbound| outbound.calls)
+    }
+
+    /// Dequeue the next sendable batch, including Command echo metadata.
+    ///
+    /// `flush_callback_queue` binds that metadata to the seq it assigns,
+    /// whether the flush ran from the original `on_select` / `on_query`
+    /// or later from `HostEvent::Tree`.
+    pub fn next_outbound(&mut self, tree: &Node) -> Option<OutboundCallbacks> {
         if self.wait_for_seq.is_some() {
             return None;
         }
         while let Some(action) = self.pending.pop_front() {
-            let calls = action.resolve(tree);
+            let mut calls = action.resolve(tree);
+            // Kit confirm is Action (CljSelect) then deferred on_confirm.
+            // Drain the matching confirm into this batch so :on-change and
+            // Kit :on-confirm share one callback generation.
+            if let QueuedAction::CljSelect { key, .. } = &action
+                && matches!(
+                    self.pending.front(),
+                    Some(QueuedAction::CommandConfirm { key: ck, .. }) if ck == key
+                )
+            {
+                let confirm = self.pending.pop_front().unwrap();
+                calls.extend(confirm.resolve(tree));
+            }
             if !calls.is_empty() {
-                return Some(calls);
+                return Some(OutboundCallbacks {
+                    calls,
+                    command_echo: CommandEcho::from_action(&action),
+                });
             }
         }
         None
+    }
+
+    pub fn has_clj_select(&self, key: &str) -> bool {
+        self.pending
+            .iter()
+            .any(|action| matches!(action, QueuedAction::CljSelect { key: k, .. } if k == key))
     }
 
     pub fn sent(&mut self, seq: u64) {
@@ -358,18 +490,28 @@ impl QueuedAction {
             Self::ButtonClick { key }
             | Self::DialogClose { key, .. }
             | Self::PopoverOpen { key, .. }
-            | Self::MenuSelect { key, .. } => key,
+            | Self::MenuSelect { key, .. }
+            | Self::CljSelect { key, .. }
+            | Self::CommandSelect { key, .. }
+            | Self::CommandConfirm { key, .. }
+            | Self::CommandQuery { key, .. }
+            | Self::CommandCancel { key } => key,
         };
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
                 Self::ButtonClick { .. } => node.kind == "button",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
-                Self::PopoverOpen { .. } => node.kind == "popover",
+                Self::PopoverOpen { .. } => matches!(node.kind.as_str(), "popover" | "native-menu"),
                 Self::MenuSelect { .. } => matches!(
                     node.kind.as_str(),
                     "dropdown-menu" | "context-menu" | "dropdown-button"
                 ),
+                Self::CljSelect { .. } => matches!(node.kind.as_str(), "native-menu" | "command"),
+                Self::CommandSelect { .. }
+                | Self::CommandConfirm { .. }
+                | Self::CommandQuery { .. }
+                | Self::CommandCancel { .. } => node.kind == "command",
             };
             if found.is_none() && kind_matches && node_key(node, path) == *key {
                 found = Some(node.clone());
@@ -398,29 +540,46 @@ impl QueuedAction {
                 .on_open_change
                 .map(|id| vec![protocol::CallbackCall::with_value(id, json!(*open))])
                 .unwrap_or_default(),
-            Self::MenuSelect { item_path, .. } => {
-                let mut items = node.items.as_slice();
-                let mut selected = None;
-                for identity in item_path {
-                    let Some(item) = items.iter().find(|item| item.id_or_label() == *identity)
-                    else {
-                        return Vec::new();
-                    };
-                    if item.disabled || item.is_separator() {
-                        return Vec::new();
-                    }
-                    selected = Some(item);
-                    items = &item.items;
-                }
-                let Some(item) = selected.filter(|item| item.items.is_empty()) else {
+            Self::MenuSelect { item_path, .. } | Self::CljSelect { item_path, .. } => {
+                let Some(item) = item_at_path(&node.items, item_path) else {
                     return Vec::new();
                 };
-                protocol::menu_selection_calls(
-                    item.on_click.clone(),
-                    node.on_change,
-                    item.id_or_label(),
-                )
+                protocol::menu_selection_calls(item.on_click.clone(), node.on_change, item_path)
             }
+            Self::CommandSelect { item_path, .. } => {
+                if item_at_path(&node.items, item_path).is_none() {
+                    return Vec::new();
+                }
+                node.on_select
+                    .map(|id| {
+                        vec![protocol::CallbackCall::with_value(
+                            id,
+                            protocol::menu_selection_payload(item_path),
+                        )]
+                    })
+                    .unwrap_or_default()
+            }
+            Self::CommandConfirm { item_path, .. } => {
+                if item_at_path(&node.items, item_path).is_none() {
+                    return Vec::new();
+                }
+                node.on_confirm
+                    .map(|id| {
+                        vec![protocol::CallbackCall::with_value(
+                            id,
+                            protocol::menu_selection_payload(item_path),
+                        )]
+                    })
+                    .unwrap_or_default()
+            }
+            Self::CommandQuery { query, .. } => node
+                .on_query
+                .map(|id| vec![protocol::CallbackCall::with_value(id, json!(query))])
+                .unwrap_or_default(),
+            Self::CommandCancel { .. } => node
+                .on_cancel
+                .map(|id| vec![protocol::CallbackCall::fire(id)])
+                .unwrap_or_default(),
             // Removed/closed overlays and controlled-state echoes do not
             // represent a new semantic action and must not invoke anything.
             _ => Vec::new(),
@@ -1351,6 +1510,7 @@ pub fn notification_autohide(node: &Node) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action_bridge::{CommandEchoLatch, should_apply_command_echo};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1613,6 +1773,376 @@ mod tests {
             key: "root-0-trigger".into(),
         });
         assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-action"]);
+    }
+
+    #[test]
+    fn clj_select_resolves_live_native_menu_and_command_callbacks() {
+        let tree = node(json!({"type": "window", "children": [
+            {"type": "native-menu", "id": "edit-menu", "open": true,
+             "on-change": "cb-menu", "on-open-change": "cb-open",
+             "items": [
+                {"id": "copy", "label": "Copy", "on-click": "cb-copy"},
+                {"id": "share", "label": "Share", "items": [
+                    {"id": "link", "label": "Copy link", "on-click": "cb-link"}
+                ]}
+             ]},
+            {"type": "command", "id": "palette", "on-change": "cb-cmd",
+             "on-query": "cb-query", "on-cancel": "cb-cancel",
+             "on-select": "cb-sel", "on-confirm": "cb-confirm",
+             "items": [
+                {"label": "Edit", "items": [{"id": "find", "label": "Find"}]}
+             ]}
+        ]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CljSelect {
+            key: "edit-menu".into(),
+            item_path: vec!["copy".into()],
+        });
+        let copy = queue.next(&tree).unwrap();
+        assert_eq!(ids(copy.clone()), vec!["cb-copy", "cb-menu"]);
+        assert_eq!(copy[1].value, Some(json!("copy")));
+        queue.push(QueuedAction::CljSelect {
+            key: "edit-menu".into(),
+            item_path: vec!["share".into(), "link".into()],
+        });
+        let link = queue.next(&tree).unwrap();
+        assert_eq!(ids(link.clone()), vec!["cb-link", "cb-menu"]);
+        assert_eq!(link[1].value, Some(json!(["share", "link"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        let cmd = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd.clone()), vec!["cb-cmd"]);
+        assert_eq!(cmd[0].value, Some(json!(["Edit", "find"])));
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        let sel = queue.next(&tree).unwrap();
+        assert_eq!(ids(sel.clone()), vec!["cb-sel"]);
+        assert_eq!(sel[0].value, Some(json!(["Edit", "find"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        queue.push(QueuedAction::CommandConfirm {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        let confirm = queue.next(&tree).unwrap();
+        assert_eq!(ids(confirm.clone()), vec!["cb-cmd", "cb-confirm"]);
+        assert_eq!(confirm[0].value, Some(json!(["Edit", "find"])));
+        assert_eq!(confirm[1].value, Some(json!(["Edit", "find"])));
+        queue.push(QueuedAction::CommandQuery {
+            key: "palette".into(),
+            query: "fi".into(),
+        });
+        let query = queue.next(&tree).unwrap();
+        assert_eq!(query[0].id, "cb-query");
+        assert_eq!(query[0].value, Some(json!("fi")));
+        queue.push(QueuedAction::CommandCancel {
+            key: "palette".into(),
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-cancel"]);
+        queue.push(QueuedAction::PopoverOpen {
+            key: "edit-menu".into(),
+            open: false,
+        });
+        let close = queue.next(&tree).unwrap();
+        assert_eq!(close[0].id, "cb-open");
+        assert_eq!(close[0].value, Some(json!(false)));
+    }
+
+    #[test]
+    fn clj_select_skips_disabled_leaves() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "native-menu", "id": "edit-menu", "on-change": "cb-menu",
+            "items": [{"id": "copy", "label": "Copy", "disabled": true, "on-click": "cb-copy"}]
+        }]}));
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CljSelect {
+            key: "edit-menu".into(),
+            item_path: vec!["copy".into()],
+        });
+        assert!(queue.next(&tree).is_none());
+    }
+
+    #[test]
+    fn clj_select_uses_exact_path_when_leaf_ids_collide() {
+        let tree = node(json!({"type": "window", "children": [
+            {"type": "native-menu", "id": "os-menu", "on-change": "cb-os",
+             "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file", "on-click": "cb-file-open"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project", "on-click": "cb-project-open"}
+                ]}
+             ]},
+            {"type": "command", "id": "palette", "on-change": "cb-cmd",
+             "on-select": "cb-sel", "on-confirm": "cb-confirm",
+             "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file", "on-click": "cb-file-cmd"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project", "on-click": "cb-project-cmd"}
+                ]}
+             ]}
+        ]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let os_project = queue.next(&tree).unwrap();
+        assert_eq!(ids(os_project.clone()), vec!["cb-project-open", "cb-os"]);
+        assert_eq!(os_project[1].value, Some(json!(["project", "open"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["file".into(), "open".into()],
+        });
+        let os_file = queue.next(&tree).unwrap();
+        assert_eq!(ids(os_file.clone()), vec!["cb-file-open", "cb-os"]);
+        assert_eq!(os_file[1].value, Some(json!(["file", "open"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let cmd_project = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd_project.clone()), vec!["cb-project-cmd", "cb-cmd"]);
+        assert_eq!(cmd_project[1].value, Some(json!(["project", "open"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["file".into(), "open".into()],
+        });
+        let cmd_file = queue.next(&tree).unwrap();
+        assert_eq!(ids(cmd_file.clone()), vec!["cb-file-cmd", "cb-cmd"]);
+        assert_eq!(cmd_file[1].value, Some(json!(["file", "open"])));
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let sel = queue.next(&tree).unwrap();
+        assert_eq!(ids(sel.clone()), vec!["cb-sel"]);
+        assert_eq!(sel[0].value, Some(json!(["project", "open"])));
+        queue.push(QueuedAction::CommandConfirm {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        let confirm = queue.next(&tree).unwrap();
+        assert_eq!(ids(confirm.clone()), vec!["cb-confirm"]);
+        assert_eq!(confirm[0].value, Some(json!(["project", "open"])));
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["open".into()],
+        });
+        assert!(
+            queue.next(&tree).is_none(),
+            "a one-element path must not depth-first the first duplicate leaf"
+        );
+    }
+
+    #[test]
+    fn command_select_without_on_select_emits_nothing() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project"}
+                ]}
+            ]
+        }]}));
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        assert!(
+            queue.next(&tree).is_none(),
+            "no Clojure :on-select means no callback and no echo to wait for"
+        );
+    }
+
+    #[test]
+    fn queued_command_query_echo_binds_when_the_blocked_batch_is_sent() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "on-query": "cb-query",
+            "items": [{"id": "find", "label": "Find"}]
+        }]}));
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandQuery {
+            key: "palette".into(),
+            query: "f".into(),
+        });
+        let first = queue.next_outbound(&tree).unwrap();
+        assert_eq!(first.calls[0].value, Some(json!("f")));
+        assert_eq!(
+            first.command_echo,
+            Some(CommandEcho::Query {
+                key: "palette".into(),
+                query: "f".into(),
+            })
+        );
+        queue.sent(7);
+
+        queue.push(QueuedAction::CommandQuery {
+            key: "palette".into(),
+            query: "fi".into(),
+        });
+        assert!(
+            queue.next_outbound(&tree).is_none(),
+            "an in-flight callback batch must not send the later query"
+        );
+
+        queue.tree_installed(Some(7));
+        let second = queue.next_outbound(&tree).unwrap();
+        assert_eq!(second.calls[0].value, Some(json!("fi")));
+        assert_eq!(
+            second.command_echo,
+            Some(CommandEcho::Query {
+                key: "palette".into(),
+                query: "fi".into(),
+            }),
+            "the delayed flush must still describe the query that was actually sent"
+        );
+        queue.sent(8);
+
+        let latch_a = CommandEchoLatch {
+            seq: 7,
+            value: "f".to_string(),
+        };
+        let latch_b = CommandEchoLatch {
+            seq: 8,
+            value: "fi".to_string(),
+        };
+        assert!(
+            should_apply_command_echo(Some(&latch_a), Some(&"fi".to_string()), Some(7)),
+            "keeping A's latch would let seq 7 overwrite the later native query"
+        );
+        assert!(
+            !should_apply_command_echo(Some(&latch_b), Some(&"fi".to_string()), Some(7)),
+            "B's latch must protect native fi from A's tree"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&"fi".to_string()), Some(8)),
+            "B's matching tree is then authoritative"
+        );
+        assert!(should_apply_command_echo(
+            Some(&latch_b),
+            Some(&"find".to_string()),
+            Some(8)
+        ));
+    }
+
+    #[test]
+    fn queued_command_select_echo_binds_when_the_blocked_batch_is_sent() {
+        let tree = node(json!({"type": "window", "children": [{
+            "type": "command", "id": "palette",
+            "on-select": "cb-sel",
+            "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project"}
+                ]}
+            ]
+        }]}));
+        let file = vec!["file".to_string(), "open".to_string()];
+        let project = vec!["project".to_string(), "open".to_string()];
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: file.clone(),
+        });
+        let first = queue.next_outbound(&tree).unwrap();
+        assert_eq!(first.calls[0].value, Some(json!(["file", "open"])));
+        assert_eq!(
+            first.command_echo,
+            Some(CommandEcho::Select {
+                key: "palette".into(),
+                item_path: file.clone(),
+            })
+        );
+        queue.sent(7);
+
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: project.clone(),
+        });
+        assert!(
+            queue.next_outbound(&tree).is_none(),
+            "an in-flight callback batch must not send the later highlight"
+        );
+
+        queue.tree_installed(Some(7));
+        let second = queue.next_outbound(&tree).unwrap();
+        assert_eq!(second.calls[0].value, Some(json!(["project", "open"])));
+        assert_eq!(
+            second.command_echo,
+            Some(CommandEcho::Select {
+                key: "palette".into(),
+                item_path: project.clone(),
+            }),
+            "the delayed flush must still describe the highlight that was actually sent"
+        );
+        queue.sent(8);
+
+        let latch_a = CommandEchoLatch {
+            seq: 7,
+            value: file.clone(),
+        };
+        let latch_b = CommandEchoLatch {
+            seq: 8,
+            value: project.clone(),
+        };
+        assert!(
+            should_apply_command_echo(Some(&latch_a), Some(&project), Some(7)),
+            "keeping A's latch would let seq 7 overwrite the later native highlight"
+        );
+        assert!(
+            !should_apply_command_echo(Some(&latch_b), Some(&project), Some(7)),
+            "B's latch must protect native project/open from A's tree"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&project), Some(8)),
+            "B's matching tree is then authoritative"
+        );
+        assert!(
+            should_apply_command_echo(Some(&latch_b), Some(&file), Some(8)),
+            "the matching seq may echo, reject, or replace the highlight"
+        );
+    }
+
+    #[test]
+    fn collect_native_menus_includes_closed() {
+        let tree = node(json!({
+            "type": "window",
+            "children": [
+                {"type": "native-menu", "id": "edit", "open": false,
+                 "items": [{"id": "copy", "label": "Copy"}]},
+                {"type": "native-menu", "open": true,
+                 "items": [{"id": "paste", "label": "Paste"}]}
+            ]
+        }));
+        let menus = collect_native_menus(&tree);
+        assert_eq!(menus.len(), 2);
+        assert_eq!(menus[0].0, "edit");
+        assert!(!menus[0].1.open.unwrap_or(false));
+        assert_eq!(menus[1].0, "root-1");
+        assert!(menus[1].1.open.unwrap_or(false));
     }
 
     #[test]

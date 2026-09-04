@@ -130,7 +130,7 @@ pub enum NavItemWire {
     Spec(NavItemSpec),
 }
 
-pub const PROTOCOL_VERSION: u64 = 10;
+pub const PROTOCOL_VERSION: u64 = 11;
 
 /// Host → Clojure `callback` request. `value` is omitted when `None`.
 /// JSON `null` is `Some(Value::Null)` so Clojure can call `(f nil)`.
@@ -523,18 +523,35 @@ pub fn slider_event_calls(
     calls
 }
 
-/// Menu row: item `:on-click` (0-arg) then menu `:on-change` (item id).
+/// Parent selection payload for menus / NativeMenu / Command.
+///
+/// A one-element path is the leaf id (flat item). Nested submenu /
+/// Command-group leaves send the full semantic path so duplicate leaf
+/// ids (`file/open` vs `project/open`) round-trip through controlled
+/// `:selected` / `:on-select`.
+pub fn menu_selection_payload(item_path: &[String]) -> Value {
+    match item_path {
+        [id] => json!(id),
+        path => json!(path),
+    }
+}
+
+/// Menu row: item `:on-click` (0-arg) then menu `:on-change` (leaf id
+/// or nested path; see [`menu_selection_payload`]).
 pub fn menu_selection_calls(
     item_click: Option<String>,
     on_change: Option<String>,
-    item_id: impl Into<String>,
+    item_path: &[String],
 ) -> Vec<CallbackCall> {
     let mut calls = Vec::new();
     if let Some(id) = item_click {
         calls.push(CallbackCall::fire(id));
     }
     if let Some(id) = on_change {
-        calls.push(CallbackCall::with_value(id, json!(item_id.into())));
+        calls.push(CallbackCall::with_value(
+            id,
+            menu_selection_payload(item_path),
+        ));
     }
     calls
 }
@@ -612,6 +629,9 @@ pub struct Item {
     /// Menu item icon (kebab name).
     #[serde(default)]
     pub icon: Option<String>,
+    /// Command palette extra search terms (Kit `CommandItem::keywords`).
+    #[serde(default)]
+    pub keywords: Vec<String>,
     /// Tree item expanded on first paint.
     #[serde(default)]
     pub expanded: bool,
@@ -760,6 +780,13 @@ pub struct Node {
     pub on_close: Option<String>,
     #[serde(default, rename = "on-copied")]
     pub on_copied: Option<String>,
+    /// Command: search-field text after it actually changes.
+    #[serde(default, rename = "on-query")]
+    pub on_query: Option<String>,
+    /// Command: Kit `on_select` after the highlight changes. Distinct from
+    /// confirm. Payload is the original Clojure leaf id.
+    #[serde(default, rename = "on-select")]
+    pub on_select: Option<String>,
     #[serde(default)]
     pub checked: Option<bool>,
     #[serde(default)]
@@ -874,6 +901,9 @@ pub struct Node {
     pub selected: bool,
     #[serde(default)]
     pub searchable: bool,
+    /// Command: Kit `filterable`. Omitted is Kit true.
+    #[serde(default)]
+    pub filterable: Option<bool>,
     /// Select / Combobox: Kit `cleanable` (clear button when a value is selected).
     #[serde(default)]
     pub cleanable: bool,
@@ -884,8 +914,16 @@ pub struct Node {
     #[serde(default, rename = "menu-width")]
     pub menu_width: Option<f32>,
     /// Select / Combobox: Kit `menu_max_h` in pixels. Omitted is Kit's 20rem default.
+    /// Command: Kit `Command::max_h` in pixels. Omitted is Kit's 18.75rem
+    /// (300px) default. Not widget layout `:height`.
     #[serde(default, rename = "menu-max-h")]
     pub menu_max_h: Option<f32>,
+    /// Command: Kit `Command::bordered`. Omitted is Kit true.
+    #[serde(default)]
+    pub bordered: Option<bool>,
+    /// Command: Kit `CommandState` search text. Omitted leaves the native query.
+    #[serde(default)]
+    pub query: Option<String>,
     /// Select / Combobox: Kit `search_placeholder`.
     #[serde(default, rename = "search-placeholder")]
     pub search_placeholder: Option<String>,
@@ -906,8 +944,20 @@ pub struct Node {
     #[serde(default)]
     pub message: Option<String>,
     /// Controlled overlay/popover open flag (`:open?` on the Clojure side).
+    /// NativeMenu: a show request; the host materializes a snapshot on the
+    /// false→true edge and does not treat checked state as host-owned.
     #[serde(default)]
     pub open: Option<bool>,
+    /// NativeMenu show position `[x, y]` in window logical pixels.
+    /// Omitted uses the current mouse position.
+    #[serde(default)]
+    pub position: Option<Vec<f32>>,
+    /// StatusBar left region widgets.
+    #[serde(default)]
+    pub left: Vec<Node>,
+    /// StatusBar right region widgets.
+    #[serde(default)]
+    pub right: Vec<Node>,
     #[serde(default, rename = "on-ok")]
     pub on_ok: Option<String>,
     #[serde(default, rename = "on-cancel")]
@@ -1295,6 +1345,8 @@ impl Node {
                 .jump_button_renderer
                 .as_ref()
                 .is_some_and(|node| node.contains_text(needle))
+            || self.left.iter().any(|child| child.contains_text(needle))
+            || self.right.iter().any(|child| child.contains_text(needle))
     }
 
     pub fn collection(&self) -> &[Item] {
@@ -1362,6 +1414,7 @@ fn item_contains(item: &Item, needle: &str) -> bool {
             .any(|child| child.contains_text(needle))
         || item.items.iter().any(|child| item_contains(child, needle))
         || item.cells.iter().any(|cell| cell.contains(needle))
+        || item.keywords.iter().any(|word| word.contains(needle))
 }
 
 #[derive(Debug, Clone)]
@@ -1701,9 +1754,27 @@ mod tests {
         assert_eq!(cancel[0].id, "cb-cancel");
         assert_eq!(cancel[1].id, "cb-close");
 
-        let menu = menu_selection_calls(Some("cb-item".into()), Some("cb-menu".into()), "copy");
+        let menu = menu_selection_calls(
+            Some("cb-item".into()),
+            Some("cb-menu".into()),
+            &["copy".into()],
+        );
         assert_eq!(menu[0], CallbackCall::fire("cb-item"));
         assert_eq!(menu[1], CallbackCall::with_value("cb-menu", json!("copy")));
+        let nested = menu_selection_calls(
+            None,
+            Some("cb-menu".into()),
+            &["project".into(), "open".into()],
+        );
+        assert_eq!(
+            nested[0],
+            CallbackCall::with_value("cb-menu", json!(["project", "open"]))
+        );
+        assert_eq!(menu_selection_payload(&["open".into()]), json!("open"));
+        assert_eq!(
+            menu_selection_payload(&["project".into(), "open".into()]),
+            json!(["project", "open"])
+        );
 
         let table = table_activation_calls(Some("cb-12".into()), Some("cb-13".into()), "ada");
         assert_eq!(
@@ -1994,7 +2065,7 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert!(node.contains_text("Speakers"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
@@ -2175,7 +2246,7 @@ mod tests {
         assert!(tree.items[0].expanded);
         assert_eq!(tree.items[0].items[0].id_or_label(), "lib");
         assert!(tree.contains_text("lib.rs"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
@@ -2275,7 +2346,7 @@ mod tests {
         assert_eq!(group.limit, Some(5.0));
         assert!(group.ellipsis);
         assert_eq!(group.children.len(), 2);
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
 
         let message: Node = serde_json::from_value(json!({
             "type": "message",
@@ -2598,7 +2669,80 @@ mod tests {
         assert_eq!(split.variant.as_deref(), Some("warning"));
         assert!(split.selected);
         assert_eq!(split.placement.as_deref(), Some("bottom-left"));
-        assert_eq!(PROTOCOL_VERSION, 10);
+        assert_eq!(PROTOCOL_VERSION, 11);
+    }
+
+    #[test]
+    fn decodes_native_menu_command_status_bar() {
+        let menu: Node = serde_json::from_value(json!({
+            "type": "native-menu",
+            "id": "edit-menu",
+            "open": true,
+            "position": [120, 40],
+            "on-change": "cb-menu",
+            "on-open-change": "cb-open",
+            "items": [
+                {"id": "copy", "label": "Copy", "on-click": "cb-copy"},
+                {"separator": true},
+                {"id": "wrap", "label": "Word wrap", "checked": true, "icon": "check"},
+                {"id": "share", "label": "Share", "disabled": true,
+                 "items": [{"id": "link", "label": "Copy link"}]}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(menu.kind, "native-menu");
+        assert_eq!(menu.open, Some(true));
+        assert_eq!(menu.position.as_deref(), Some(&[120.0, 40.0][..]));
+        assert_eq!(menu.items[2].checked, Some(true));
+        assert_eq!(menu.items[2].icon.as_deref(), Some("check"));
+        assert!(menu.items[3].disabled);
+        assert_eq!(menu.items[3].items[0].id_or_label(), "link");
+        assert!(menu.contains_text("Word wrap"));
+
+        let command: Node = serde_json::from_value(json!({
+            "type": "command",
+            "id": "palette",
+            "searchable": true,
+            "filterable": false,
+            "placeholder": "Type a command…",
+            "query": "fi",
+            "bordered": false,
+            "menu-max-h": 220,
+            "on-change": "cb-cmd",
+            "on-select": "cb-sel",
+            "on-confirm": "cb-confirm",
+            "on-query": "cb-query",
+            "on-cancel": "cb-cancel",
+            "items": [
+                {"id": "copy", "label": "Copy", "keywords": ["duplicate"], "icon": "copy"},
+                {"label": "Edit", "items": [{"id": "find", "label": "Find"}]}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(command.kind, "command");
+        assert!(command.searchable);
+        assert_eq!(command.filterable, Some(false));
+        assert_eq!(command.query.as_deref(), Some("fi"));
+        assert_eq!(command.bordered, Some(false));
+        assert_eq!(command.menu_max_h, Some(220.0));
+        assert_eq!(command.on_select.as_deref(), Some("cb-sel"));
+        assert_eq!(command.on_confirm.as_deref(), Some("cb-confirm"));
+        assert_eq!(command.on_query.as_deref(), Some("cb-query"));
+        assert_eq!(command.items[0].keywords, vec!["duplicate".to_string()]);
+        assert_eq!(command.items[1].items[0].id_or_label(), "find");
+
+        let bar: Node = serde_json::from_value(json!({
+            "type": "status-bar",
+            "left": [{"type": "label", "text": "Ln 1"}],
+            "right": [{"type": "label", "text": "UTF-8"}],
+            "children": [{"type": "label", "text": "Ready"}]
+        }))
+        .unwrap();
+        assert_eq!(bar.kind, "status-bar");
+        assert!(bar.contains_text("Ln 1"));
+        assert!(bar.contains_text("UTF-8"));
+        assert!(bar.contains_text("Ready"));
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]

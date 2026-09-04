@@ -1,3 +1,4 @@
+mod action_bridge;
 mod bridge;
 mod catalog;
 mod chat;

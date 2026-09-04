@@ -9,7 +9,7 @@
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
-  10)
+  11)
 
 (def window-title
   "Default native window title when `ui/window` omits `:title`."
@@ -285,10 +285,11 @@
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
   `:label` / `:text`, `:disabled`, `:display` (select trigger copy),
-  `:on-click`, and `:content`. Nested `:items` are menu submenus, tree
+  `:on-click`, and `:content`.   Nested `:items` are menu submenus, tree
   children, or Select `SelectGroup` sections. Chart items also keep
   `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
-  `:outer-radius`, and `:label-lines`."
+  `:outer-radius`, and `:label-lines`. Command items may set
+  `:keywords`."
   [x]
   (cond
     (nil? x) nil
@@ -336,6 +337,10 @@
         (some? (:source x)) (assoc :source (wire-id (:source x)))
         (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
+        (seq (:keywords x)) (assoc :keywords
+                                   (mapv (fn [k]
+                                           (if (keyword? k) (wire-id k) (str k)))
+                                         (:keywords x)))
         (seq (:items x)) (assoc :items (option-items (:items x)))
         (number? value) (assoc :value value)
         (and (sequential? value) (not (string? value))) (assoc :value (vec value))
@@ -373,7 +378,7 @@
     opts))
 
 (defn- rewrite-selected
-  "`:selected` is an alias for `:value` on list/table/tree."
+  "`:selected` is an alias for `:value` on list/table/tree/command."
   [opts]
   (cond-> (or opts {})
     (and (contains? opts :selected) (not (contains? opts :value)))
@@ -1191,7 +1196,8 @@
     :else (option-item x)))
 
 (defn menu-items
-  "Normalize popup-menu / context-menu / dropdown-menu / dropdown-button rows."
+  "Normalize popup-menu / context-menu / dropdown-menu / dropdown-button /
+  native-menu / command rows."
   [xs]
   (into [] (keep menu-item) xs))
 
@@ -1354,11 +1360,13 @@
       (some? trigger) (assoc :trigger trigger))))
 
 (defn dropdown-menu
-  "Button that opens a popup menu. `on-change` receives the original item id.
+  "Button that opens a popup menu.
 
-  Item `:on-click` (0-arg) runs before the menu `:on-change` for the same
-  selection. Both use the same callback generation; the host then fetches
-  one tree.
+  `:on-change` receives the original leaf id for a flat item, or a path
+  vector `[submenu-id leaf-id]` for a nested item so duplicate leaves
+  stay distinct. Item `:on-click` (0-arg) runs before the menu
+  `:on-change` for the same selection. Both use the same callback
+  generation; the host then fetches one tree.
 
   (ui/dropdown-menu [{:id :copy :label \"Copy\"} :- {:id :paste :label \"Paste\"}]
                     {:on-change handle!}
@@ -1383,9 +1391,10 @@
             opts))))
 
 (defn dropdown-button
-  "Split action button plus menu. Kit `DropdownButton`. `on-change`
-  receives the original item id, same batch as `ui/dropdown-menu`
-  (item `:on-click` then menu `:on-change`). The action half is `:trigger`
+  "Split action button plus menu. Kit `DropdownButton`. `:on-change`
+  receives the original leaf id, or a path vector for a nested item,
+  same batch as `ui/dropdown-menu` (item `:on-click` then menu
+  `:on-change`). The action half is `:trigger`
   (a button, or a string wrapped as one). Its `:on-click` fires when that
   half is pressed. Omit the trigger for a menu-only split (Kit-valid).
   Outer `:variant` / `:size` / `:outline` / `:selected` / `:disabled`
@@ -1421,10 +1430,11 @@
        (some? trigger) (assoc :trigger trigger)))))
 
 (defn context-menu
-  "Right-click menu around a child. `on-change` receives the original item id.
+  "Right-click menu around a child.
 
-  Same selection batch as `dropdown-menu`: item `:on-click` then menu
-  `:on-change`, one tree fetch.
+  `:on-change` receives the original leaf id, or a path vector for a
+  nested item (same contract as `dropdown-menu`). Same selection batch:
+  item `:on-click` then menu `:on-change`, one tree fetch.
 
   The host is a flex column. Wrapping a `:flex 1` list/table/tree keeps
   leftover height (a block wrapper would collapse those viewports). Put
@@ -1446,6 +1456,168 @@
              :items (menu-items raw)
              :children (flatten-children [child])}
             opts))))
+
+(defn native-menu
+  "OS-native popup menu. Kit `NativeMenu`.
+
+  Clojure owns the semantic tree: item ids, labels, order, nesting,
+  disabled/checked, icons, and what selecting an item means. The host
+  materializes that tree into Kit `NativeMenu` when `:open?` becomes
+  true (a presentation snapshot). Selecting an item reports its
+  semantic id; Clojure updates state; the next open rebuilds from that
+  state. The host does not own checked/toggled menu state.
+
+  Kit requires a GPUI `Action` per row. The host attaches a generic
+  Action with a stable menu slot plus semantic `item_path` (submenu
+  identities, then the leaf id), then resolves the live Clojure
+  callback when that Action is dispatched. It does not capture a
+  generated `cb-N` (an unrelated `export-tree` while the OS menu is
+  open must not stale the Action). Duplicate leaf ids in different
+  submenus stay distinct because the path includes each submenu.
+
+  `:open?` is a show request. The host shows once on the false→true
+  edge, then sends `:on-open-change false` so Clojure can consume it.
+  The OS menu remaining visible is not tracked (Kit has no dismiss
+  callback). `:position [x y]` is window logical pixels; omitted uses
+  the current mouse position. Item `:on-click` then menu `:on-change`
+  is one batch, same as `ui/dropdown-menu`. Parent `:on-change` receives
+  the original leaf id, or a path vector `[submenu-id leaf-id]` when
+  the leaf is nested, so duplicate submenu leaves stay distinct.
+  Nested `:items` are submenus. `-` / `:-` is a separator.
+  `:disabled true` on a submenu wrapper is forwarded. Kit's
+  `NativeMenu::submenu` builder always creates an enabled submenu; the
+  host uses `From<gpui::Menu>` when any wrapper is disabled. That
+  conversion has no icon field, so a snapshot that contains a disabled
+  submenu drops leaf icons. Enabled-only menus keep NativeMenu builders
+  and icons.
+
+  Kit's public NativeMenu builders cannot combine a check mark with an
+  icon or with disabled. Icon (including icon+disabled) wins over a
+  check. When there is no icon, disabled wins over checked — the check
+  mark is dropped so the OS row stays inert.
+
+  (ui/native-menu
+    [{:id :copy :label \"Copy\"} :- {:id :wrap :label \"Word wrap\" :checked wrap?}]
+    {:id \"edit-menu\" :open? open? :position [120 40]
+     :on-change handle! :on-open-change #(reset! !open? %)})"
+  ([items]
+   (native-menu items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (with-nested-option-callback
+                (-> (or opts {})
+                    (dissoc :items)
+                    rewrite-open
+                    apply-control-size)
+                raw)]
+     (merge {:type :native-menu
+             :items (menu-items raw)}
+            opts))))
+
+(defn command
+  "Command palette. Kit `Command` with host-held `CommandState`.
+
+  Clojure owns the entries (ids, labels, groups, disabled/checked,
+  icons, keywords). Confirm dispatches the same generic host Action as
+  `ui/native-menu` (`slot` + `item_path`), then Clojure's `:on-change`
+  receives the original leaf id, or a path vector `[group-id leaf-id]`
+  for a grouped leaf so duplicate ids round-trip through controlled
+  `:selected`. Kit `on_confirm` is a separate route: `:on-confirm`
+  fires after that Action, same payload, in one batch with
+  `:on-change`. `:on-select` is highlight only (arrows / hover),
+  not confirmation; the host installs it only when this callback is
+  present.
+
+  Nested `:items` are Kit `CommandGroup` sections. Group titles are
+  not selectable. Group identities are in the parent-callback id map
+  so a path vector can restore both segments (first-wins if a group
+  wire id collides with a leaf). Duplicate leaf ids under two groups
+  stay distinct on the Action path (group identity then leaf).
+  `-` / `:-` is a top-level separator. Search is
+  on by default. `:filterable false` keeps the query field but skips
+  local filtering (`:on-query` still fires). `:query` is programmatic
+  search text (`CommandState::query` / `set_query`). `:selected` /
+  `:value` is the highlighted leaf id, or a path vector to
+  disambiguate duplicate ids (`CommandState::selected_index`).
+  The host consumes Kit `Command::render` (`install_model`) before
+  applying those controlled fields, so an initial `:selected` and a
+  same-tree item replacement resolve against the current model, not
+  the empty default.   Native `:on-select` / `:on-query` hold an echo
+  latch until the matching callback-seq tree; that tree's Clojure
+  value then wins even when it differs from what native emitted.
+  The latch is bound when the callback batch is actually sent
+  (including a delayed flush after an in-flight callback), not only
+  when the native event first queued. Unrelated `request-render`
+  trees do not release it.
+  `:focus` focuses the query field when searchable. `:loading` is the
+  search-field spinner. `:bordered false` drops Kit's surrounding
+  chrome (default true). `:menu-max-h` is Kit `Command::max_h` in px
+  (not widget `:height`). `:on-query` receives the search string.
+  `:on-cancel` is 0-arg (empty-query Escape). String `:empty` is the
+  string form of Kit `Command::empty`. `CommandItem::child` and
+  arbitrary empty/header/footer `AnyElement` are not wrapped.
+  `CommandState::matched_count` is native-only (not on the wire).
+
+  (ui/command
+    [{:id :copy :label \"Copy\" :icon :copy :keywords [:duplicate]}
+     :-
+     {:label \"Edit\" :items [{:id :find :label \"Find\"}]}]
+    {:id \"palette\" :placeholder \"Type a command…\"
+     :menu-max-h 220 :on-change handle! :on-query #(reset! !q %)})"
+  ([items]
+   (command items nil))
+  ([items opts]
+   (let [raw (or items [])
+         opts (if (map? opts) opts {:on-change opts})
+         searchable (if (contains? opts :searchable)
+                      (boolean (:searchable opts))
+                      true)
+         opts (-> (or opts {})
+                  (dissoc :items)
+                  rewrite-selected
+                  (assoc :searchable searchable)
+                  apply-control-size)
+         has-value? (contains? opts :value)
+         selected (:value opts)
+         opts (with-id-callbacks
+                (dissoc opts :value)
+                (flatten-tree-items raw)
+                [:on-change :on-select :on-confirm])]
+     (cond-> (merge {:type :command
+                     :items (menu-items raw)}
+                    opts)
+       has-value? (assoc :value (wire-selected selected))))))
+
+(defn- slot-children
+  "One widget or a sequence of widgets for StatusBar `:left` / `:right`."
+  [x]
+  (cond
+    (nil? x) []
+    (false? x) []
+    (ui-node? x) [x]
+    (sequential? x) (flatten-children x)
+    :else (flatten-children [x])))
+
+(defn status-bar
+  "Horizontal status bar. Kit `StatusBar`. No Action bridge.
+
+  `:left` / `:right` pin widgets to each end. Children are the center
+  region (centered when both ends are set). Each slot is any clj-gpui
+  widget, or a sequence of them.
+
+  (ui/status-bar {:left (ui/label \"Ln 1, Col 1\")
+                  :right [(ui/kbd \"ctrl-s\") (ui/label \"UTF-8\")]}
+    (ui/label \"Ready\"))"
+  [& args]
+  (let [[opts children] (leading-opts args)
+        left (slot-children (:left opts))
+        right (slot-children (:right opts))
+        opts (-> opts (dissoc :left :right) apply-control-size)]
+    (cond-> (merge {:type :status-bar
+                    :children (flatten-children children)}
+                   opts)
+      (seq left) (assoc :left left)
+      (seq right) (assoc :right right))))
 
 (defn list
   "Virtualized list of `{id, label}` rows. `value` / `:selected` is the
