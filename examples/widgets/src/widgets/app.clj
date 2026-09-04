@@ -338,11 +338,13 @@
               {:id :replace :label "Replace"}]}]
     {:id "gallery-command"
      :placeholder "Type a command…"
-     :height 220
+     :menu-max-h 220
+     :query command-query
      :on-change (fn [id]
                   (swap! !state (fn [s]
                                   (cond-> (assoc s :menu id :command-pick id)
                                     (= id :wrap) (update :wrap? not)))))
+     :on-select (set-key :command-pick)
      :on-query (set-key :command-query)})
    (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
                    :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}

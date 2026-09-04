@@ -766,6 +766,10 @@ pub struct Node {
     /// Command: search-field text after it actually changes.
     #[serde(default, rename = "on-query")]
     pub on_query: Option<String>,
+    /// Command: Kit `on_select` after the highlight changes. Distinct from
+    /// confirm. Payload is the original Clojure leaf id.
+    #[serde(default, rename = "on-select")]
+    pub on_select: Option<String>,
     #[serde(default)]
     pub checked: Option<bool>,
     #[serde(default)]
@@ -893,8 +897,16 @@ pub struct Node {
     #[serde(default, rename = "menu-width")]
     pub menu_width: Option<f32>,
     /// Select / Combobox: Kit `menu_max_h` in pixels. Omitted is Kit's 20rem default.
+    /// Command: Kit `Command::max_h` in pixels. Omitted is Kit's 18.75rem
+    /// (300px) default. Not widget layout `:height`.
     #[serde(default, rename = "menu-max-h")]
     pub menu_max_h: Option<f32>,
+    /// Command: Kit `Command::bordered`. Omitted is Kit true.
+    #[serde(default)]
+    pub bordered: Option<bool>,
+    /// Command: Kit `CommandState` search text. Omitted leaves the native query.
+    #[serde(default)]
+    pub query: Option<String>,
     /// Select / Combobox: Kit `search_placeholder`.
     #[serde(default, rename = "search-placeholder")]
     pub search_placeholder: Option<String>,
@@ -2654,7 +2666,12 @@ mod tests {
             "searchable": true,
             "filterable": false,
             "placeholder": "Type a command…",
+            "query": "fi",
+            "bordered": false,
+            "menu-max-h": 220,
             "on-change": "cb-cmd",
+            "on-select": "cb-sel",
+            "on-confirm": "cb-confirm",
             "on-query": "cb-query",
             "on-cancel": "cb-cancel",
             "items": [
@@ -2666,6 +2683,11 @@ mod tests {
         assert_eq!(command.kind, "command");
         assert!(command.searchable);
         assert_eq!(command.filterable, Some(false));
+        assert_eq!(command.query.as_deref(), Some("fi"));
+        assert_eq!(command.bordered, Some(false));
+        assert_eq!(command.menu_max_h, Some(220.0));
+        assert_eq!(command.on_select.as_deref(), Some("cb-sel"));
+        assert_eq!(command.on_confirm.as_deref(), Some("cb-confirm"));
         assert_eq!(command.on_query.as_deref(), Some("cb-query"));
         assert_eq!(command.items[0].keywords, vec!["duplicate".to_string()]);
         assert_eq!(command.items[1].items[0].id_or_label(), "find");

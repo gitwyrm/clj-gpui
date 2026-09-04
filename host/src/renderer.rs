@@ -244,6 +244,11 @@ struct ComboboxSlot {
 
 struct CommandSlot {
     state: Entity<CommandState>,
+    suppress_select: bool,
+    pending_select: Option<Vec<String>>,
+    last_emitted_query: Option<String>,
+    last_emitted_path: Option<Vec<String>>,
+    programmatic_query: Option<String>,
 }
 
 struct MessageScrollerSlot {
@@ -853,11 +858,21 @@ impl RootView {
     }
 
     fn handle_clj_action(&mut self, action: &action_bridge::CljAction) {
-        self.callback_queue.push(overlay::QueuedAction::CljSelect {
-            key: action.slot.clone(),
-            item: action.item.clone(),
-        });
-        self.flush_callback_queue();
+        let key = action.slot.clone();
+        let item_path = action.item_path.clone();
+        let is_command = self.commands.contains_key(&key);
+        if is_command {
+            if let Some(slot) = self.commands.get_mut(&key) {
+                slot.pending_select = Some(item_path.clone());
+            }
+        }
+        self.callback_queue
+            .push(overlay::QueuedAction::CljSelect { key, item_path });
+        // Command confirm is Kit Action then deferred on_confirm. Leave
+        // CljSelect queued so the confirm callback can share one batch.
+        if !is_command {
+            self.flush_callback_queue();
+        }
     }
 
     fn flush_callback_queue(&mut self) {
@@ -2758,9 +2773,103 @@ impl RootView {
             key.to_string(),
             CommandSlot {
                 state: state.clone(),
+                suppress_select: false,
+                pending_select: None,
+                last_emitted_query: None,
+                last_emitted_path: None,
+                programmatic_query: None,
             },
         );
         state
+    }
+
+    fn sync_command_state(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.commands.get(key).map(|slot| slot.state.clone()) else {
+            return;
+        };
+        let mut suppress = false;
+        if let Some(desired) = node.query.as_ref() {
+            let current = state.read(cx).query(cx).to_string();
+            if current != *desired {
+                let waiting = self
+                    .commands
+                    .get(key)
+                    .and_then(|slot| slot.last_emitted_query.as_ref())
+                    == Some(&current);
+                if !waiting {
+                    if let Some(slot) = self.commands.get_mut(key) {
+                        slot.programmatic_query = Some(desired.clone());
+                        slot.suppress_select = true;
+                    }
+                    suppress = true;
+                    let desired = desired.clone();
+                    state.update(cx, |cmd, cx| {
+                        cmd.set_query(desired, window, cx);
+                    });
+                }
+            } else if let Some(slot) = self.commands.get_mut(key) {
+                slot.last_emitted_query = None;
+            }
+        }
+        match action_bridge::command_value_path(node.value.as_ref()) {
+            None => {}
+            Some(path) => {
+                let desired_ix = if path.is_empty() {
+                    None
+                } else {
+                    action_bridge::command_index_path(&node.items, &path)
+                };
+                let current_ix = state.read(cx).selected_index();
+                if current_ix != desired_ix {
+                    let current_path =
+                        current_ix.and_then(|ix| action_bridge::command_item_path(&node.items, ix));
+                    let waiting = self
+                        .commands
+                        .get(key)
+                        .and_then(|slot| slot.last_emitted_path.clone())
+                        == current_path;
+                    if !waiting {
+                        if let Some(slot) = self.commands.get_mut(key) {
+                            slot.suppress_select = true;
+                        }
+                        suppress = true;
+                        state.update(cx, |cmd, cx| {
+                            cmd.set_selected_index(desired_ix, window, cx);
+                        });
+                    }
+                } else if let Some(slot) = self.commands.get_mut(key) {
+                    slot.last_emitted_path = None;
+                }
+            }
+        }
+        let loading = node.loading;
+        if state.read(cx).is_loading() != loading {
+            state.update(cx, |cmd, cx| {
+                cmd.set_loading(loading, window, cx);
+            });
+        }
+        if node.focus {
+            state.update(cx, |cmd, cx| {
+                cmd.focus(window, cx);
+            });
+        }
+        if suppress {
+            let key = key.to_string();
+            let entity = cx.entity();
+            cx.defer(move |app| {
+                let _ = entity.update(app, |this, _cx| {
+                    if let Some(slot) = this.commands.get_mut(&key) {
+                        slot.suppress_select = false;
+                    }
+                });
+            });
+        }
     }
 
     fn render_command(
@@ -2771,31 +2880,105 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.command_slot(key, window, cx);
+        self.sync_command_state(key, node, window, cx);
         let emit = Self::action_emitter(cx);
+        let entity = cx.weak_entity();
         let mut command =
             action_bridge::apply_command_entries(KitCommand::new(&state), &node.items, key);
         command = command.searchable(node.searchable);
         command = command.filterable(node.filterable.unwrap_or(true));
+        if let Some(bordered) = node.bordered {
+            command = command.bordered(bordered);
+        }
         if let Some(placeholder) = node.placeholder.clone().filter(|s| !s.is_empty()) {
             command = command.placeholder(placeholder);
         }
         if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
             command = command.empty(move |_, _, _| empty.clone());
         }
-        if let Some(h) = node.menu_max_h.or(node.height).filter(|h| *h > 0.0) {
+        if let Some(h) = node.menu_max_h.filter(|h| *h > 0.0) {
             command = command.max_h(px(h));
         }
+        {
+            let entity = entity.clone();
+            let key = key.to_string();
+            let items = node.items.clone();
+            command = command.on_select(move |index_path, _, cx| {
+                let _ = entity.update(cx, |this, _| {
+                    if this
+                        .commands
+                        .get(&key)
+                        .is_some_and(|slot| slot.suppress_select)
+                    {
+                        return;
+                    }
+                    if this.callback_queue.has_clj_select(&key) {
+                        return;
+                    }
+                    let Some(item_path) = action_bridge::command_item_path(&items, index_path)
+                    else {
+                        return;
+                    };
+                    if let Some(slot) = this.commands.get_mut(&key) {
+                        slot.last_emitted_path = Some(item_path.clone());
+                    }
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandSelect {
+                            key: key.clone(),
+                            item_path,
+                        });
+                    this.flush_callback_queue();
+                });
+            });
+        }
+        {
+            let entity = entity.clone();
+            let key = key.to_string();
+            let items = node.items.clone();
+            command = command.on_confirm(move |index_path, _, cx| {
+                let _ = entity.update(cx, |this, _| {
+                    let item_path = this
+                        .commands
+                        .get_mut(&key)
+                        .and_then(|slot| slot.pending_select.take())
+                        .or_else(|| action_bridge::command_item_path(&items, index_path))
+                        .unwrap_or_default();
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandConfirm {
+                            key: key.clone(),
+                            item_path,
+                        });
+                    this.flush_callback_queue();
+                });
+            });
+        }
         if node.on_query.is_some() {
-            let emit = emit.clone();
+            let entity = entity.clone();
             let key = key.to_string();
             command = command.on_query(move |query, _, cx| {
-                emit(
-                    overlay::QueuedAction::CommandQuery {
-                        key: key.clone(),
-                        query: query.to_string(),
-                    },
-                    cx,
-                );
+                let query = query.to_string();
+                let _ = entity.update(cx, |this, _| {
+                    if this
+                        .commands
+                        .get(&key)
+                        .and_then(|slot| slot.programmatic_query.as_ref())
+                        == Some(&query)
+                    {
+                        if let Some(slot) = this.commands.get_mut(&key) {
+                            slot.programmatic_query = None;
+                        }
+                        return;
+                    }
+                    if let Some(slot) = this.commands.get_mut(&key) {
+                        slot.last_emitted_query = Some(query.clone());
+                    }
+                    this.callback_queue
+                        .push(overlay::QueuedAction::CommandQuery {
+                            key: key.clone(),
+                            query,
+                        });
+                    this.flush_callback_queue();
+                });
             });
         }
         if node.on_cancel.is_some() {

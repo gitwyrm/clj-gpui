@@ -702,15 +702,26 @@
                [{:id :copy :label "Copy" :icon :copy :keywords [:duplicate]}
                 :-
                 {:label "Edit" :items [{:id :find :label "Find"}]}]
-               {:placeholder "Type a command…" :on-change (fn [_]) :on-query (fn [_])})]
+               {:placeholder "Type a command…" :menu-max-h 220
+                :selected :find :query "fi" :bordered false
+                :on-change (fn [_]) :on-select (fn [_]) :on-confirm (fn [_])
+                :on-query (fn [_])})]
       (is (= :command (:type cmd)))
       (is (true? (:searchable cmd)))
       (is (= "Type a command…" (:placeholder cmd)))
+      (is (= 220 (:menu-max-h cmd)))
+      (is (nil? (:height cmd)))
+      (is (= "fi" (:query cmd)))
+      (is (false? (:bordered cmd)))
+      (is (= "find" (:value cmd)))
+      (is (nil? (:selected cmd)))
       (is (= "copy" (get-in cmd [:items 0 :icon])))
       (is (= ["duplicate"] (get-in cmd [:items 0 :keywords])))
       (is (true? (get-in cmd [:items 1 :separator])))
       (is (= "find" (get-in cmd [:items 2 :items 0 :id])))
-      (is (fn? (:on-change cmd))))
+      (is (fn? (:on-change cmd)))
+      (is (fn? (:on-select cmd)))
+      (is (fn? (:on-confirm cmd))))
     (let [bar (ui/status-bar {:left (ui/label "Ln 1")
                               :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
                              (ui/label "Ready"))]
@@ -1401,6 +1412,8 @@
                    (ui/command [{:id :find :label "Find"}]
                                {:id "palette"
                                 :on-change #(reset! got %)
+                                :on-select #(reset! got [:select %])
+                                :on-confirm #(reset! got [:confirm %])
                                 :on-query #(reset! got %)
                                 :on-cancel #(reset! got :cancel)})
                    (ui/status-bar {:left (ui/button "Ln" #(reset! got :left))}
@@ -1440,8 +1453,16 @@
            (runtime/invoke-callback! (get-in children [6 :on-change]) "copy")))
     (is (= :copy @got))
     (is (string? (get-in children [7 :on-change])))
+    (is (string? (get-in children [7 :on-select])))
+    (is (string? (get-in children [7 :on-confirm])))
     (is (string? (get-in children [7 :on-query])))
     (is (string? (get-in children [7 :on-cancel])))
+    (is (= {:ok true :id (get-in children [7 :on-select])}
+           (runtime/invoke-callback! (get-in children [7 :on-select]) "find")))
+    (is (= [:select :find] @got))
+    (is (= {:ok true :id (get-in children [7 :on-confirm])}
+           (runtime/invoke-callback! (get-in children [7 :on-confirm]) "find")))
+    (is (= [:confirm :find] @got))
     (is (= {:ok true :id (get-in children [7 :on-query])}
            (runtime/invoke-callback! (get-in children [7 :on-query]) "fi")))
     (is (= "fi" @got))

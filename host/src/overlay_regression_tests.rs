@@ -263,11 +263,11 @@ fn retained_menu_selection_uses_replacement_registry_and_keeps_batch_order() {
         },
         QueuedAction::CljSelect {
             key: "os-menu".into(),
-            item: "wrap".into(),
+            item_path: vec!["wrap".into()],
         },
         QueuedAction::CljSelect {
             key: "palette".into(),
-            item: "find".into(),
+            item_path: vec!["find".into()],
         },
     ];
     let mut queue = CallbackQueue::default();

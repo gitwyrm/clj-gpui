@@ -378,7 +378,7 @@
     opts))
 
 (defn- rewrite-selected
-  "`:selected` is an alias for `:value` on list/table/tree."
+  "`:selected` is an alias for `:value` on list/table/tree/command."
   [opts]
   (cond-> (or opts {})
     (and (contains? opts :selected) (not (contains? opts :value)))
@@ -1464,10 +1464,12 @@
   state. The host does not own checked/toggled menu state.
 
   Kit requires a GPUI `Action` per row. The host attaches a generic
-  Action with a stable menu slot plus item id, then resolves the live
-  Clojure callback when that Action is dispatched. It does not capture
-  a generated `cb-N` (an unrelated `export-tree` while the OS menu is
-  open must not stale the Action).
+  Action with a stable menu slot plus semantic `item_path` (submenu
+  identities, then the leaf id), then resolves the live Clojure
+  callback when that Action is dispatched. It does not capture a
+  generated `cb-N` (an unrelated `export-tree` while the OS menu is
+  open must not stale the Action). Duplicate leaf ids in different
+  submenus stay distinct because the path includes each submenu.
 
   `:open?` is a show request. The host shows once on the false→true
   edge, then sends `:on-open-change false` so Clojure can consume it.
@@ -1503,25 +1505,36 @@
 
   Clojure owns the entries (ids, labels, groups, disabled/checked,
   icons, keywords). Confirm dispatches the same generic host Action as
-  `ui/native-menu` (`slot` + item id), then Clojure's `:on-change`
-  receives the original item id. Do not also attach a second confirm
-  handler for the same pick — Kit would run Action then `on_confirm`.
+  `ui/native-menu` (`slot` + `item_path`), then Clojure's `:on-change`
+  receives the original leaf id. Kit `on_confirm` is a separate route:
+  `:on-confirm` fires after that Action, same leaf id, in one batch
+  with `:on-change`. `:on-select` is highlight only (arrows / hover),
+  not confirmation.
 
   Nested `:items` are Kit `CommandGroup` sections. Group titles are
-  not selectable and are not in the callback id map. `-` / `:-` is a
-  top-level separator. Search is on by default. `:filterable false`
-  keeps the query field but skips local filtering (`:on-query` still
-  fires). `:on-query` receives the search string. `:on-cancel` is
-  0-arg (empty-query Escape). String `:empty` is the string form of
-  Kit `Command::empty`; custom empty/header/footer `AnyElement` and
-  `CommandItem::child` are not wrapped.
+  not selectable and are not in the callback id map. Duplicate leaf
+  ids under two groups stay distinct on the Action path (group
+  identity then leaf). `-` / `:-` is a top-level separator. Search is
+  on by default. `:filterable false` keeps the query field but skips
+  local filtering (`:on-query` still fires). `:query` is programmatic
+  search text (`CommandState::query` / `set_query`). `:selected` /
+  `:value` is the highlighted leaf id, or a path vector to
+  disambiguate duplicate ids (`CommandState::selected_index`).
+  `:focus` focuses the query field when searchable. `:loading` is the
+  search-field spinner. `:bordered false` drops Kit's surrounding
+  chrome (default true). `:menu-max-h` is Kit `Command::max_h` in px
+  (not widget `:height`). `:on-query` receives the search string.
+  `:on-cancel` is 0-arg (empty-query Escape). String `:empty` is the
+  string form of Kit `Command::empty`. `CommandItem::child` and
+  arbitrary empty/header/footer `AnyElement` are not wrapped.
+  `CommandState::matched_count` is native-only (not on the wire).
 
   (ui/command
     [{:id :copy :label \"Copy\" :icon :copy :keywords [:duplicate]}
      :-
      {:label \"Edit\" :items [{:id :find :label \"Find\"}]}]
     {:id \"palette\" :placeholder \"Type a command…\"
-     :on-change handle! :on-query #(reset! !q %)})"
+     :menu-max-h 220 :on-change handle! :on-query #(reset! !q %)})"
   ([items]
    (command items nil))
   ([items opts]
@@ -1530,16 +1543,21 @@
          searchable (if (contains? opts :searchable)
                       (boolean (:searchable opts))
                       true)
+         opts (-> (or opts {})
+                  (dissoc :items)
+                  rewrite-selected
+                  (assoc :searchable searchable)
+                  apply-control-size)
+         has-value? (contains? opts :value)
+         selected (:value opts)
          opts (with-id-callbacks
-                (-> (or opts {})
-                    (dissoc :items)
-                    (assoc :searchable searchable)
-                    apply-control-size)
+                (dissoc opts :value)
                 (selectable-option-leaves raw)
-                [:on-change])]
-     (merge {:type :command
-             :items (menu-items raw)}
-            opts))))
+                [:on-change :on-select :on-confirm])]
+     (cond-> (merge {:type :command
+                     :items (menu-items raw)}
+                    opts)
+       has-value? (assoc :value (wire-selected selected))))))
 
 (defn- slot-children
   "One widget or a sequence of widgets for StatusBar `:left` / `:right`."

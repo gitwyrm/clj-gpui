@@ -267,24 +267,21 @@ pub fn collect_native_menus(root: &Node) -> Vec<(String, Node)> {
     out
 }
 
-/// First selectable leaf with this wire id. Nested submenu/group wrappers
-/// are walked; separators and disabled checks belong to the caller.
-pub fn find_leaf_item<'a>(items: &'a [Item], id: &str) -> Option<&'a Item> {
-    for item in items {
-        if item.is_separator() {
-            continue;
+/// Exact-path walk used by PopupMenu `item_path` and the CljAction bridge.
+/// Each segment is `Item::id_or_label()`. Disabled / separator hops fail.
+/// The path must end on a leaf (empty nested `:items`).
+pub fn item_at_path<'a>(items: &'a [Item], path: &[String]) -> Option<&'a Item> {
+    let mut items = items;
+    let mut selected = None;
+    for identity in path {
+        let item = items.iter().find(|item| item.id_or_label() == *identity)?;
+        if item.disabled || item.is_separator() {
+            return None;
         }
-        if item.items.is_empty() {
-            if item.id_or_label() == id {
-                return Some(item);
-            }
-            continue;
-        }
-        if let Some(found) = find_leaf_item(&item.items, id) {
-            return Some(found);
-        }
+        selected = Some(item);
+        items = &item.items;
     }
-    None
+    selected.filter(|item| item.items.is_empty())
 }
 
 fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
@@ -354,10 +351,21 @@ pub enum QueuedAction {
         key: String,
         item_path: Vec<String>,
     },
-    /// NativeMenu / Command Action dispatch. `item` is the semantic wire id.
+    /// NativeMenu / Command Action dispatch. `item_path` is the semantic
+    /// path (submenu / group identities, then the leaf id).
     CljSelect {
         key: String,
-        item: String,
+        item_path: Vec<String>,
+    },
+    /// Command Kit `on_select` (highlight). Distinct from confirm.
+    CommandSelect {
+        key: String,
+        item_path: Vec<String>,
+    },
+    /// Command Kit `on_confirm` after Action dispatch.
+    CommandConfirm {
+        key: String,
+        item_path: Vec<String>,
     },
     CommandQuery {
         key: String,
@@ -386,12 +394,30 @@ impl CallbackQueue {
             return None;
         }
         while let Some(action) = self.pending.pop_front() {
-            let calls = action.resolve(tree);
+            let mut calls = action.resolve(tree);
+            // Kit confirm is Action (CljSelect) then deferred on_confirm.
+            // Drain the matching confirm into this batch so :on-change and
+            // Kit :on-confirm share one callback generation.
+            if let QueuedAction::CljSelect { key, .. } = &action
+                && matches!(
+                    self.pending.front(),
+                    Some(QueuedAction::CommandConfirm { key: ck, .. }) if ck == key
+                )
+            {
+                let confirm = self.pending.pop_front().unwrap();
+                calls.extend(confirm.resolve(tree));
+            }
             if !calls.is_empty() {
                 return Some(calls);
             }
         }
         None
+    }
+
+    pub fn has_clj_select(&self, key: &str) -> bool {
+        self.pending
+            .iter()
+            .any(|action| matches!(action, QueuedAction::CljSelect { key: k, .. } if k == key))
     }
 
     pub fn sent(&mut self, seq: u64) {
@@ -420,6 +446,8 @@ impl QueuedAction {
             | Self::PopoverOpen { key, .. }
             | Self::MenuSelect { key, .. }
             | Self::CljSelect { key, .. }
+            | Self::CommandSelect { key, .. }
+            | Self::CommandConfirm { key, .. }
             | Self::CommandQuery { key, .. }
             | Self::CommandCancel { key } => key,
         };
@@ -434,7 +462,10 @@ impl QueuedAction {
                     "dropdown-menu" | "context-menu" | "dropdown-button"
                 ),
                 Self::CljSelect { .. } => matches!(node.kind.as_str(), "native-menu" | "command"),
-                Self::CommandQuery { .. } | Self::CommandCancel { .. } => node.kind == "command",
+                Self::CommandSelect { .. }
+                | Self::CommandConfirm { .. }
+                | Self::CommandQuery { .. }
+                | Self::CommandCancel { .. } => node.kind == "command",
             };
             if found.is_none() && kind_matches && node_key(node, path) == *key {
                 found = Some(node.clone());
@@ -463,21 +494,8 @@ impl QueuedAction {
                 .on_open_change
                 .map(|id| vec![protocol::CallbackCall::with_value(id, json!(*open))])
                 .unwrap_or_default(),
-            Self::MenuSelect { item_path, .. } => {
-                let mut items = node.items.as_slice();
-                let mut selected = None;
-                for identity in item_path {
-                    let Some(item) = items.iter().find(|item| item.id_or_label() == *identity)
-                    else {
-                        return Vec::new();
-                    };
-                    if item.disabled || item.is_separator() {
-                        return Vec::new();
-                    }
-                    selected = Some(item);
-                    items = &item.items;
-                }
-                let Some(item) = selected.filter(|item| item.items.is_empty()) else {
+            Self::MenuSelect { item_path, .. } | Self::CljSelect { item_path, .. } => {
+                let Some(item) = item_at_path(&node.items, item_path) else {
                     return Vec::new();
                 };
                 protocol::menu_selection_calls(
@@ -486,18 +504,31 @@ impl QueuedAction {
                     item.id_or_label(),
                 )
             }
-            Self::CljSelect { item, .. } => {
-                let Some(selected) = find_leaf_item(&node.items, item) else {
+            Self::CommandSelect { item_path, .. } => {
+                let Some(item) = item_at_path(&node.items, item_path) else {
                     return Vec::new();
                 };
-                if selected.disabled {
+                node.on_select
+                    .map(|id| {
+                        vec![protocol::CallbackCall::with_value(
+                            id,
+                            json!(item.id_or_label()),
+                        )]
+                    })
+                    .unwrap_or_default()
+            }
+            Self::CommandConfirm { item_path, .. } => {
+                let Some(item) = item_at_path(&node.items, item_path) else {
                     return Vec::new();
-                }
-                protocol::menu_selection_calls(
-                    selected.on_click.clone(),
-                    node.on_change,
-                    selected.id_or_label(),
-                )
+                };
+                node.on_confirm
+                    .map(|id| {
+                        vec![protocol::CallbackCall::with_value(
+                            id,
+                            json!(item.id_or_label()),
+                        )]
+                    })
+                    .unwrap_or_default()
             }
             Self::CommandQuery { query, .. } => node
                 .on_query
@@ -1714,6 +1745,7 @@ mod tests {
              ]},
             {"type": "command", "id": "palette", "on-change": "cb-cmd",
              "on-query": "cb-query", "on-cancel": "cb-cancel",
+             "on-select": "cb-sel", "on-confirm": "cb-confirm",
              "items": [
                 {"label": "Edit", "items": [{"id": "find", "label": "Find"}]}
              ]}
@@ -1724,19 +1756,36 @@ mod tests {
         let mut queue = CallbackQueue::default();
         queue.push(QueuedAction::CljSelect {
             key: "edit-menu".into(),
-            item: "copy".into(),
+            item_path: vec!["copy".into()],
         });
         assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-copy", "cb-menu"]);
         queue.push(QueuedAction::CljSelect {
             key: "edit-menu".into(),
-            item: "link".into(),
+            item_path: vec!["share".into(), "link".into()],
         });
         assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-link", "cb-menu"]);
         queue.push(QueuedAction::CljSelect {
             key: "palette".into(),
-            item: "find".into(),
+            item_path: vec!["Edit".into(), "find".into()],
         });
         assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-cmd"]);
+        queue.push(QueuedAction::CommandSelect {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-sel"]);
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        queue.push(QueuedAction::CommandConfirm {
+            key: "palette".into(),
+            item_path: vec!["Edit".into(), "find".into()],
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-cmd", "cb-confirm"]
+        );
         queue.push(QueuedAction::CommandQuery {
             key: "palette".into(),
             query: "fi".into(),
@@ -1766,9 +1815,71 @@ mod tests {
         let mut queue = CallbackQueue::default();
         queue.push(QueuedAction::CljSelect {
             key: "edit-menu".into(),
-            item: "copy".into(),
+            item_path: vec!["copy".into()],
         });
         assert!(queue.next(&tree).is_none());
+    }
+
+    #[test]
+    fn clj_select_uses_exact_path_when_leaf_ids_collide() {
+        let tree = node(json!({"type": "window", "children": [
+            {"type": "native-menu", "id": "os-menu",
+             "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file", "on-click": "cb-file-open"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project", "on-click": "cb-project-open"}
+                ]}
+             ]},
+            {"type": "command", "id": "palette", "on-change": "cb-cmd",
+             "items": [
+                {"id": "file", "label": "File", "items": [
+                    {"id": "open", "label": "Open file", "on-click": "cb-file-cmd"}
+                ]},
+                {"id": "project", "label": "Project", "items": [
+                    {"id": "open", "label": "Open project", "on-click": "cb-project-cmd"}
+                ]}
+             ]}
+        ]}));
+        let ids = |calls: Vec<protocol::CallbackCall>| {
+            calls.into_iter().map(|call| call.id).collect::<Vec<_>>()
+        };
+        let mut queue = CallbackQueue::default();
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-project-open"]);
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["file".into(), "open".into()],
+        });
+        assert_eq!(ids(queue.next(&tree).unwrap()), vec!["cb-file-open"]);
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["project".into(), "open".into()],
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-project-cmd", "cb-cmd"]
+        );
+        queue.push(QueuedAction::CljSelect {
+            key: "palette".into(),
+            item_path: vec!["file".into(), "open".into()],
+        });
+        assert_eq!(
+            ids(queue.next(&tree).unwrap()),
+            vec!["cb-file-cmd", "cb-cmd"]
+        );
+        queue.push(QueuedAction::CljSelect {
+            key: "os-menu".into(),
+            item_path: vec!["open".into()],
+        });
+        assert!(
+            queue.next(&tree).is_none(),
+            "a one-element path must not depth-first the first duplicate leaf"
+        );
     }
 
     #[test]

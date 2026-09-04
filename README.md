@@ -313,6 +313,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
    :-
    {:label "Edit" :items [{:id :find :label "Find"}]}]
   {:id "palette" :placeholder "Type a command…"
+   :menu-max-h 220
    :on-change handle! :on-query #(reset! !q %)})
 (ui/status-bar {:left (ui/label "Ln 1") :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
   (ui/label "Ready"))
