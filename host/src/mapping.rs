@@ -201,25 +201,76 @@ pub fn text_keeps_line_height(node: &Node) -> bool {
             .is_some_and(|lines| lines.is_finite() && lines >= 1.0)
 }
 
+/// Kit 0.6 `Label::render` replaces the painted string with this glyph.
+const MASKED_GLYPH: &str = "•";
+
+struct KitLabelSpec {
+    text: String,
+    secondary: Option<String>,
+    masked: bool,
+    highlights: Option<HighlightsMatch>,
+}
+
+/// Constructor args for Kit `Label`.
+///
+/// Kit 0.6 `Label::render` masks *after* measuring highlight ranges on the
+/// original UTF-8, then feeds those byte offsets to `StyledText` on a string
+/// of U+2022 glyphs. That trips char-boundary assertions for ASCII, `café`,
+/// emoji, and mixed CJK. When `:masked`, fold secondary into the main text
+/// (same bullet count as Kit `full_text`) and skip highlights.
+fn kit_label_spec(node: &Node) -> KitLabelSpec {
+    let text = node.text.clone().unwrap_or_default();
+    let secondary = node
+        .secondary
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if node.masked {
+        let text = match secondary {
+            Some(s) => format!("{text} {s}"),
+            None => text,
+        };
+        return KitLabelSpec {
+            text,
+            secondary: None,
+            masked: true,
+            highlights: None,
+        };
+    }
+    let highlights = node
+        .highlights
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|text| {
+            match node
+                .highlights_match
+                .as_deref()
+                .map(catalog::normalize)
+                .as_deref()
+            {
+                Some("prefix") => HighlightsMatch::Prefix(text.to_string().into()),
+                _ => HighlightsMatch::Full(text.to_string().into()),
+            }
+        });
+    KitLabelSpec {
+        text,
+        secondary,
+        masked: false,
+        highlights,
+    }
+}
+
 /// Kit `Label`: main text plus optional secondary, mask, and highlights.
 pub fn kit_label(node: &Node) -> Label {
-    let mut label = Label::new(node.text.clone().unwrap_or_default());
-    if let Some(secondary) = node.secondary.as_deref().filter(|s| !s.is_empty()) {
-        label = label.secondary(secondary.to_string());
+    let spec = kit_label_spec(node);
+    let mut label = Label::new(spec.text);
+    if let Some(secondary) = spec.secondary {
+        label = label.secondary(secondary);
     }
-    if node.masked {
+    if spec.masked {
         label = label.masked(true);
     }
-    if let Some(text) = node.highlights.as_deref().filter(|s| !s.is_empty()) {
-        let matched = match node
-            .highlights_match
-            .as_deref()
-            .map(catalog::normalize)
-            .as_deref()
-        {
-            Some("prefix") => HighlightsMatch::Prefix(text.to_string().into()),
-            _ => HighlightsMatch::Full(text.to_string().into()),
-        };
+    if let Some(matched) = spec.highlights {
         label = label.highlights(matched);
     }
     label
@@ -1112,19 +1163,206 @@ mod tests {
 
     #[test]
     fn kit_label_accepts_secondary_mask_and_prefix_highlights() {
-        let node = Node {
+        let unmasked = Node {
             text: Some("Hello World".into()),
             secondary: Some("Ada".into()),
-            masked: true,
             highlights: Some("Hel".into()),
             highlights_match: Some("prefix".into()),
             ..Node::default()
         };
-        let _ = kit_label(&node);
-        let plain = kit_label(&Node {
+        let spec = kit_label_spec(&unmasked);
+        assert_eq!(spec.text, "Hello World");
+        assert_eq!(spec.secondary.as_deref(), Some("Ada"));
+        assert!(!spec.masked);
+        assert!(spec.highlights.is_some());
+        let _ = kit_label(&unmasked);
+        let _ = kit_label(&Node {
             text: Some("Hi".into()),
             ..Node::default()
         });
-        let _ = plain;
+    }
+
+    /// Kit 0.6 `Label::highlight_ranges`, copied so the canary stays honest
+    /// if we bump the crate. Search runs on the unmasked `full_text`;
+    /// `total_length` is whatever `Label::render` then passes in (masked
+    /// UTF-8 length when `masked` is set).
+    fn kit_0_6_highlight_ranges(
+        label: &str,
+        secondary: Option<&str>,
+        highlights: Option<&str>,
+        prefix: bool,
+        total_length: usize,
+    ) -> Vec<std::ops::Range<usize>> {
+        let full = match secondary {
+            Some(s) => format!("{label} {s}"),
+            None => label.to_string(),
+        };
+        let mut ranges = Vec::new();
+        if secondary.is_some() {
+            ranges.push(0..label.len());
+            ranges.push(label.len()..total_length);
+        }
+        if let Some(matched_str) = highlights.filter(|s| !s.is_empty()) {
+            let search_lower = matched_str.to_lowercase();
+            let full_text_lower = full.to_lowercase();
+            if prefix {
+                if full_text_lower.starts_with(&search_lower) {
+                    ranges.push(0..matched_str.len());
+                }
+            } else {
+                let mut search_start = 0;
+                while let Some(pos) = full_text_lower[search_start..].find(&search_lower) {
+                    let match_start = search_start + pos;
+                    let match_end = match_start + matched_str.len();
+                    if match_end <= full.len() {
+                        ranges.push(match_start..match_end);
+                    }
+                    search_start = match_start + 1;
+                    while !full.is_char_boundary(search_start) && search_start < full.len() {
+                        search_start += 1;
+                    }
+                    if search_start >= full.len() {
+                        break;
+                    }
+                }
+            }
+        }
+        ranges
+    }
+
+    fn kit_0_6_masked_highlight_ranges(
+        label: &str,
+        secondary: Option<&str>,
+        highlights: Option<&str>,
+        prefix: bool,
+    ) -> (String, Vec<std::ops::Range<usize>>) {
+        let full = match secondary {
+            Some(s) => format!("{label} {s}"),
+            None => label.to_string(),
+        };
+        let masked = MASKED_GLYPH.repeat(full.chars().count());
+        let ranges = kit_0_6_highlight_ranges(label, secondary, highlights, prefix, masked.len());
+        (masked, ranges)
+    }
+
+    fn paint_like_kit_label_render(spec: &KitLabelSpec) {
+        use gpui::{HighlightStyle, StyledText};
+        let mut text = match &spec.secondary {
+            Some(s) => format!("{} {}", spec.text, s),
+            None => spec.text.clone(),
+        };
+        if spec.masked {
+            text = MASKED_GLYPH.repeat(text.chars().count());
+        }
+        let ranges: Vec<std::ops::Range<usize>> = match &spec.highlights {
+            Some(matched) if !spec.masked => kit_0_6_highlight_ranges(
+                &spec.text,
+                spec.secondary.as_deref(),
+                Some(matched.as_str()),
+                matched.is_prefix(),
+                text.len(),
+            ),
+            _ => Vec::new(),
+        };
+        for range in &ranges {
+            assert!(
+                text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
+                "StyledText highlight {range:?} is not a char boundary on {text:?}"
+            );
+        }
+        let _ = StyledText::new(&text).with_highlights(
+            ranges
+                .into_iter()
+                .map(|range| (range, HighlightStyle::default())),
+        );
+    }
+
+    #[test]
+    fn kit_0_6_masked_unicode_secondary_highlights_are_not_char_boundaries() {
+        let (masked, ranges) =
+            kit_0_6_masked_highlight_ranges("café", Some("世界"), Some("fé"), false);
+        assert!(
+            ranges.iter().any(|range| {
+                !masked.is_char_boundary(range.start) || !masked.is_char_boundary(range.end)
+            }),
+            "kit 0.6 still measures original-string ranges after swapping in U+2022 glyphs"
+        );
+    }
+
+    #[test]
+    fn kit_label_masked_unicode_secondary_highlights_is_safe_for_styled_text() {
+        let node = Node {
+            text: Some("café".into()),
+            secondary: Some("世界".into()),
+            masked: true,
+            highlights: Some("fé".into()),
+            highlights_match: Some("prefix".into()),
+            ..Node::default()
+        };
+        let spec = kit_label_spec(&node);
+        assert!(spec.masked);
+        assert!(spec.secondary.is_none());
+        assert!(spec.highlights.is_none());
+        assert_eq!(spec.text, "café 世界");
+        paint_like_kit_label_render(&spec);
+        let _ = kit_label(&node);
+
+        let unmasked = Node {
+            text: Some("café".into()),
+            secondary: Some("世界".into()),
+            highlights: Some("fé".into()),
+            ..Node::default()
+        };
+        paint_like_kit_label_render(&kit_label_spec(&unmasked));
+        let _ = kit_label(&unmasked);
+    }
+
+    #[test]
+    fn nested_flex_scroll_still_gets_min_h_0_when_a_truncated_child_keeps_line_height() {
+        use gpui::{Overflow, Styled};
+
+        let column = Node {
+            kind: "vstack".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &column);
+        assert!(dummy.style().min_size.height.is_some());
+        assert!(!text_keeps_line_height(&column));
+
+        let scroll = Node {
+            kind: "scroll".into(),
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &scroll);
+        assert!(dummy.style().min_size.height.is_some());
+        assert!(!text_keeps_line_height(&scroll));
+        assert_eq!(dummy.style().overflow.x, None);
+
+        let truncated = Node {
+            kind: "label".into(),
+            flex: Some(1.0),
+            truncate: true,
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &truncated);
+        assert!(dummy.style().min_size.width.is_some());
+        assert!(dummy.style().min_size.height.is_none());
+        assert!(text_keeps_line_height(&truncated));
+        assert_eq!(dummy.style().overflow.x, Some(Overflow::Hidden));
+
+        let nested = Node {
+            kind: "vstack".into(),
+            flex: Some(1.0),
+            children: vec![scroll.clone(), truncated],
+            ..Node::default()
+        };
+        assert!(
+            !text_keeps_line_height(&nested),
+            "a truncated child must not suppress min_h_0 on the flex/scroll parent"
+        );
+        let mut dummy = apply_styled(div(), &nested);
+        assert!(dummy.style().min_size.height.is_some());
     }
 }

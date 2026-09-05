@@ -551,7 +551,10 @@
 
   Kit extras: `:secondary` is muted trailing text, `:masked true` paints
   bullets, `:highlights` is the search string (`:highlights-match
-  :prefix` or `:full`, default full).
+  :prefix` or `:full`, default full). `:masked` folds `:secondary` into
+  the bullet string and skips `:highlights`: Kit 0.6 measures original
+  UTF-8 byte ranges after swapping in U+2022 glyphs, which is not a
+  char-boundary-safe `StyledText` paint.
 
   (ui/label \"Hello\")
   (ui/label \"Hello\" {:font-size 20 :font-weight :bold})

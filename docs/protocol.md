@@ -271,13 +271,13 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `whitespace` | string | GPUI whitespace: `nowrap` / `normal` |
 | `text-overflow` | string | GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle` (path-friendly). Not AvatarGroup `ellipsis` |
 | `line-clamp` | number | GPUI `line_clamp` (max lines; also overflow-hidden) |
-| `secondary` | string | `label`: Kit `Label::secondary` muted trailing text |
-| `highlights` | string | `label`: Kit `Label::highlights` search text |
+| `secondary` | string | `label`: Kit `Label::secondary` muted trailing text. With `masked`, folded into the bullet string (same count as Kit `full_text`) |
+| `highlights` | string | `label`: Kit `Label::highlights` search text. Omitted when `masked` (Kit 0.6 measures original-string byte ranges on U+2022 glyphs) |
 | `highlights-match` | string | `label`: `full` (default) or `prefix` |
 | `autohide` | bool | `notification` (default true) |
 | `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; the host also registers a Clojure grammar |
 | `rows` | number | `textarea` visible height (default 3) |
-| `masked` | bool | `otp-input` cells. `label`: Kit `Label::masked` (bullet glyphs) |
+| `masked` | bool | `otp-input` cells. `label`: Kit `Label::masked` (bullet glyphs). See `highlights` / `secondary` |
 | `collapsed` | bool | `sidebar` |
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center`. `bubble-reactions`: Kit `BubbleReactionSide` (`top` / `bottom`, default `bottom`) |
 | `format` | string | `markdown` vs `html` (node `type` `html` is enough) |

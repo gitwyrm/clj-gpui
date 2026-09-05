@@ -31,7 +31,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `button::Button` | `ui/button` | ✅ | A | Variants, compact, disabled, tooltip |
 | `checkbox::Checkbox` | `ui/checkbox` | ✅ | A | 0-arg `:on-click` (unchanged). `:shape :circle` is a clj-gpui extra |
 | `input::Input` | `ui/input` | ✅ | A | Host-held `InputState`; Clojure owns the string |
-| `label::Label` | `ui/label` | ✅ | A | Kit `Label`. `:secondary`, `:masked`, `:highlights` / `:highlights-match`. Styled clip: `:truncate`, `:whitespace`, `:text-overflow`, `:overflow`, `:line-clamp`. Clicks wrap a host `div` |
+| `label::Label` | `ui/label` | ✅ | A | Kit `Label`. `:secondary`, `:masked`, `:highlights` / `:highlights-match`. `:masked` skips highlights and folds secondary into the bullet string (Kit 0.6 `StyledText` char-boundary). Styled clip: `:truncate`, `:whitespace`, `:text-overflow`, `:overflow`, `:line-clamp`. Clicks wrap a host `div` |
 | `h_flex` / `v_flex` | `ui/hstack` / `ui/vstack` | ✅ | A | |
 | `scroll::ScrollableElement` | `ui/scroll` | ✅ | A | Flex leftover viewport; see the list-scroll layout fix |
 | `Root` | (host) | ✅ | D | Window wrapper; not an app widget |
