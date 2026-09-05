@@ -690,6 +690,26 @@
                                               (ui/button (str "tbl-canary-" i "-b") (fn []))])
                                            (range table-shift))
                                    (ui/label "tbl-canary slot")))))
+     (example "ui/data-table · cell widgets" "Kit render_td paints nested nodes — progress, tag, stacks — not stringified cells."
+              (ui/data-table {:columns [{:id :name :label "Name" :width 100}
+                                        {:id :status :label "Status" :width 90}
+                                        {:id :done :label "Done"}]
+                              :rows [{:id :ada
+                                      :cells ["Ada"
+                                              (ui/tag "stable")
+                                              (ui/progress 80 {:width 140})]}
+                                     {:id :grace
+                                      :cells ["Grace"
+                                              (ui/tag "beta" {:variant :warning})
+                                              (ui/progress 45 {:width 140})]}
+                                     {:id :alan
+                                      :cells ["Alan"
+                                              (ui/hstack {:gap 8 :align :center}
+                                                         (ui/avatar "Alan")
+                                                         (ui/label "Go"))
+                                              (ui/progress 15 {:width 140})]}]
+                              :row-height 40
+                              :height 160}))
      (example "ui/table" "A declarative table with columns, rows, a footer, and a caption."
               (ui/table {:columns [{:label "Invoice" :width 90}
                                    {:label "Status"}

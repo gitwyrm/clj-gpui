@@ -1354,15 +1354,34 @@
                     (when (seq cells) cells)))))
         (or groups [])))
 
+(defn- data-table-cell
+  "Keep widget maps for Kit `render_td`; stringify everything else."
+  [x]
+  (cond
+    (nil? x) ""
+    (ui-node? x) x
+    :else (str x)))
+
+(defn- data-table-cell-id
+  [cell]
+  (cond
+    (string? cell) cell
+    (ui-node? cell) (or (:id cell)
+                        (:text cell)
+                        (when (some? (:value cell)) (str (:value cell)))
+                        (:label cell))
+    (some? cell) (str cell)
+    :else nil))
+
 (defn- data-table-row [x]
   (cond
     (nil? x) nil
     (and (sequential? x) (not (string? x)))
-    (data-table-row {:cells (mapv str x)})
+    (data-table-row {:cells (mapv data-table-cell x)})
     (map? x)
-    (let [cells (mapv str (or (:cells x) []))
-          id (or (:id x) (:value x) (first cells) (:label x))
-          label (or (:label x) (first cells) id)]
+    (let [cells (mapv data-table-cell (or (:cells x) []))
+          id (or (:id x) (:value x) (data-table-cell-id (first cells)) (:label x))
+          label (or (:label x) (data-table-cell-id (first cells)) id)]
       (cond-> {:id (wire-id id)
                :label (when (some? label) (str label))
                :cells cells}
@@ -1790,7 +1809,9 @@
 (defn data-table
   "Virtualized data table (Kit DataTable). `:columns` are `{id, label, width}`
   maps (not the description-list `:columns` count). `:rows` are
-  `{id, cells [...]}`. `on-change` receives the selected row's original
+  `{id, cells [...]}`. A cell is a string or any clj-gpui node (progress,
+  tag, badge, avatar, stack, …). Kit `render_td` paints that node; the
+  host does not stringify widget cells. `on-change` receives the selected row's original
   id, or `{:row … :col …}` when `:cell-selectable` is on. `:on-confirm`
   (or `:on-double-click`) fires on double-click with that same payload.
   Kit `on_row_left_click` always emits `SelectRow`; when `click_count`
@@ -1809,7 +1830,8 @@
   `:size` is control size. Viewport `:height` is the outer wrapper.
   `:export-generation` plus `:on-export` dumps native `headers` / `rows`
   (column order after a header drag). `:on-export` is dump text — it
-  does not restore option ids. Row and column ids are separate
+  does not restore option ids. Widget cells export `text` / `value`
+  (a progress bar dumps its number). Row and column ids are separate
   namespaces: a row `:lang` and a column `\"lang\"` both wire to
   `\"lang\"` and restore independently.
 
@@ -1820,7 +1842,9 @@
                   :header-groups [[{:label \"Identity\" :span 2}]]
                   :cell-selectable true
                   :selected {:row :ada :col :lang}
-                  :on-change set-sel!})"
+                  :on-change set-sel!})
+  (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :done :label \"Done\"}]
+                  :rows [{:id :ada :cells [\"Ada\" (ui/progress 72)]}]})"
   [opts]
   (let [opts (if (map? opts) opts {})
         columns (or (:columns opts) (:options opts) [])

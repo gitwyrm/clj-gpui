@@ -2899,7 +2899,10 @@ mod tests {
         ];
         let (body, foot) = split_table_footer(&items);
         assert_eq!(body.len(), 1);
-        assert_eq!(foot.unwrap().cells, vec!["Total".to_string()]);
+        assert_eq!(
+            foot.unwrap().cells,
+            vec![crate::protocol::TableCell::text("Total")]
+        );
     }
 
     #[test]

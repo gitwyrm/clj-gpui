@@ -3248,7 +3248,9 @@ impl RootView {
             return state;
         }
 
-        let delegate = RowTableDelegate::new(columns, rows_data).with_header_groups(header_groups);
+        let delegate = RowTableDelegate::new(columns, rows_data)
+            .with_header_groups(header_groups)
+            .with_cell_host(key.to_string(), self.cmd_tx.clone());
         let state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .cell_selectable(cell_selectable)
@@ -5707,25 +5709,39 @@ fn style_table_cell(el: TableCell, col: &Item) -> TableCell {
     }
 }
 
+fn paint_item_table_cell(cell: &protocol::TableCell, path: &str) -> AnyElement {
+    match cell {
+        protocol::TableCell::Text(text) => div().child(text.clone()).into_any_element(),
+        protocol::TableCell::Node(node) => overlay::paint_table_cell(node, path, None),
+    }
+}
+
 fn paint_table_row(row: &Item, columns: &[Item]) -> TableRow {
     let mut table_row = TableRow::new();
+    let cells = if row.cells.is_empty() {
+        vec![protocol::TableCell::text(row.label_or_id())]
+    } else {
+        row.cells.clone()
+    };
     if columns.is_empty() {
-        let cells = if row.cells.is_empty() {
-            vec![row.label_or_id()]
-        } else {
-            row.cells.clone()
-        };
-        for text in cells {
-            table_row = table_row.child(TableCell::new().child(text));
+        for (ix, cell) in cells.iter().enumerate() {
+            table_row = table_row.child(
+                TableCell::new().child(paint_item_table_cell(cell, &format!("table-item/{ix}"))),
+            );
         }
         return table_row;
     }
     for (ix, col) in columns.iter().enumerate() {
-        let text = row.cells.get(ix).cloned().unwrap_or_default();
-        table_row = table_row.child(style_table_cell(TableCell::new().child(text), col));
+        let cell = cells.get(ix).cloned().unwrap_or_default();
+        table_row = table_row.child(style_table_cell(
+            TableCell::new().child(paint_item_table_cell(&cell, &format!("table-item/{ix}"))),
+            col,
+        ));
     }
-    for text in row.cells.iter().skip(columns.len()) {
-        table_row = table_row.child(TableCell::new().child(text.clone()));
+    for (ix, cell) in cells.iter().enumerate().skip(columns.len()) {
+        table_row = table_row.child(
+            TableCell::new().child(paint_item_table_cell(cell, &format!("table-item/{ix}"))),
+        );
     }
     table_row
 }

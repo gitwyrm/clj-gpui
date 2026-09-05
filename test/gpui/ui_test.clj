@@ -865,6 +865,28 @@
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
       (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
+  (testing "data-table cells keep widget nodes for render_td"
+    (let [n (ui/data-table {:columns [{:id :name :label "Name"}
+                                      {:id :done :label "Done"}
+                                      {:id :status :label "Status"}]
+                            :rows [{:id :ada
+                                    :cells ["Ada"
+                                            (ui/progress 72 {:width 120})
+                                            (ui/tag "stable")]}
+                                   ["Grace" (ui/progress 45) (ui/tag "beta")]]})]
+      (is (= "Ada" (get-in n [:items 0 :cells 0])))
+      (is (= :progress (get-in n [:items 0 :cells 1 :type])))
+      (is (= 72 (get-in n [:items 0 :cells 1 :value])))
+      (is (= 120 (get-in n [:items 0 :cells 1 :width])))
+      (is (= :tag (get-in n [:items 0 :cells 2 :type])))
+      (is (= "stable" (get-in n [:items 0 :cells 2 :text])))
+      (is (= "Grace" (get-in n [:items 1 :id])))
+      (is (= :progress (get-in n [:items 1 :cells 1 :type])))
+      (is (= 45 (get-in n [:items 1 :cells 1 :value]))))
+    (let [n (ui/data-table {:columns [{:id :n :label "N"}]
+                            :rows [{:cells [(ui/progress 9)]}]})]
+      (is (= "9" (:id (first (:items n)))))
+      (is (= :progress (get-in n [:items 0 :cells 0 :type])))))
   (testing "data-table extras wire header groups, cell selected, and export"
     (let [n (ui/data-table {:columns [{:id :name :label "Name" :align :end :selectable false}
                                       {:id :lang :label "Lang"}]
@@ -1703,6 +1725,21 @@
     (is (= {:ok true :id (:on-change exported)}
            (runtime/invoke-callback! (:on-change exported) "lang")))
     (is (= :lang @got))))
+
+(deftest data-table-widget-cell-callbacks-sanitize
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/data-table
+                   {:columns [{:id :name :label "Name"} {:id :act :label "Act"}]
+                    :rows [{:id :ada
+                            :cells ["Ada" (ui/button "Ping" #(reset! got :ping))]}]}))
+        click (get-in exported [:items 0 :cells 1 :on-click])]
+    (is (= "Ada" (get-in exported [:items 0 :cells 0])))
+    (is (= "button" (get-in exported [:items 0 :cells 1 :type])))
+    (is (string? click))
+    (is (= {:ok true :id click} (runtime/invoke-callback! click)))
+    (is (= :ping @got))))
 
 (deftest product-widget-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

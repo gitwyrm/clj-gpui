@@ -783,6 +783,17 @@ pub(crate) fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
     paint_static_tree(node, path, None)
 }
 
+/// Paint a DataTable `render_td` widget. Same RenderOnce subset as radar
+/// `:content` / scroller rows (progress, tag, badge, avatar, stacks, …),
+/// not list / data-table / editor.
+pub(crate) fn paint_table_cell(
+    node: &Node,
+    path: &str,
+    cmd_tx: Option<&mpsc::Sender<Cmd>>,
+) -> gpui::AnyElement {
+    paint_static_tree(node, path, cmd_tx)
+}
+
 pub(crate) fn paint_scroller_tree(
     node: &Node,
     path: &str,
@@ -2209,6 +2220,23 @@ mod tests {
             "children": [{"type": "label", "text": "Ada Lovelace"}]
         }));
         let _ = paint_chart_label(&hover, "radar-label/4");
+    }
+
+    #[test]
+    fn paint_table_cell_accepts_progress_tag_and_stack() {
+        let progress = node(json!({"type": "progress", "value": 72, "width": 120}));
+        let _ = paint_table_cell(&progress, "table/td/0/1", None);
+        let tag = node(json!({"type": "tag", "text": "stable", "variant": "success"}));
+        let _ = paint_table_cell(&tag, "table/td/0/2", None);
+        let row = node(json!({
+            "type": "hstack",
+            "gap": 8,
+            "children": [
+                {"type": "avatar", "text": "Ada"},
+                {"type": "label", "text": "Ada"}
+            ]
+        }));
+        let _ = paint_table_cell(&row, "table/td/1/0", None);
     }
 
     #[test]

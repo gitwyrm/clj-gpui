@@ -2,6 +2,7 @@ use gpui_component::theme::ThemeSet;
 use gpui_kit::component as gpui_component;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::hash::{Hash, Hasher};
 
 /// A number, or a linear interpolation of Kit `NavPage::progress()` (`0..=1`).
 ///
@@ -636,6 +637,115 @@ pub fn dialog_action_calls(
     calls
 }
 
+/// One DataTable cell. A JSON string is text; a JSON object is a nested
+/// widget forwarded to Kit `TableDelegate::render_td`. Numbers / bools /
+/// null stringify so a skipped Clojure helper still deserializes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableCell {
+    Text(String),
+    Node(Box<Node>),
+}
+
+impl Default for TableCell {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl TableCell {
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text(s.into())
+    }
+
+    /// Kit `cell_text` / `TableState::dump` payload for this cell.
+    pub fn export_text(&self) -> String {
+        match self {
+            Self::Text(s) => s.clone(),
+            Self::Node(n) => table_cell_node_text(n),
+        }
+    }
+
+    pub fn matches_text(&self, needle: &str) -> bool {
+        match self {
+            Self::Text(s) => s.contains(needle),
+            Self::Node(n) => {
+                n.contains_text(needle) || n.string_value().is_some_and(|s| s.contains(needle))
+            }
+        }
+    }
+
+    pub fn as_node(&self) -> Option<&Node> {
+        match self {
+            Self::Node(n) => Some(n),
+            Self::Text(_) => None,
+        }
+    }
+}
+
+fn table_cell_node_text(n: &Node) -> String {
+    if let Some(text) = n.text.as_deref().filter(|s| !s.is_empty()) {
+        return text.to_string();
+    }
+    if let Some(title) = n.title.as_deref().filter(|s| !s.is_empty()) {
+        return title.to_string();
+    }
+    match n.value.as_ref() {
+        Some(Value::String(s)) if !s.is_empty() => return s.clone(),
+        Some(Value::Number(num)) => return num.to_string(),
+        Some(Value::Bool(b)) => return b.to_string(),
+        _ => {}
+    }
+    n.children
+        .iter()
+        .map(table_cell_node_text)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+impl From<String> for TableCell {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for TableCell {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl Hash for TableCell {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Text(s) => {
+                0u8.hash(state);
+                s.hash(state);
+            }
+            Self::Node(n) => {
+                1u8.hash(state);
+                format!("{n:?}").hash(state);
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TableCell {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::Null => Ok(Self::Text(String::new())),
+            Value::String(s) => Ok(Self::Text(s)),
+            Value::Number(n) => Ok(Self::Text(n.to_string())),
+            Value::Bool(b) => Ok(Self::Text(b.to_string())),
+            Value::Array(_) => Ok(Self::Text(value.to_string())),
+            Value::Object(_) => serde_json::from_value::<Node>(value)
+                .map(|node| Self::Node(Box::new(node)))
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
 /// Collection item for radios, select, tabs, breadcrumbs, accordion, etc.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Item {
@@ -666,9 +776,10 @@ pub struct Item {
     /// Nested items for menus, trees, and Select `SelectGroup` sections.
     #[serde(default)]
     pub items: Vec<Item>,
-    /// Table row cells (one string per column). Empty falls back to `label`.
+    /// Table row cells (string or nested widget node per column).
+    /// Empty falls back to `label`.
     #[serde(default)]
-    pub cells: Vec<String>,
+    pub cells: Vec<TableCell>,
     /// Menu separator row. Also accepted as id `"-"`.
     #[serde(default)]
     pub separator: bool,
@@ -1530,7 +1641,7 @@ fn item_contains(item: &Item, needle: &str) -> bool {
             .iter()
             .any(|child| child.contains_text(needle))
         || item.items.iter().any(|child| item_contains(child, needle))
-        || item.cells.iter().any(|cell| cell.contains(needle))
+        || item.cells.iter().any(|cell| cell.matches_text(needle))
         || item.keywords.iter().any(|word| word.contains(needle))
 }
 
@@ -2407,7 +2518,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(table.options[0].width, Some(120.0));
-        assert_eq!(table.items[0].cells, vec!["Ada", "Clojure"]);
+        assert_eq!(
+            table.items[0].cells,
+            vec![TableCell::text("Ada"), TableCell::text("Clojure")]
+        );
         // `columns` stays the description-list u32; table columns live in `options`.
         assert_eq!(table.columns, None);
         assert!(table.contains_text("Ada"));
@@ -2447,6 +2561,42 @@ mod tests {
                 vec![vec!["Ada".into(), "Clojure".into()]]
             ),
             json!({"headers": ["Name", "Lang"], "rows": [["Ada", "Clojure"]]})
+        );
+
+        let widget_row: Node = serde_json::from_value(json!({
+            "type": "data-table",
+            "items": [{
+                "id": "ada",
+                "cells": [
+                    "Ada",
+                    {"type": "progress", "value": 72},
+                    {"type": "tag", "text": "stable"}
+                ]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(widget_row.items[0].cells[0], TableCell::text("Ada"));
+        assert_eq!(widget_row.items[0].cells[1].export_text(), "72");
+        assert_eq!(
+            widget_row.items[0].cells[1]
+                .as_node()
+                .map(|n| n.kind.as_str()),
+            Some("progress")
+        );
+        assert_eq!(widget_row.items[0].cells[2].export_text(), "stable");
+        assert!(widget_row.contains_text("72"));
+        assert!(widget_row.contains_text("stable"));
+        let scalars: Item = serde_json::from_value(json!({
+            "cells": [45, true, null]
+        }))
+        .unwrap();
+        assert_eq!(
+            scalars.cells,
+            vec![
+                TableCell::text("45"),
+                TableCell::text("true"),
+                TableCell::text("")
+            ]
         );
 
         let tree: Node = serde_json::from_value(json!({

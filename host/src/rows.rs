@@ -1,7 +1,8 @@
 //! Row-delegate protocol: Clojure sends `{id, label}` / `{id, cells}` rows;
-//! Rust owns virtualization, search, and selection. Callbacks send wire ids.
+//! a table cell is a string or a nested widget node. Rust owns
+//! virtualization, search, and selection. Callbacks send wire ids.
 
-use crate::protocol::Item;
+use crate::protocol::{Cmd, Item, TableCell};
 use gpui::{
     App, Context, IntoElement, ParentElement, SharedString, Task, TextAlign, Window, div, px,
 };
@@ -16,20 +17,21 @@ use gpui_kit::component as gpui_component;
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::mpsc;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub id: String,
     pub label: String,
     pub disabled: bool,
-    pub cells: Vec<String>,
+    pub cells: Vec<TableCell>,
 }
 
 impl Row {
     pub fn from_item(item: &Item) -> Self {
         let label = item.label_or_id();
         let cells = if item.cells.is_empty() {
-            vec![label.clone()]
+            vec![TableCell::text(label.clone())]
         } else {
             item.cells.clone()
         };
@@ -360,7 +362,7 @@ pub fn move_table_column(columns: &mut Vec<Column>, rows: &mut [Row], col_ix: us
     columns.insert(to_ix, col);
     for row in rows {
         if row.cells.len() < n {
-            row.cells.resize(n, String::new());
+            row.cells.resize(n, TableCell::default());
         }
         let cell = row.cells.remove(col_ix);
         row.cells.insert(to_ix, cell);
@@ -372,8 +374,8 @@ pub fn move_table_column(columns: &mut Vec<Column>, rows: &mut [Row], col_ix: us
 pub fn remap_row_cells(
     source_columns: &[Column],
     native_columns: &[Column],
-    cells: &[String],
-) -> Vec<String> {
+    cells: &[TableCell],
+) -> Vec<TableCell> {
     native_columns
         .iter()
         .map(|native| {
@@ -594,6 +596,9 @@ pub struct RowTableDelegate {
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
     pub header_groups: Vec<Vec<ColumnGroup>>,
+    /// Table slot key; prefixes `render_td` element ids.
+    path: String,
+    cmd_tx: Option<mpsc::Sender<Cmd>>,
 }
 
 impl RowTableDelegate {
@@ -602,11 +607,19 @@ impl RowTableDelegate {
             columns,
             rows,
             header_groups: Vec::new(),
+            path: String::new(),
+            cmd_tx: None,
         }
     }
 
     pub fn with_header_groups(mut self, groups: Vec<Vec<ColumnGroup>>) -> Self {
         self.header_groups = groups;
+        self
+    }
+
+    pub fn with_cell_host(mut self, path: impl Into<String>, cmd_tx: mpsc::Sender<Cmd>) -> Self {
+        self.path = path.into();
+        self.cmd_tx = Some(cmd_tx);
         self
     }
 
@@ -663,20 +676,23 @@ impl TableDelegate for RowTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let text = self
-            .rows
-            .get(row_ix)
-            .and_then(|row| row.cells.get(col_ix))
-            .cloned()
-            .unwrap_or_default();
-        div().child(SharedString::from(text))
+        let path = format!("{}/td/{row_ix}/{col_ix}", self.path);
+        match self.rows.get(row_ix).and_then(|row| row.cells.get(col_ix)) {
+            Some(TableCell::Node(node)) => {
+                crate::overlay::paint_table_cell(node, &path, self.cmd_tx.as_ref())
+            }
+            Some(TableCell::Text(text)) => div()
+                .child(SharedString::from(text.clone()))
+                .into_any_element(),
+            None => div().into_any_element(),
+        }
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
         self.rows
             .get(row_ix)
             .and_then(|row| row.cells.get(col_ix))
-            .cloned()
+            .map(TableCell::export_text)
             .unwrap_or_default()
     }
 
@@ -706,8 +722,11 @@ mod tests {
             {"id": "ada", "cells": ["Ada", "Clojure"]},
             {"id": "grace", "label": "Grace"}
         ])));
-        assert_eq!(rows[0].cells, vec!["Ada", "Clojure"]);
-        assert_eq!(rows[1].cells, vec!["Grace"]);
+        assert_eq!(
+            rows[0].cells,
+            vec![TableCell::text("Ada"), TableCell::text("Clojure")]
+        );
+        assert_eq!(rows[1].cells, vec![TableCell::text("Grace")]);
         let columns = columns_from_items(&items(json!([
             {"id": "name", "label": "Name", "width": 80},
             {"id": "lang", "label": "Lang"}
@@ -716,6 +735,46 @@ mod tests {
         let delegate = RowTableDelegate::new(columns, rows);
         assert_eq!(delegate.index_of("ada"), Some(0));
         assert_eq!(delegate.id_at(1).as_deref(), Some("grace"));
+    }
+
+    #[test]
+    fn table_widget_cells_keep_nodes_and_export_text() {
+        let rows = rows_from_items(&items(json!([{
+            "id": "ada",
+            "cells": [
+                "Ada",
+                {"type": "progress", "value": 72},
+                {"type": "tag", "text": "stable"}
+            ]
+        }])));
+        assert_eq!(rows[0].cells[0], TableCell::text("Ada"));
+        assert_eq!(rows[0].cells[1].export_text(), "72");
+        assert_eq!(
+            rows[0].cells[1].as_node().map(|n| n.kind.as_str()),
+            Some("progress")
+        );
+        assert_eq!(rows[0].cells[2].export_text(), "stable");
+
+        let mut cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name"},
+            {"id": "done", "label": "Done"},
+            {"id": "status", "label": "Status"}
+        ])));
+        let mut moved = rows.clone();
+        move_table_column(&mut cols, &mut moved, 1, 2);
+        assert_eq!(moved[0].cells[0], TableCell::text("Ada"));
+        assert_eq!(moved[0].cells[1].export_text(), "stable");
+        assert_eq!(moved[0].cells[2].export_text(), "72");
+        assert_eq!(
+            moved[0].cells[2].as_node().map(|n| n.kind.as_str()),
+            Some("progress")
+        );
+
+        let a = items(json!([{"id": "ada", "cells": [{"type": "progress", "value": 40}]}]));
+        let b = items(json!([{"id": "ada", "cells": [{"type": "progress", "value": 80}]}]));
+        assert_ne!(rows_fingerprint(&a), rows_fingerprint(&b));
+        let same = items(json!([{"id": "ada", "cells": [{"type": "progress", "value": 40}]}]));
+        assert_eq!(rows_fingerprint(&a), rows_fingerprint(&same));
     }
 
     #[test]
@@ -917,7 +976,7 @@ mod tests {
             {"id": "ada", "cells": ["Ada", "Clojure"]}
         ])));
         let delegate = RowTableDelegate::new(columns, rows).with_header_groups(groups);
-        assert_eq!(delegate.rows[0].cells[1], "Clojure");
+        assert_eq!(delegate.rows[0].cells[1], TableCell::text("Clojure"));
         assert_eq!(delegate.col_index_of("lang"), Some(1));
         assert_eq!(
             table_selection_wanted(Some(&json!({"row": "ada", "col": "lang"}))),
@@ -998,7 +1057,10 @@ mod tests {
         ])));
         move_table_column(&mut moved_cols, &mut moved_rows, 0, 1);
         assert_eq!(moved_cols[0].key.as_ref(), "lang");
-        assert_eq!(moved_rows[0].cells, vec!["Clojure", "Ada"]);
+        assert_eq!(
+            moved_rows[0].cells,
+            vec![TableCell::text("Clojure"), TableCell::text("Ada")]
+        );
     }
 
     fn column_keys(columns: &[Column]) -> Vec<String> {
@@ -1015,7 +1077,14 @@ mod tests {
         let mut rows = rows_from_items(&items(json!([{"id": "r", "cells": ["A"]}])));
         move_table_column(&mut cols, &mut rows, 0, 2);
         assert_eq!(column_keys(&cols), vec!["b", "c", "a"]);
-        assert_eq!(rows[0].cells, vec!["", "", "A"]);
+        assert_eq!(
+            rows[0].cells,
+            vec![
+                TableCell::text(""),
+                TableCell::text(""),
+                TableCell::text("A")
+            ]
+        );
     }
 
     #[test]
@@ -1030,7 +1099,10 @@ mod tests {
         ])));
         move_table_column(&mut native, &mut rows, 0, 1);
         assert_eq!(column_keys(&native), vec!["lang", "name"]);
-        assert_eq!(rows[0].cells, vec!["Clojure", "Ada"]);
+        assert_eq!(
+            rows[0].cells,
+            vec![TableCell::text("Clojure"), TableCell::text("Ada")]
+        );
 
         let updated = rows_from_items(&items(json!([
             {"id": "grace", "cells": ["Grace", "Rust"]},
@@ -1039,13 +1111,22 @@ mod tests {
         let (kept, remapped) = merge_table_data(&native, clojure_cols.clone(), updated, false);
         assert_eq!(column_keys(&kept), vec!["lang", "name"]);
         assert_eq!(remapped[0].id, "grace");
-        assert_eq!(remapped[0].cells, vec!["Rust", "Grace"]);
-        assert_eq!(remapped[1].cells, vec!["Go", "Alan"]);
+        assert_eq!(
+            remapped[0].cells,
+            vec![TableCell::text("Rust"), TableCell::text("Grace")]
+        );
+        assert_eq!(
+            remapped[1].cells,
+            vec![TableCell::text("Go"), TableCell::text("Alan")]
+        );
 
         let (replaced, clojure_order) =
             merge_table_data(&native, clojure_cols, remapped.clone(), true);
         assert_eq!(column_keys(&replaced), vec!["name", "lang"]);
-        assert_eq!(clojure_order[0].cells, vec!["Rust", "Grace"]);
+        assert_eq!(
+            clojure_order[0].cells,
+            vec![TableCell::text("Rust"), TableCell::text("Grace")]
+        );
     }
 
     #[test]
@@ -1061,7 +1142,10 @@ mod tests {
         let mut native_rows = clojure_rows.clone();
         move_table_column(&mut native, &mut native_rows, 0, 1);
         assert_eq!(column_keys(&native), vec!["lang", "name"]);
-        assert_eq!(native_rows[0].cells, vec!["Clojure", "Ada"]);
+        assert_eq!(
+            native_rows[0].cells,
+            vec![TableCell::text("Clojure"), TableCell::text("Ada")]
+        );
 
         // Clojure still sends cells in tree column order. Merge remaps them
         // (and rebuilt column objects) onto the host-owned header order.
@@ -1073,7 +1157,10 @@ mod tests {
         assert_eq!(column_keys(&cols), vec!["lang", "name"]);
         assert_eq!(cols[0].name.as_ref(), "Language");
         assert_eq!(cols[1].name.as_ref(), "Name");
-        assert_eq!(remapped[0].cells, vec!["Clojure", "Ada"]);
+        assert_eq!(
+            remapped[0].cells,
+            vec![TableCell::text("Clojure"), TableCell::text("Ada")]
+        );
 
         let restyled = columns_from_items(&items(json!([
             {"id": "name", "label": "Name", "width": 140, "align": "end", "selectable": false},
@@ -1085,7 +1172,10 @@ mod tests {
         assert_eq!(cols[1].width, px(140.));
         assert_eq!(cols[1].align, TextAlign::Right);
         assert!(!cols[1].selectable);
-        assert_eq!(remapped[0].cells, vec!["Clojure", "Ada"]);
+        assert_eq!(
+            remapped[0].cells,
+            vec![TableCell::text("Clojure"), TableCell::text("Ada")]
+        );
 
         let replaced = columns_from_items(&items(json!([
             {"id": "name", "label": "Name"},
@@ -1096,7 +1186,10 @@ mod tests {
         ])));
         let (cols, clojure_order) = merge_table_data(&native, replaced, replaced_rows, true);
         assert_eq!(column_keys(&cols), vec!["name", "dialect"]);
-        assert_eq!(clojure_order[0].cells, vec!["Ada", "Lisp"]);
+        assert_eq!(
+            clojure_order[0].cells,
+            vec![TableCell::text("Ada"), TableCell::text("Lisp")]
+        );
     }
 
     /// Kit `TableState::refresh` rebuilds `col_groups` from `Column::width`.
