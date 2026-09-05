@@ -1569,6 +1569,7 @@ fn gradient_axis_ends(bounds: Bounds<f32>, alignment: BarAlignment) -> (f32, f32
 ///
 /// Base is the zero edge of the frame; tip is the value end. Kit grows bars
 /// away from zero, so a negative value swaps the ends relative to alignment.
+#[cfg(test)]
 pub fn bar_value_axis_ends(bar: Bounds<f32>, alignment: BarAlignment, value: f64) -> (f32, f32) {
     let (along, against) = gradient_axis_ends(bar, alignment);
     if value < 0.0 {
