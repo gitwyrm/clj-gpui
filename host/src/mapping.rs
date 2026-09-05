@@ -287,6 +287,7 @@ pub fn text_keeps_line_height(node: &Node) -> bool {
 }
 
 /// Kit 0.6 `Label::render` replaces the painted string with this glyph.
+#[cfg(test)]
 const MASKED_GLYPH: &str = "•";
 
 struct KitLabelSpec {

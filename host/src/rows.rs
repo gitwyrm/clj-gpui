@@ -1268,7 +1268,7 @@ impl TableDelegate for RowTableDelegate {
                     table.selected_row(),
                     table.selected_cell(),
                 );
-                if matches!(action, TableSelectionSync::Keep) {
+                if !table_sort_remap_suppresses_on_change(action) {
                     return;
                 }
                 table.delegate_mut().suppress_select = true;
