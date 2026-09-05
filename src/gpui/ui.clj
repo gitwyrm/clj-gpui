@@ -534,6 +534,16 @@
   [base opts]
   (merge base (apply-control-size (or opts {}))))
 
+(defn- field-opts
+  "Shared keyword rewrites for text fields. `:icon` is an Input/Number
+  prefix when `:prefix` is omitted."
+  [opts]
+  (cond-> (apply-control-size (or opts {}))
+    (keyword? (:content-type opts)) (update :content-type name)
+    (keyword? (:icon opts)) (update :icon wire-id)
+    (keyword? (:prefix opts)) (update :prefix name)
+    (keyword? (:suffix opts)) (update :suffix name)))
+
 (defn label
   "A text label (Kit `Label`). Optional style map uses GPUI-oriented keys,
   not CSS.
@@ -705,11 +715,27 @@
   requests keyboard focus. `:on-blur` gets the string; `:on-escape`
   is 0-arg.
 
+  Kit chrome: `:cleanable`, `:appearance`, `:bordered`, `:focus-ring`
+  (Kit `focus_bordered`; omit = Kit true), `:readonly`, `:masked`
+  (InputState bullets; applied when the Clojure value changes),
+  `:mask-toggle` (show/hide button), `:content-type` (`:password`,
+  `:email`, … — autofill hint, not masking), `:prefix` / `:suffix`
+  strings, `:icon` as the prefix when `:prefix` is omitted,
+  `:accessibility-label`. Custom prefix/suffix widgets and
+  `context_menu` builders are not wrapped.
+
   (ui/input draft
             {:id \"new-todo\"
              :placeholder \"What needs to be done?\"
              :on-change #(swap! !state assoc :draft %)
              :on-submit add-todo})
+  (ui/input secret
+            {:id \"password\"
+             :masked true
+             :mask-toggle true
+             :content-type :password
+             :placeholder \"Password\"})
+  (ui/input amount {:prefix \"$\" :suffix \"USD\" :cleanable true})
   (ui/input draft
             {:id \"edit-1\"
              :focus true
@@ -720,7 +746,7 @@
    {:type :input :text (str (or value ""))})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge {:type :input :text (str (or value ""))} on-change-or-opts)
+     (merge {:type :input :text (str (or value ""))} (field-opts on-change-or-opts))
      {:type :input
       :text (str (or value ""))
       :on-change on-change-or-opts}))
@@ -728,21 +754,24 @@
    (merge {:type :input
            :text (str (or value ""))
            :on-change on-change}
-          opts)))
+          (field-opts opts))))
 
 (defn textarea
   "Multi-line text input (`Textarea` / `TextareaState`).
 
   Same string callbacks as `input`. `:rows` is the visible height
   (default 3). Prefer a stable `:id`. When `:on-submit` is set, Enter
-  submits and Shift+Enter inserts a newline.
+  submits and Shift+Enter inserts a newline. Kit chrome: `:appearance`,
+  `:bordered` (omit = Kit true), `:readonly`, `:accessibility-label`.
+  Custom `context_menu` builders are not wrapped.
 
-  (ui/textarea notes {:id \"notes\" :rows 6 :on-change set!})"
+  (ui/textarea notes {:id \"notes\" :rows 6 :on-change set!})
+  (ui/textarea notes {:id \"notes\" :readonly true})"
   ([value]
    {:type :textarea :text (str (or value ""))})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge {:type :textarea :text (str (or value ""))} on-change-or-opts)
+     (merge {:type :textarea :text (str (or value ""))} (field-opts on-change-or-opts))
      {:type :textarea
       :text (str (or value ""))
       :on-change on-change-or-opts}))
@@ -750,7 +779,7 @@
    (merge {:type :textarea
            :text (str (or value ""))
            :on-change on-change}
-          opts)))
+          (field-opts opts))))
 
 (defn switch
   "Toggle switch. `on-change` receives the new boolean.
@@ -2199,9 +2228,12 @@
 (defn number-input
   "Numeric field with step buttons. `on-change` receives a number.
   `:min` / `:max` / `:step` clamp stepper clicks. Typed values emit
-  when they parse as a number.
+  when they parse as a number. Kit chrome: `:appearance`, `:prefix` /
+  `:suffix` strings, `:icon` as the prefix when `:prefix` is omitted,
+  `:focus-ring` (omit = Kit true).
 
-  (ui/number-input 42 {:min 0 :max 100 :step 1 :on-change set!})"
+  (ui/number-input 42 {:min 0 :max 100 :step 1 :on-change set!})
+  (ui/number-input 12 {:prefix \"$\" :suffix \"USD\"})"
   ([value]
    {:type :number-input :value (or value 0) :text (str (or value 0))})
   ([value on-change-or-opts]
@@ -2209,7 +2241,7 @@
      (merge-widget {:type :number-input
                     :value (or value 0)
                     :text (str (or value 0))}
-                   on-change-or-opts)
+                   (field-opts on-change-or-opts))
      {:type :number-input
       :value (or value 0)
       :text (str (or value 0))
@@ -2219,7 +2251,7 @@
                   :value (or value 0)
                   :text (str (or value 0))
                   :on-change on-change}
-                 opts)))
+                 (field-opts opts))))
 
 (defn rating
   "Star rating. `value` is 0..=`:max` (default 5). `:on-change` receives
@@ -2280,9 +2312,11 @@
 (defn otp-input
   "Fixed-length digit cells. `:on-change` fires when every cell is
   filled (crate complete-only). `:count` defaults to 6 (clamped 1–12).
-  `:masked true` hides digits. `:on-blur` receives the current string.
+  `:masked true` hides digits. `:groups` is Kit `groups` (omit = Kit 2).
+  `:focus-ring` omit = Kit true. `:on-blur` receives the current string.
 
-  (ui/otp-input code {:count 6 :masked true :on-change set!})"
+  (ui/otp-input code {:count 6 :masked true :on-change set!})
+  (ui/otp-input code {:count 6 :groups 3})"
   ([value]
    {:type :otp-input :value (str (or value "")) :text (str (or value ""))})
   ([value on-change-or-opts]
@@ -2338,9 +2372,12 @@
   editor. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
   `\"markdown\"`, `\"clojure\"`; omitted is `\"text\"`). Kit's
   `tree-sitter-languages` bundle and a Clojure grammar are enabled. `on-change`
-  receives the string.
+  receives the string. Kit chrome: `:appearance`, `:bordered` (omit =
+  Kit true), `:readonly`, `:accessibility-label`. Custom `context_menu`
+  builders are not wrapped.
 
-  (ui/editor src {:language \"rust\" :height 200 :on-change set!})"
+  (ui/editor src {:language \"rust\" :height 200 :on-change set!})
+  (ui/editor src {:language \"rust\" :readonly true})"
   ([value]
    {:type :editor :text (str (or value ""))})
   ([value on-change-or-opts]

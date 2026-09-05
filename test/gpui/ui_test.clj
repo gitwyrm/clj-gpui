@@ -110,7 +110,22 @@
     (is (fn? (:on-double-click (ui/label "x" {:on-double-click (fn [])}))))
     (is (fn? (:on-click (ui/label "row" {:on-click (fn [])}))))
     (is (fn? (:on-click (ui/hstack {:on-click (fn [])}))))
-    (is (true? (:focus (ui/input "" {:focus true}))))))
+    (is (true? (:focus (ui/input "" {:focus true}))))
+    (let [n (ui/input "x" {:cleanable true :mask-toggle true :content-type :password
+                           :prefix "$" :suffix "USD" :icon :search :readonly true
+                           :appearance false :bordered false :masked true})]
+      (is (true? (:cleanable n)))
+      (is (true? (:mask-toggle n)))
+      (is (= "password" (:content-type n)))
+      (is (= "$" (:prefix n)))
+      (is (= "USD" (:suffix n)))
+      (is (= "search" (:icon n)))
+      (is (true? (:readonly n)))
+      (is (false? (:appearance n)))
+      (is (false? (:bordered n)))
+      (is (true? (:masked n))))
+    (is (= 3 (:groups (ui/otp-input "" {:groups 3}))))
+    (is (= "$" (:prefix (ui/number-input 1 {:prefix "$"}))))))
 
 (deftest named-control-size-does-not-use-pixel-size
   (let [n (ui/spinner {:size :small})]

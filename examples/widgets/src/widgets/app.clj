@@ -43,6 +43,7 @@
            :toast-hit nil
            :qty 4
            :otp ""
+           :secret "hunter2"
            :color "#3366ff"
            :date "2026-09-02"
            :src "(defn hi [] \n  :ok)"
@@ -255,15 +256,26 @@
                                    :on-change (set-key :remaining)}))
             (ui/label (str "Released " (pr-str released))))))
 
-(defn- inputs-panel [{:keys [qty otp notes field-kind field-val]}]
+(defn- inputs-panel [{:keys [qty otp notes secret field-kind field-val]}]
   (ui/vstack
    {:gap 24}
    (example "ui/input" "A controlled text field with a stable :id."
             (ui/input notes {:id "single-line" :placeholder "Write something…" :on-change (set-key :notes)}))
+   (example "ui/input · Kit chrome" "Prefix/suffix strings, a search icon, cleanable, password mask-toggle."
+            (ui/vstack
+             {:gap 8}
+             (ui/input notes {:id "search" :icon :search :cleanable true
+                              :placeholder "Search…" :on-change (set-key :notes)})
+             (ui/input (str qty) {:id "amount" :prefix "$" :suffix "USD"
+                                  :placeholder "Amount"})
+             (ui/input secret {:id "password" :masked true :mask-toggle true
+                               :content-type :password :placeholder "Password"
+                               :on-change (set-key :secret)})))
    (example "ui/number-input" "Constrain numeric values with :min, :max, and :step."
-            (ui/number-input qty {:id "qty" :min 0 :max 20 :step 1 :on-change (set-key :qty)}))
-   (example "ui/otp-input" "The callback fires when every cell has been filled."
-            (ui/otp-input otp {:id "otp" :count 6 :on-change (set-key :otp)}))
+            (ui/number-input qty {:id "qty" :min 0 :max 20 :step 1 :prefix "$"
+                                  :on-change (set-key :qty)}))
+   (example "ui/otp-input" "The callback fires when every cell has been filled. :groups clusters the cells."
+            (ui/otp-input otp {:id "otp" :count 6 :groups 3 :on-change (set-key :otp)}))
    (example "ui/textarea" "A multi-line field; edits update the Clojure atom."
             (ui/textarea notes {:id "notes" :rows 4 :on-change (set-key :notes)})
             (testing-controls :dynamic-field
