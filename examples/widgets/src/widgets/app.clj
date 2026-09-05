@@ -703,10 +703,10 @@
                                               (ui/tag "beta" {:variant :warning})
                                               (ui/progress 45 {:width 140})]}
                                      {:id :alan
-                                      :cells ["Alan"
-                                              (ui/hstack {:gap 8 :align :center}
+                                      :cells [(ui/hstack {:gap 8 :align :center}
                                                          (ui/avatar "Alan")
-                                                         (ui/label "Go"))
+                                                         (ui/label "Alan"))
+                                              (ui/tag "wip" {:variant :info})
                                               (ui/progress 15 {:width 140})]}]
                               :row-height 40
                               :height 160}))

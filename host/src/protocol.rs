@@ -674,6 +674,7 @@ impl TableCell {
         }
     }
 
+    #[cfg(test)]
     pub fn as_node(&self) -> Option<&Node> {
         match self {
             Self::Node(n) => Some(n),
