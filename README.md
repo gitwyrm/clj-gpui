@@ -8,6 +8,8 @@ This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. 
 
 There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (host tests, Clojure tests, cljfmt, windowless protocol-test).
 
+![screenshot](https://i.imgur.com/gKXfCnx.png)
+
 ## Quick start
 
 Requirements:
@@ -62,8 +64,6 @@ Or from the repo root:
 ```
 
 On first run, `gpui.dev` builds `host/` with `cargo build --release` if the binary is missing. Later runs rebuild when a host source file (`host/src/**/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the binary. GPUI Kit, Tree-sitter grammars (`tree-sitter-languages`), and the GPU stack take a while to compile once. A custom Cargo `--target` (or `[build] target` in `.cargo/config.toml`) is fine: the launcher looks under `target/<triple>/release/` as well as `target/release/`. Set `CLJ_GPUI_BIN` to skip Cargo entirely.
-
-![clj-gpui native window](docs/screenshot.png)
 
 The window footer shows the nREPL port (7888 by default). Connect with CIDER, Calva, or:
 
