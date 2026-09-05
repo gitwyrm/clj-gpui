@@ -2259,7 +2259,7 @@ impl RootView {
         if table_has_primitive_children(node) {
             table = self.paint_table_sections(table, node, path, window, cx);
         } else {
-            table = paint_table_from_items(table, node);
+            table = paint_table_from_items(table, node, path);
         }
         apply_style(table, node, cx).into_any_element()
     }
@@ -3248,7 +3248,9 @@ impl RootView {
             return state;
         }
 
-        let delegate = RowTableDelegate::new(columns, rows_data).with_header_groups(header_groups);
+        let delegate = RowTableDelegate::new(columns, rows_data)
+            .with_header_groups(header_groups)
+            .with_cell_host(key.to_string(), self.cmd_tx.clone());
         let state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .cell_selectable(cell_selectable)
@@ -5707,30 +5709,43 @@ fn style_table_cell(el: TableCell, col: &Item) -> TableCell {
     }
 }
 
-fn paint_table_row(row: &Item, columns: &[Item]) -> TableRow {
+fn paint_item_table_cell(cell: &protocol::TableCell, path: &str) -> AnyElement {
+    match cell {
+        protocol::TableCell::Text(text) => div().child(text.clone()).into_any_element(),
+        protocol::TableCell::Node(node) => overlay::paint_table_cell(node, path, None),
+    }
+}
+
+fn paint_table_row(table_key: &str, row: &Item, row_ix: usize, columns: &[Item]) -> TableRow {
     let mut table_row = TableRow::new();
+    let cells = if row.cells.is_empty() {
+        vec![protocol::TableCell::text(row.label_or_id())]
+    } else {
+        row.cells.clone()
+    };
     if columns.is_empty() {
-        let cells = if row.cells.is_empty() {
-            vec![row.label_or_id()]
-        } else {
-            row.cells.clone()
-        };
-        for text in cells {
-            table_row = table_row.child(TableCell::new().child(text));
+        for (ix, cell) in cells.iter().enumerate() {
+            let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
+            table_row = table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path)));
         }
         return table_row;
     }
     for (ix, col) in columns.iter().enumerate() {
-        let text = row.cells.get(ix).cloned().unwrap_or_default();
-        table_row = table_row.child(style_table_cell(TableCell::new().child(text), col));
+        let cell = cells.get(ix).cloned().unwrap_or_default();
+        let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
+        table_row = table_row.child(style_table_cell(
+            TableCell::new().child(paint_item_table_cell(&cell, &path)),
+            col,
+        ));
     }
-    for text in row.cells.iter().skip(columns.len()) {
-        table_row = table_row.child(TableCell::new().child(text.clone()));
+    for (ix, cell) in cells.iter().enumerate().skip(columns.len()) {
+        let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
+        table_row = table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path)));
     }
     table_row
 }
 
-fn paint_table_from_items(mut table: Table, node: &Node) -> Table {
+fn paint_table_from_items(mut table: Table, node: &Node, path: &str) -> Table {
     let columns = node.options.as_slice();
     let (body, footer) = extra::split_table_footer(&node.items);
     if !columns.is_empty() {
@@ -5744,12 +5759,13 @@ fn paint_table_from_items(mut table: Table, node: &Node) -> Table {
         table = table.child(TableHeader::new().child(header_row));
     }
     let mut body_el = TableBody::new();
-    for row in body {
-        body_el = body_el.child(paint_table_row(row, columns));
+    for (row_ix, row) in body.iter().enumerate() {
+        body_el = body_el.child(paint_table_row(path, row, row_ix, columns));
     }
     table = table.child(body_el);
     if let Some(foot) = footer {
-        table = table.child(TableFooter::new().child(paint_table_row(foot, columns)));
+        table =
+            table.child(TableFooter::new().child(paint_table_row(path, foot, body.len(), columns)));
     }
     if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
         table = table.child(TableCaption::new().child(caption));

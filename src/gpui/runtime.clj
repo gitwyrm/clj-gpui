@@ -181,7 +181,13 @@
                     callback-keys)
       (some? (:content item)) (update :content sanitize)
       (seq (:children item)) (update :children #(mapv sanitize %))
-      (seq (:items item)) (update :items #(mapv sanitize-item %)))
+      (seq (:items item)) (update :items #(mapv sanitize-item %))
+      (seq (:cells item)) (update :cells #(mapv (fn [cell]
+                                                  (cond
+                                                    (ui/ui-node? cell) (sanitize cell)
+                                                    (map? cell) (sanitize-item cell)
+                                                    :else cell))
+                                                %)))
     item))
 
 (def ^:private nested-node-keys
