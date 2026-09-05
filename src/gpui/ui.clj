@@ -1019,14 +1019,20 @@
 
 (defn skeleton
   "Loading placeholder bar. `:secondary true` (or `:variant :secondary`)
-  is Kit `secondary()`.
+  is Kit `secondary()`. Label already owns the `secondary` string key,
+  so `:secondary true` rewrites to `:variant :secondary` on the wire.
 
   (ui/skeleton)
   (ui/skeleton {:width 200 :height 16 :secondary true})"
   ([]
    {:type :skeleton})
   ([opts]
-   (merge {:type :skeleton} opts)))
+   (let [opts (or opts {})
+         secondary? (true? (:secondary opts))
+         opts (dissoc opts :secondary)]
+     (merge {:type :skeleton}
+            (cond-> opts
+              (and secondary? (nil? (:variant opts))) (assoc :variant :secondary))))))
 
 (defn shimmer
   "Animated loading text (Kit `ShimmerText`). Omitted options keep Kit

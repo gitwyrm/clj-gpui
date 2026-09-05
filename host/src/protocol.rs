@@ -1672,9 +1672,6 @@ pub struct Node {
     /// Alert: Kit `visible`. Omitted is Kit true.
     #[serde(default)]
     pub visible: Option<bool>,
-    /// Skeleton: Kit `secondary()`. Also accepted as `variant: secondary`.
-    #[serde(default)]
-    pub secondary: bool,
 }
 
 impl Node {
@@ -1970,10 +1967,10 @@ mod tests {
 
         let skeleton: Node = serde_json::from_value(json!({
             "type": "skeleton",
-            "secondary": true
+            "variant": "secondary"
         }))
         .unwrap();
-        assert!(skeleton.secondary);
+        assert_eq!(skeleton.variant.as_deref(), Some("secondary"));
 
         let kbd: Node = serde_json::from_value(json!({
             "type": "kbd",

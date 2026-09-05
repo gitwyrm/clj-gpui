@@ -681,16 +681,22 @@ pub fn apply_badge_chrome(mut badge: Badge, node: &Node) -> Badge {
 }
 
 /// Kit `Skeleton` chrome (`secondary()`).
+///
+/// Label already owns Node `secondary` as muted trailing text, so
+/// Skeleton chrome is `variant: secondary`. Clojure `:secondary true`
+/// rewrites to that variant.
 pub fn apply_skeleton_chrome(mut skeleton: Skeleton, node: &Node) -> Skeleton {
-    let secondary = node.secondary
-        || matches!(
-            node.variant.as_deref().map(catalog::normalize).as_deref(),
-            Some("secondary")
-        );
-    if secondary {
+    if skeleton_secondary(node) {
         skeleton = skeleton.secondary();
     }
     skeleton
+}
+
+fn skeleton_secondary(node: &Node) -> bool {
+    matches!(
+        node.variant.as_deref().map(catalog::normalize).as_deref(),
+        Some("secondary")
+    )
 }
 
 /// Kit `Spinner` chrome (size, icon, color).
@@ -2044,5 +2050,18 @@ mod tests {
         );
         assert_eq!(parse_button_role(Some("not-a-role")), None);
         assert_eq!(parse_button_role(None), None);
+    }
+
+    #[test]
+    fn skeleton_secondary_is_variant_not_label_text() {
+        assert!(skeleton_secondary(&Node {
+            variant: Some("secondary".into()),
+            ..Node::default()
+        }));
+        assert!(!skeleton_secondary(&Node {
+            secondary: Some("Lovelace".into()),
+            ..Node::default()
+        }));
+        assert!(!skeleton_secondary(&Node::default()));
     }
 }

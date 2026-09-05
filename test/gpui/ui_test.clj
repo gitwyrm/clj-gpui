@@ -351,7 +351,9 @@
       (is (= :check (:icon n)))
       (is (= 9 (:max n)))))
   (testing "skeleton spinner extras"
-    (is (true? (:secondary (ui/skeleton {:secondary true}))))
+    (is (= :secondary (:variant (ui/skeleton {:secondary true}))))
+    (is (= :secondary (:variant (ui/skeleton {:variant :secondary}))))
+    (is (nil? (:secondary (ui/skeleton {:secondary true}))))
     (is (= "#3366ff" (:color (ui/spinner {:color "#3366ff"})))))
   (testing "group-box flattens children"
     (let [n (ui/group-box {:title "Audio" :variant :outline}
