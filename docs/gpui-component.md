@@ -47,7 +47,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `tag::Tag` | `ui/tag` | ✅ | B | `:variant` keywords |
 | `alert::Alert` | `ui/alert` | ✅ | B | `:on-close` is 0-arg |
 | `skeleton::Skeleton` | `ui/skeleton` | ✅ | B | |
-| `shimmer::ShimmerText` | `ui/shimmer` | ✅ | C | Loading text. Omitted `:duration` / `:spread` / `:highlight-color` keep Kit defaults (2s, relative 0.3). `:spread-px` is absolute and wins over `:spread`. `:reverse` / `:once`. Styled clip (`:truncate` / `:whitespace` / `:text-overflow`) is `apply_styled`, same as `ui/label`. Kit's inner `min_w_0` lets a StatusBar region shrink the sweep |
+| `shimmer::ShimmerText` | `ui/shimmer` | ✅ | C | Loading text. Omitted `:duration` / `:spread` / `:highlight-color` keep Kit defaults (2s, relative 0.3). `:spread-px` is absolute and wins over `:spread`. `:reverse` / `:once`. Styled clip (`:truncate` / `:whitespace` / `:text-overflow`) is `apply_styled`, same as `ui/label`. Kit's inner `min_w_0` lets a StatusBar region shrink the sweep. `:flex 1` plus truncate does **not** apply `min_h_0` (that plus overflow-hidden collapses auto-height text to an empty box) |
 | `kbd::Kbd` | `ui/kbd` | ✅ | B | GPUI keystroke strings (`"ctrl-s"`) |
 | `link::Link` | `ui/link` | ✅ | B | Opens `href`; optional 0-arg `:on-click` |
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |

@@ -305,7 +305,7 @@
    (example "ui/shimmer" "Animated text for an operation in progress."
             (ui/shimmer "Indexing project…" {:id "shimmer-index"}))
    (example "ui/shimmer · :truncate true" "Clip overflowing sweep text with a layout ellipsis, not a guessed character count."
-            (ui/hstack {:width 220}
+            (ui/hstack {:width 220 :overflow-hidden true :align :center}
                        (ui/shimmer "Indexing src/gpui/ui.clj · host/src/renderer.rs · examples/widgets/app.clj"
                                    {:id "shimmer-truncate" :flex 1 :truncate true})))))
 
@@ -970,10 +970,6 @@
 (defn- status-panel [{:keys [wrap? command-pick]}]
   (ui/vstack
    {:gap 24}
-   (example "ui/status-bar" "Compose left, center, and right status content."
-            (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
-                            :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
-                           (ui/label (or (ui/format-option-id command-pick) "Ready"))))
    (example "ui/status-bar · truncated scan path" "Kit regions already clip; :truncate plus :flex 1 is wrap-off plus a layout ellipsis."
             (ui/status-bar {:left (ui/label "Ln 1")
                             :right [(ui/label "UTF-8")]}
@@ -985,7 +981,11 @@
    (example "ui/label · Kit secondary / highlights" "Secondary is muted trailing text; highlights is Kit search markup."
             (ui/hstack {:gap 16}
                        (ui/label "Ada" {:secondary "Lovelace"})
-                       (ui/label "Hello World" {:highlights "World"})))))
+                       (ui/label "Hello World" {:highlights "World"})))
+   (example "ui/status-bar" "Compose left, center, and right status content."
+            (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
+                            :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
+                           (ui/label (or (ui/format-option-id command-pick) "Ready"))))))
 
 (def ^:private pages
   [{:id :controls

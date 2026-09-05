@@ -190,6 +190,17 @@ pub fn text_needs_min_w_0(node: &Node) -> bool {
             .is_some_and(|value| !catalog::normalize(value).is_empty())
 }
 
+/// Truncate / nowrap / ellipsis / line-clamp keep intrinsic line height.
+/// `flex 1` still applies `min_w_0`, but not `min_h_0`: that plus
+/// `overflow_hidden` from truncate collapses an auto-height parent to 0
+/// (empty clip box). Overflow-hidden without text clip still shrinks.
+pub fn text_keeps_line_height(node: &Node) -> bool {
+    text_needs_min_w_0(node)
+        || node
+            .line_clamp
+            .is_some_and(|lines| lines.is_finite() && lines >= 1.0)
+}
+
 /// Kit `Label`: main text plus optional secondary, mask, and highlights.
 pub fn kit_label(node: &Node) -> Label {
     let mut label = Label::new(node.text.clone().unwrap_or_default());
@@ -226,7 +237,10 @@ pub fn apply_box_style<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.size(px(size));
     }
     if node.flex.unwrap_or(0.0) >= 1.0 {
-        el = el.flex_1().min_w_0().min_h_0();
+        el = el.flex_1().min_w_0();
+        if !text_keeps_line_height(node) {
+            el = el.min_h_0();
+        }
     }
     el
 }
@@ -976,6 +990,38 @@ mod tests {
             Some(TextOverflow::Truncate(_))
         ));
         assert!(text_needs_min_w_0(&truncated));
+        assert!(text_keeps_line_height(&truncated));
+
+        let flex_fill = Node {
+            flex: Some(1.0),
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &flex_fill);
+        assert!(dummy.style().min_size.width.is_some());
+        assert!(dummy.style().min_size.height.is_some());
+        assert!(!text_keeps_line_height(&flex_fill));
+
+        let flex_truncated = Node {
+            flex: Some(1.0),
+            truncate: true,
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &flex_truncated);
+        assert!(dummy.style().min_size.width.is_some());
+        assert!(
+            dummy.style().min_size.height.is_none(),
+            "flex 1 + truncate must not min_h_0 or overflow_hidden collapses line height"
+        );
+        assert!(text_keeps_line_height(&flex_truncated));
+
+        let flex_clamped = Node {
+            flex: Some(1.0),
+            line_clamp: Some(2.0),
+            ..Node::default()
+        };
+        assert!(text_keeps_line_height(&flex_clamped));
+        let mut dummy = apply_styled(div(), &flex_clamped);
+        assert!(dummy.style().min_size.height.is_none());
 
         let middle = Node {
             text_overflow: Some("ellipsis-middle".into()),

@@ -1455,7 +1455,10 @@ impl RootView {
                         wrap = wrap.min_w_0();
                     }
                     if node.flex.unwrap_or(0.0) >= 1.0 {
-                        wrap = wrap.flex_1().min_h_0();
+                        wrap = wrap.flex_1();
+                        if !mapping::text_keeps_line_height(node) {
+                            wrap = wrap.min_h_0();
+                        }
                     }
                     let cmd_tx = self.cmd_tx.clone();
                     wrap = wrap.on_click(move |event, _, _| {
@@ -5848,8 +5851,8 @@ fn outer_layout(node: &Node) -> OuterLayout {
         height: node.height,
         size: node.size,
         flex_fill,
-        shrink_width: flex_fill,
-        shrink_height: flex_fill,
+        shrink_width: flex_fill || mapping::text_needs_min_w_0(node),
+        shrink_height: flex_fill && !mapping::text_keeps_line_height(node),
         full_width: node.kind == "scroll" && node.width.is_none() && node.size.is_none(),
     }
 }
@@ -6920,6 +6923,18 @@ mod select_control_tests {
         assert!(layout.shrink_width);
         assert!(layout.shrink_height);
         assert!(!layout.full_width);
+
+        let truncated = Node {
+            kind: "shimmer".into(),
+            flex: Some(1.0),
+            truncate: true,
+            tooltip: Some("scan".into()),
+            ..Node::default()
+        };
+        let layout = outer_layout(&truncated);
+        assert!(layout.flex_fill);
+        assert!(layout.shrink_width);
+        assert!(!layout.shrink_height, "truncate + flex 1 keeps line height");
 
         let label = Node {
             kind: "label".into(),

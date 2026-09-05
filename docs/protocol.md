@@ -267,7 +267,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `export-generation` | number or string | `data-table`: replay token for `TableState::dump`. Same shape as nav-stack `replace-generation`. A new token with `on-export` dumps the current native headers/rows (host-owned order after a header drag; row-only and column-definition Clojure updates remap onto that order; a Clojure column id/order change replaces it) |
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |
 | `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false). Not text clipping |
-| `truncate` | bool | GPUI `truncate()`: overflow hidden + nowrap + end ellipsis. Layout clip, not a character-count suffix. Not AvatarGroup `ellipsis` |
+| `truncate` | bool | GPUI `truncate()`: overflow hidden + nowrap + end ellipsis. Layout clip, not a character-count suffix. Not AvatarGroup `ellipsis`. Combined with `flex` ≥ 1, width still shrinks (`min_w_0`) but height stays the line box (no `min_h_0`) |
 | `whitespace` | string | GPUI whitespace: `nowrap` / `normal` |
 | `text-overflow` | string | GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle` (path-friendly). Not AvatarGroup `ellipsis` |
 | `line-clamp` | number | GPUI `line_clamp` (max lines; also overflow-hidden) |

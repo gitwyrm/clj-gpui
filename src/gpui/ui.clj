@@ -545,7 +545,9 @@
   separately. `:overflow :hidden` / `:overflow-hidden true` clip the
   box. `:line-clamp n` keeps at most n lines. A StatusBar region already
   clips; put `:truncate true` (and `:flex 1` when the text should fill
-  leftover width) on the label or shimmer.
+  leftover width) on the label or shimmer. `:flex 1` with truncate
+  shrinks on the width axis (`min_w_0`) and keeps line height — it does
+  not also `min_h_0`, which would collapse an auto-height row to empty.
 
   Kit extras: `:secondary` is muted trailing text, `:masked true` paints
   bullets, `:highlights` is the search string (`:highlights-match
@@ -958,7 +960,9 @@
   `:spread-px` is an absolute half-width and wins when both are set.
   `:highlight-color` is the sweep hex (layout `:color` is still text).
   ShimmerText is `Styled`: `:truncate`, `:whitespace`, `:text-overflow`,
-  and `:overflow` are the same GPUI clip keys as `ui/label`.
+  and `:overflow` are the same GPUI clip keys as `ui/label`. `:flex 1`
+  plus truncate keeps line height (no `min_h_0`) so a 220px row still
+  paints an ellipsis instead of an empty box.
 
   (ui/shimmer \"Thinking…\")
   (ui/shimmer \"Indexing…\" {:duration 1 :spread 0.4 :reverse true})
