@@ -307,7 +307,7 @@
    (example "ui/shimmer · :truncate true" "Clip overflowing sweep text with a layout ellipsis, not a guessed character count."
             (ui/hstack {:width 220}
                        (ui/shimmer "Indexing src/gpui/ui.clj · host/src/renderer.rs · examples/widgets/app.clj"
-                                   {:id "shimmer-truncate" :flex 1 :truncate true}))))
+                                   {:id "shimmer-truncate" :flex 1 :truncate true})))))
 
 (defn- feedback-panel [{:keys [alert?]}]
   (ui/vstack
@@ -985,7 +985,7 @@
    (example "ui/label · Kit secondary / highlights" "Secondary is muted trailing text; highlights is Kit search markup."
             (ui/hstack {:gap 16}
                        (ui/label "Ada" {:secondary "Lovelace"})
-                       (ui/label "Hello World" {:highlights "World"}))))))
+                       (ui/label "Hello World" {:highlights "World"})))))
 
 (def ^:private pages
   [{:id :controls

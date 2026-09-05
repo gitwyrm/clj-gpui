@@ -290,7 +290,7 @@
       (is (true? (:once n)))
       (is (= "#ffffff" (:highlight-color n)))
       (is (true? (:truncate n)))
-      (is (= 1 (:flex n))))
+      (is (= 1 (:flex n)))))
   (testing "separator"
     (is (= :separator (:type (ui/separator))))
     (is (= "or" (:text (ui/separator "or"))))
