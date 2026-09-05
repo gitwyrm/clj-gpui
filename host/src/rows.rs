@@ -718,10 +718,12 @@ pub(crate) fn table_row_cell_path(
 }
 
 fn paint_td(inner: impl IntoElement) -> gpui::AnyElement {
+    // Kit's cell is a column flex (`div().h_full()`). `h_full()` alone
+    // shrink-wraps to the widget, so Progress sits on the top edge.
+    // `flex_1` grows along that column; `h_flex` already `items_center`s.
     h_flex()
-        .h_full()
-        .w_full()
-        .items_center()
+        .flex_1()
+        .size_full()
         .child(inner)
         .into_any_element()
 }
