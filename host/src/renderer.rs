@@ -3470,9 +3470,8 @@ impl RootView {
             let cmd_tx = cmd_tx.clone();
             let on_change = on_change.clone();
             gpui_component::list::ListItem::new(ix)
-                .pl(px(16. * entry.depth() as f32))
                 .selected(selected)
-                .child(label)
+                .child(div().pl(px(16. * entry.depth() as f32)).child(label))
                 .on_click(move |_, _, _| {
                     if let Some(callback_id) = on_change.clone() {
                         let _ = cmd_tx.send(Cmd::Callback {
