@@ -4634,13 +4634,7 @@ impl RootView {
                 }
             })
             .collect();
-        let mut sidebar = Sidebar::new(key.to_string()).side(extra::parse_sidebar_side(node));
-        sidebar = sidebar
-            .collapsed(collapsed)
-            .child(SidebarMenu::new().children(items));
-        if let Some(title) = sidebar_header_title(node) {
-            sidebar = sidebar.header(div().px_2().py_1().child(title));
-        }
+        let sidebar = sidebar_root(node, key).child(SidebarMenu::new().children(items));
         viewport_sized(sidebar, node, 280.0, cx)
     }
 
@@ -5766,6 +5760,20 @@ fn select_selected_index(
             .position(|item| item.id.as_ref() == id)
             .map(|ix| gpui_component::IndexPath::default().row(ix))
     })
+}
+
+fn sidebar_root(node: &Node, key: &str) -> Sidebar<SidebarMenu> {
+    let mut sidebar = Sidebar::new(key.to_string())
+        // The wrapper owns Clojure width/size/flex. Kit defaults to a fixed
+        // 255px width, which otherwise clips rows and its scrollbar when the
+        // wrapper is narrower. Keep the native scroll region at that edge.
+        .w_full()
+        .side(extra::parse_sidebar_side(node))
+        .collapsed(node.collapsed);
+    if let Some(title) = sidebar_header_title(node) {
+        sidebar = sidebar.header(div().px_2().py_1().child(title));
+    }
+    sidebar
 }
 
 fn sidebar_header_title(node: &Node) -> Option<String> {
@@ -7204,13 +7212,35 @@ mod accordion_control_tests {
 mod widget_wrap_tests {
     use super::{
         Node, content_wrap, context_menu_wrap, message_scroller_style_split, outer_layout,
-        row_intrinsic_wrap, viewport_wrap,
+        row_intrinsic_wrap, sidebar_root, viewport_wrap,
     };
     use crate::extra;
     use crate::mapping;
     use crate::protocol::Item;
     use gpui_kit::{Styled, div};
     use serde_json::json;
+
+    #[test]
+    fn sidebar_native_width_follows_its_viewport() {
+        for width in [None, Some(198.0), Some(320.0)] {
+            let node = Node {
+                kind: "sidebar".into(),
+                width,
+                flex: Some(1.0),
+                ..Node::default()
+            };
+            let mut sidebar = sidebar_root(&node, "sidebar-width");
+            let mut full = div().w_full();
+            assert_eq!(
+                sidebar.style().size.width,
+                full.style().size.width,
+                "native sidebar must fill the viewport rather than use Kit's 255px default"
+            );
+            let viewport = viewport_wrap(&node, 280.0);
+            assert_eq!(viewport.width, width);
+            assert_eq!(viewport.default_height, None);
+        }
+    }
 
     #[test]
     fn avatar_group_row_is_flex_none_without_full_width() {

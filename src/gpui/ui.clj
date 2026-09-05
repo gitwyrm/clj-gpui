@@ -635,7 +635,11 @@
   Give it a `:height` (pixels) for a fixed viewport instead. `:flex 1`
   is implied when `:height` is omitted; passing it is still fine.
   `:width` constrains the viewport (not the overflowing content).
-  `:size` is a square viewport, same as on other nodes."
+  `:size` is a square viewport, same as on other nodes.
+
+  Scrollbars overlay the viewport edge. Use `:padding` here to inset the
+  content while keeping the scrollbar at the region's edge, rather than
+  putting the scroll container inside a padded parent."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
@@ -2402,6 +2406,8 @@
   "App sidebar of `{id, label, icon?}` rows. `:side` is `:left` (default)
   or `:right`. `:collapsed` shrinks chrome. `:selected` / `on-change`
   restore original ids. `:title` is a header string.
+  The sidebar owns its scrolling; use `:flex 1` to fill remaining height
+  or `:height` for a fixed viewport. Do not wrap it in `ui/scroll`.
 
   (ui/sidebar items {:selected id :side :left :on-change set!})"
   ([items]

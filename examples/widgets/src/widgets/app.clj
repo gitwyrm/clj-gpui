@@ -1028,24 +1028,28 @@
      (ui/hstack
       {:gap 0 :flex 1 :align :stretch}
       (ui/vstack
-       {:width 230 :gap 16 :padding 16 :bg "#1c1e2a"}
-       (ui/label "clj-gpui" {:font-size 22 :font-weight :semibold})
-       (ui/label "WIDGET GALLERY" {:font-size 11 :color "#a9b1d6"})
-       (ui/scroll
-        {:id "gallery-navigation" :flex 1}
-        (ui/sidebar (mapv #(select-keys % [:id :label]) pages)
-                    {:id "gallery-sidebar" :selected (:id page)
-                     :height 760 :width 198
-                     :on-change (set-key :gallery-page)}))
-       (ui/label "[gpui.ui :as ui]" {:font-family "Menlo" :font-size 12 :color "#a9b1d6"}))
+       {:width 230 :bg "#1c1e2a"}
+       (ui/vstack
+        {:gap 16 :padding 16}
+        (ui/label "clj-gpui" {:font-size 22 :font-weight :semibold})
+        (ui/label "WIDGET GALLERY" {:font-size 11 :color "#a9b1d6"}))
+       (ui/sidebar (mapv #(select-keys % [:id :label]) pages)
+                   {:id "gallery-sidebar" :selected (:id page) :flex 1
+                    :on-change (set-key :gallery-page)})
+       (ui/vstack
+        {:padding 16}
+        (ui/label "[gpui.ui :as ui]" {:font-family "Menlo" :font-size 12 :color "#a9b1d6"})))
       (ui/vstack
-       {:flex 1 :gap 12 :padding 24}
-       (ui/label (:label page) {:font-size 26 :font-weight :semibold})
-       (ui/label (:description page) {:font-size 14 :color "#a9b1d6"})
+       {:flex 1}
+       (ui/vstack
+        {:gap 12 :padding 24}
+        (ui/label (:label page) {:font-size 26 :font-weight :semibold})
+        (ui/label (:description page) {:font-size 14 :color "#a9b1d6"}))
        (ui/separator)
        (ui/scroll
-        {:id (str "gallery-page-" (name (:id page))) :flex 1}
-        (ui/vstack {:gap 24 :padding 4}
-                   (map #(% state) (:panels page))))
-       (ui/label "Live examples · Function labels match gpui.ui · Source: examples/widgets/src/widgets/app.clj"
-                 {:font-size 11 :color "#a9b1d6"}))))))
+        {:id (str "gallery-page-" (name (:id page))) :flex 1 :padding 24 :gap 24}
+        (map #(% state) (:panels page)))
+       (ui/vstack
+        {:padding 24}
+        (ui/label "Live examples · Function labels match gpui.ui · Source: examples/widgets/src/widgets/app.clj"
+                  {:font-size 11 :color "#a9b1d6"})))))))
