@@ -1207,7 +1207,10 @@ pub struct Node {
     /// Code editor highlighter language (`rust`, `clojure`, …).
     #[serde(default)]
     pub language: Option<String>,
-    /// OTP masked cells. Kit `Label`: mask the label text as bullets.
+    /// OTP masked cells. `input`: Kit `InputState::masked` (applied when
+    /// the Clojure value changes, or when `:mask-toggle` is removed, so a
+    /// native mask-toggle is not overwritten every frame). Kit `Label`:
+    /// mask as bullets (see `secondary` / `highlights`).
     #[serde(default)]
     pub masked: bool,
     /// Kit `Label::secondary`: muted trailing text after the main label.
@@ -1220,6 +1223,26 @@ pub struct Node {
     /// Kit `HighlightsMatch`: `full` (default) or `prefix`.
     #[serde(default, rename = "highlights-match")]
     pub highlights_match: Option<String>,
+    /// Input / textarea / editor: Kit `readonly` (focusable, not editable).
+    #[serde(default)]
+    pub readonly: bool,
+    /// Input: Kit `mask_toggle` (show/hide password button).
+    #[serde(default, rename = "mask-toggle")]
+    pub mask_toggle: bool,
+    /// Input: Kit `InputContentType` kebab name (`password`, `email`, …).
+    /// Semantic autofill hint; it does not by itself mask the value.
+    #[serde(default, rename = "content-type")]
+    pub content_type: Option<String>,
+    /// Input / number-input: prefix text. When omitted, `icon` is the prefix.
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// Input / number-input: suffix text.
+    #[serde(default)]
+    pub suffix: Option<String>,
+    /// OTP: Kit `groups` (clusters of cells). Omitted is Kit 2.
+    /// `0` is forwarded so Kit `resolved_groups` can clamp to 1.
+    #[serde(default)]
+    pub groups: Option<u32>,
     /// Sidebar collapsed chrome.
     #[serde(default)]
     pub collapsed: bool,
@@ -2543,6 +2566,54 @@ mod tests {
         assert!(omitted.secondary.is_none());
         assert!(!omitted.masked);
         assert!(omitted.highlights.is_none());
+    }
+
+    #[test]
+    fn decodes_input_chrome_keys() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "input",
+            "text": "secret",
+            "cleanable": true,
+            "appearance": false,
+            "bordered": false,
+            "focus-ring": false,
+            "readonly": true,
+            "mask-toggle": true,
+            "content-type": "password",
+            "prefix": "$",
+            "suffix": "USD",
+            "masked": true,
+            "accessibility-label": "Amount"
+        }))
+        .unwrap();
+        assert!(node.cleanable);
+        assert_eq!(node.appearance, Some(false));
+        assert_eq!(node.bordered, Some(false));
+        assert_eq!(node.focus_ring, Some(false));
+        assert!(node.readonly);
+        assert!(node.mask_toggle);
+        assert_eq!(node.content_type.as_deref(), Some("password"));
+        assert_eq!(node.prefix.as_deref(), Some("$"));
+        assert_eq!(node.suffix.as_deref(), Some("USD"));
+        assert!(node.masked);
+        assert_eq!(node.accessibility_label.as_deref(), Some("Amount"));
+        let otp: Node = serde_json::from_value(json!({
+            "type": "otp-input",
+            "groups": 3
+        }))
+        .unwrap();
+        assert_eq!(otp.groups, Some(3));
+        let zero: Node = serde_json::from_value(json!({
+            "type": "otp-input",
+            "groups": 0
+        }))
+        .unwrap();
+        assert_eq!(zero.groups, Some(0));
+        let omitted: Node = serde_json::from_value(json!({"type": "input", "text": ""})).unwrap();
+        assert!(!omitted.readonly);
+        assert!(!omitted.mask_toggle);
+        assert!(omitted.content_type.is_none());
+        assert!(omitted.groups.is_none());
     }
 
     #[test]

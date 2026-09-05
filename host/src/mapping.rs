@@ -2,12 +2,13 @@
 
 use crate::catalog;
 use crate::protocol::{Node, StyledKeys};
-use gpui::{Axis, FontWeight, Hsla, StyleRefinement, Styled, div, px};
+use gpui::{AnyElement, Axis, FontWeight, Hsla, IntoElement, StyleRefinement, Styled, div, px};
 use gpui_component::{
-    Colorize as _, Disableable as _, IconName, Placement, Selectable as _, Side, Sizable as _,
-    Size,
+    Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, Selectable as _,
+    Side, Sizable, Size,
     button::{Button, ButtonVariants, ToggleVariant},
     group_box::GroupBoxVariant,
+    input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
     label::{HighlightsMatch, Label},
     shimmer::ShimmerStyle,
     slider::SliderScale,
@@ -754,9 +755,243 @@ pub fn parse_icon(name: &str) -> Option<IconName> {
     }
 }
 
+/// Kit `InputContentType` from a kebab / space name. `email` is
+/// `EmailAddress`; unknown names are omitted (Kit has no content type).
+pub fn parse_content_type(value: Option<&str>) -> Option<InputContentType> {
+    match value.map(catalog::normalize).as_deref() {
+        Some("name") => Some(InputContentType::Name),
+        Some("name prefix") | Some("honorific prefix") => Some(InputContentType::NamePrefix),
+        Some("given name") | Some("first name") => Some(InputContentType::GivenName),
+        Some("middle name") => Some(InputContentType::MiddleName),
+        Some("family name") | Some("last name") => Some(InputContentType::FamilyName),
+        Some("name suffix") | Some("honorific suffix") => Some(InputContentType::NameSuffix),
+        Some("nickname") => Some(InputContentType::Nickname),
+        Some("job title") => Some(InputContentType::JobTitle),
+        Some("organization name") | Some("organization") => {
+            Some(InputContentType::OrganizationName)
+        }
+        Some("location") => Some(InputContentType::Location),
+        Some("full street address") | Some("street address") => {
+            Some(InputContentType::FullStreetAddress)
+        }
+        Some("street address line 1") | Some("address line 1") => {
+            Some(InputContentType::StreetAddressLine1)
+        }
+        Some("street address line 2") | Some("address line 2") => {
+            Some(InputContentType::StreetAddressLine2)
+        }
+        Some("address city") | Some("city") => Some(InputContentType::AddressCity),
+        Some("address state") | Some("state") => Some(InputContentType::AddressState),
+        Some("address city and state") => Some(InputContentType::AddressCityAndState),
+        Some("sublocality") => Some(InputContentType::Sublocality),
+        Some("country name") | Some("country") => Some(InputContentType::CountryName),
+        Some("postal code") | Some("zip") => Some(InputContentType::PostalCode),
+        Some("telephone number") | Some("tel") | Some("phone") => {
+            Some(InputContentType::TelephoneNumber)
+        }
+        Some("email address") | Some("email") => Some(InputContentType::EmailAddress),
+        Some("url") => Some(InputContentType::Url),
+        Some("credit card number") | Some("cc number") => Some(InputContentType::CreditCardNumber),
+        Some("credit card name") | Some("cc name") => Some(InputContentType::CreditCardName),
+        Some("credit card given name") => Some(InputContentType::CreditCardGivenName),
+        Some("credit card middle name") => Some(InputContentType::CreditCardMiddleName),
+        Some("credit card family name") => Some(InputContentType::CreditCardFamilyName),
+        Some("credit card security code") | Some("cc csc") => {
+            Some(InputContentType::CreditCardSecurityCode)
+        }
+        Some("credit card expiration") | Some("cc exp") => {
+            Some(InputContentType::CreditCardExpiration)
+        }
+        Some("credit card expiration month") => Some(InputContentType::CreditCardExpirationMonth),
+        Some("credit card expiration year") => Some(InputContentType::CreditCardExpirationYear),
+        Some("credit card type") => Some(InputContentType::CreditCardType),
+        Some("username") => Some(InputContentType::Username),
+        Some("password") => Some(InputContentType::Password),
+        Some("new password") => Some(InputContentType::NewPassword),
+        Some("one time code") | Some("otp") => Some(InputContentType::OneTimeCode),
+        Some("shipment tracking number") => Some(InputContentType::ShipmentTrackingNumber),
+        Some("flight number") => Some(InputContentType::FlightNumber),
+        Some("date time") | Some("datetime") => Some(InputContentType::DateTime),
+        Some("birthdate") | Some("bday") => Some(InputContentType::Birthdate),
+        Some("birthdate day") => Some(InputContentType::BirthdateDay),
+        Some("birthdate month") => Some(InputContentType::BirthdateMonth),
+        Some("birthdate year") => Some(InputContentType::BirthdateYear),
+        Some("cellular eid") => Some(InputContentType::CellularEid),
+        Some("cellular imei") => Some(InputContentType::CellularImei),
+        _ => None,
+    }
+}
+
+/// Prefix / suffix as a string `Label`, or an icon when text is omitted.
+/// Nested widgets are not wrapped (Kit `IntoElement`).
+pub fn affix_element(text: Option<&str>, icon: Option<&str>) -> Option<AnyElement> {
+    if let Some(text) = text.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(Label::new(text.to_string()).into_any_element())
+    } else {
+        parse_icon(icon.unwrap_or_default()).map(|name| Icon::new(name).into_any_element())
+    }
+}
+
+/// Kit `Input::with_size` argument. Omitted `:control-size` is Medium.
+pub fn input_control_size(node: &Node) -> Size {
+    parse_scale(node.control_size.as_deref())
+}
+
+/// Forward named `:size` / `:control-size` onto a Kit `Sizable` field.
+pub fn apply_input_size<T: Sizable>(input: T, node: &Node) -> T {
+    input.with_size(input_control_size(node))
+}
+
+/// Whether a retained `InputState` should `set_masked` from Clojure.
+///
+/// While `:mask-toggle` is on, the native eye button may diverge from
+/// Clojure `:masked`. Resync when Clojure `:masked` changes, or when the
+/// toggle is removed (`true`→`false`) so a stuck native mask cannot
+/// outlive the button.
+pub fn input_masked_needs_resync(
+    last_masked: bool,
+    last_mask_toggle: bool,
+    masked: bool,
+    mask_toggle: bool,
+) -> bool {
+    last_masked != masked || (last_mask_toggle && !mask_toggle)
+}
+
+/// Kit `OtpInput::groups` when Clojure sent `groups`. Omitted leaves Kit 2.
+/// `0` is forwarded so Kit `resolved_groups` can clamp to 1.
+pub fn otp_groups(node: &Node) -> Option<usize> {
+    node.groups.map(|n| n as usize)
+}
+
+/// Kit `Input` chrome that is not `Styled` / `InputState`.
+pub fn apply_input_chrome(input: Input, node: &Node) -> Input {
+    let mut input = apply_input_size(input, node);
+    if node.cleanable {
+        input = input.cleanable(true);
+    }
+    if let Some(appearance) = node.appearance {
+        input = input.appearance(appearance);
+    }
+    if let Some(bordered) = node.bordered {
+        input = input.bordered(bordered);
+    }
+    if let Some(focus) = node.focus_ring {
+        input = input.focus_bordered(focus);
+    }
+    if node.readonly {
+        input = input.readonly(true);
+    }
+    if node.disabled {
+        input = input.disabled(true);
+    }
+    if node.mask_toggle {
+        input = input.mask_toggle();
+    }
+    if let Some(content_type) = parse_content_type(node.content_type.as_deref()) {
+        input = input.content_type(content_type);
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        input = input.aria_label(label.to_string());
+    }
+    if let Some(id) = node.id.as_deref().filter(|s| !s.is_empty()) {
+        input = input.accessibility_id(id.to_string());
+    }
+    if let Some(prefix) = affix_element(node.prefix.as_deref(), node.icon.as_deref()) {
+        input = input.prefix(prefix);
+    }
+    if let Some(suffix) = affix_element(node.suffix.as_deref(), None) {
+        input = input.suffix(suffix);
+    }
+    input
+}
+
+/// Kit `Textarea` chrome. Not `context_menu` (arbitrary native-menu builder).
+pub fn apply_textarea_chrome(mut input: Textarea, node: &Node) -> Textarea {
+    if let Some(appearance) = node.appearance {
+        input = input.appearance(appearance);
+    }
+    if let Some(bordered) = node.bordered {
+        input = input.bordered(bordered);
+    }
+    if node.readonly {
+        input = input.readonly(true);
+    }
+    if node.disabled {
+        input = input.disabled(true);
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        input = input.aria_label(label.to_string());
+    }
+    input
+}
+
+/// Kit `Editor` chrome. Not LSP, not `context_menu`.
+pub fn apply_editor_chrome(mut editor: Editor, node: &Node) -> Editor {
+    if let Some(appearance) = node.appearance {
+        editor = editor.appearance(appearance);
+    }
+    if let Some(bordered) = node.bordered {
+        editor = editor.bordered(bordered);
+    }
+    if node.readonly {
+        editor = editor.readonly(true);
+    }
+    if node.disabled {
+        editor = editor.disabled(true);
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        editor = editor.aria_label(label.to_string());
+    }
+    editor
+}
+
+/// Kit `NumberInput` chrome. Placeholder stays on the builder (already set).
+pub fn apply_number_input_chrome(mut input: NumberInput, node: &Node) -> NumberInput {
+    if let Some(appearance) = node.appearance {
+        input = input.appearance(appearance);
+    }
+    if node.disabled {
+        input = input.disabled(true);
+    }
+    if let Some(focus) = node.focus_ring {
+        input = input.focus_ring(focus);
+    }
+    if let Some(prefix) = affix_element(node.prefix.as_deref(), node.icon.as_deref()) {
+        input = input.prefix(prefix);
+    }
+    if let Some(suffix) = affix_element(node.suffix.as_deref(), None) {
+        input = input.suffix(suffix);
+    }
+    input
+}
+
+/// Kit `OtpInput` groups + focus ring. Size / disabled stay in the renderer.
+pub fn apply_otp_chrome(mut input: OtpInput, node: &Node) -> OtpInput {
+    if let Some(groups) = otp_groups(node) {
+        input = input.groups(groups);
+    }
+    if let Some(focus) = node.focus_ring {
+        input = input.focus_ring(focus);
+    }
+    input
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_component::Sizable;
 
     #[test]
     fn scale_keywords() {
@@ -918,6 +1153,109 @@ mod tests {
         assert!(matches!(parse_icon("loader"), Some(IconName::Loader)));
         assert!(matches!(parse_icon("star_off"), Some(IconName::StarOff)));
         assert!(parse_icon("not-an-icon").is_none());
+    }
+
+    #[test]
+    fn input_content_type_from_kebab() {
+        assert!(matches!(
+            parse_content_type(Some("password")),
+            Some(InputContentType::Password)
+        ));
+        assert!(matches!(
+            parse_content_type(Some("email")),
+            Some(InputContentType::EmailAddress)
+        ));
+        assert!(matches!(
+            parse_content_type(Some("one-time-code")),
+            Some(InputContentType::OneTimeCode)
+        ));
+        assert!(matches!(
+            parse_content_type(Some("tel")),
+            Some(InputContentType::TelephoneNumber)
+        ));
+        assert!(parse_content_type(Some("not-a-type")).is_none());
+        assert!(parse_content_type(None).is_none());
+        assert!(affix_element(Some("$"), None).is_some());
+        assert!(affix_element(None, Some("search")).is_some());
+        assert!(affix_element(None, Some("not-an-icon")).is_none());
+        assert!(affix_element(Some("  "), None).is_none());
+    }
+
+    #[test]
+    fn input_chrome_forwards_named_size_to_with_size() {
+        struct SizeSink {
+            size: Option<Size>,
+        }
+        impl Sizable for SizeSink {
+            fn with_size(mut self, size: impl Into<Size>) -> Self {
+                self.size = Some(size.into());
+                self
+            }
+        }
+        let small = Node {
+            kind: "input".into(),
+            control_size: Some("small".into()),
+            ..Node::default()
+        };
+        let large = Node {
+            kind: "input".into(),
+            control_size: Some("large".into()),
+            ..Node::default()
+        };
+        let omitted = Node {
+            kind: "input".into(),
+            ..Node::default()
+        };
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &small).size,
+            Some(Size::Small)
+        );
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &large).size,
+            Some(Size::Large)
+        );
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &omitted).size,
+            Some(Size::Medium)
+        );
+    }
+
+    #[test]
+    fn input_masked_resyncs_when_mask_toggle_is_removed() {
+        // Native eye button flipped masked, Clojure `:masked` unchanged.
+        assert!(!input_masked_needs_resync(false, true, false, true));
+        assert!(!input_masked_needs_resync(true, true, true, true));
+        // Removing the toggle restores Clojure `:masked` even when equal.
+        assert!(input_masked_needs_resync(false, true, false, false));
+        assert!(input_masked_needs_resync(true, true, true, false));
+        // Clojure `:masked` still wins when it changes while the toggle exists.
+        assert!(input_masked_needs_resync(false, true, true, true));
+        assert!(input_masked_needs_resync(true, true, false, true));
+        // No toggle: only a Clojure `:masked` change resyncs.
+        assert!(!input_masked_needs_resync(false, false, false, false));
+        assert!(input_masked_needs_resync(false, false, true, false));
+        // Adding the toggle does not overwrite native state by itself.
+        assert!(!input_masked_needs_resync(false, false, false, true));
+    }
+
+    #[test]
+    fn otp_groups_zero_is_forwarded_for_kit_clamp() {
+        // Kit 0.6 `resolved_groups(length, 0)` is `requested.max(1).min(length.max(1))`.
+        assert_eq!(
+            otp_groups(&Node {
+                groups: Some(0),
+                ..Node::default()
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            otp_groups(&Node {
+                groups: Some(3),
+                ..Node::default()
+            }),
+            Some(3)
+        );
+        assert!(otp_groups(&Node::default()).is_none());
     }
 
     #[test]

@@ -102,6 +102,12 @@ struct InputSlot {
     /// flush once per callback-id generation. See
     /// `protocol::InputChangeCoalesce`.
     change: protocol::InputChangeCoalesce,
+    /// Last Clojure `:masked`. Native mask-toggle may differ until this
+    /// changes or `:mask-toggle` is removed.
+    masked: bool,
+    /// Last Clojure `:mask-toggle`. Native eye-button state may diverge
+    /// from `:masked` while this is true.
+    mask_toggle: bool,
 }
 
 struct TextControlSlot<S> {
@@ -1065,6 +1071,18 @@ impl RootView {
                     input.set_placeholder(placeholder, window, cx);
                 });
             }
+            if mapping::input_masked_needs_resync(
+                slot.masked,
+                slot.mask_toggle,
+                node.masked,
+                node.mask_toggle,
+            ) {
+                slot.masked = node.masked;
+                state.update(cx, |input, cx| {
+                    input.set_masked(node.masked, window, cx);
+                });
+            }
+            slot.mask_toggle = node.mask_toggle;
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
                 state.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -1081,6 +1099,7 @@ impl RootView {
             InputState::new(window, cx)
                 .placeholder(placeholder)
                 .default_value(default)
+                .masked(node.masked)
         });
         self.inputs.insert(
             key.to_string(),
@@ -1098,6 +1117,8 @@ impl RootView {
                 number_step: None,
                 number_stepped: false,
                 change: protocol::InputChangeCoalesce::default(),
+                masked: node.masked,
+                mask_toggle: node.mask_toggle,
             },
         );
 
@@ -1545,11 +1566,21 @@ impl RootView {
             "scroll" => self.render_scroll(node, path, &key, window, cx),
             "input" => {
                 let state = self.input_slot(&key, node, window, cx);
-                apply_style(Input::new(&state), node, cx).into_any_element()
+                apply_style(
+                    mapping::apply_input_chrome(Input::new(&state), node),
+                    node,
+                    cx,
+                )
+                .into_any_element()
             }
             "textarea" => {
                 let state = self.textarea_slot(&key, node, window, cx);
-                apply_style(Textarea::new(&state), node, cx).into_any_element()
+                apply_style(
+                    mapping::apply_textarea_chrome(Textarea::new(&state), node),
+                    node,
+                    cx,
+                )
+                .into_any_element()
             }
             "switch" => self.render_switch(node, &key, cx),
             "toggle" => self.render_toggle(node, &key, cx),
@@ -3885,11 +3916,9 @@ impl RootView {
         if let Some(placeholder) = node.placeholder.clone() {
             input = input.placeholder(placeholder);
         }
-        if node.disabled {
-            input = input.disabled(true);
-        }
         apply_style(
-            input.with_size(mapping::parse_scale(node.control_size.as_deref())),
+            mapping::apply_number_input_chrome(input, node)
+                .with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
             cx,
         )
@@ -3971,6 +4000,7 @@ impl RootView {
         if node.disabled {
             input = input.disabled(true);
         }
+        input = mapping::apply_otp_chrome(input, node);
         style_host(input, node, cx)
     }
 
@@ -4195,7 +4225,12 @@ impl RootView {
         let state = self.editor_slot(key, node, window, cx);
         // Code editor Input is multi-line but `h_auto` without an explicit
         // height collapses to a single row. Fill the viewport wrapper.
-        viewport_sized(Editor::new(&state).h_full(), node, 200.0, cx)
+        viewport_sized(
+            mapping::apply_editor_chrome(Editor::new(&state).h_full(), node),
+            node,
+            200.0,
+            cx,
+        )
     }
 
     fn editor_slot(
