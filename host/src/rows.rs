@@ -455,6 +455,54 @@ pub fn remap_table_selection_after_sort(
     )
 }
 
+/// Kit index update after a native sort. Logical row/cell identity is
+/// unchanged; callers must suppress Clojure `:on-change`.
+pub fn table_sort_selection_sync(
+    old_ids: &[String],
+    new_ids: &[String],
+    selected_row: Option<usize>,
+    selected_cell: Option<(usize, usize)>,
+) -> TableSelectionSync {
+    let (next_row, next_cell) =
+        remap_table_selection_after_sort(old_ids, new_ids, selected_row, selected_cell);
+    if selected_cell.is_some() {
+        if selected_cell == next_cell {
+            TableSelectionSync::Keep
+        } else {
+            match next_cell {
+                Some((row, col)) => TableSelectionSync::SelectCell(row, col),
+                None => TableSelectionSync::Clear,
+            }
+        }
+    } else if selected_row == next_row {
+        TableSelectionSync::Keep
+    } else {
+        match next_row {
+            Some(row) => TableSelectionSync::SelectRow(row),
+            None => TableSelectionSync::Clear,
+        }
+    }
+}
+
+/// Native sort remaps indices only. Any Kit select/clear from that remap
+/// is internal bookkeeping, not an application selection change.
+pub fn table_sort_remap_suppresses_on_change(action: TableSelectionSync) -> bool {
+    !matches!(action, TableSelectionSync::Keep)
+}
+
+/// Reset the load-more latch when the collection or flags change, or when
+/// a callback appears (`None` → `Some`). A present `cb-N` becoming
+/// `cb-N+1` is Clojure sanitizer churn, not a new handler.
+fn load_more_latch_resets(
+    collection_changed: bool,
+    has_more: bool,
+    loading: bool,
+    had_callback: bool,
+    has_callback: bool,
+) -> bool {
+    collection_changed || !has_more || loading || (!had_callback && has_callback)
+}
+
 fn send_load_more_if_ready(
     has_more: bool,
     loading: bool,
@@ -674,13 +722,19 @@ impl RowListDelegate {
         on_load_more: Option<String>,
         collection_changed: bool,
     ) {
-        let callback_changed = self.on_load_more != on_load_more;
+        let reset = load_more_latch_resets(
+            collection_changed,
+            has_more,
+            loading,
+            self.on_load_more.is_some(),
+            on_load_more.is_some(),
+        );
         self.loading = loading;
         self.has_more = has_more;
         self.load_more_threshold = load_more_threshold;
         self.empty = empty;
         self.on_load_more = on_load_more;
-        if collection_changed || !has_more || loading || callback_changed {
+        if reset {
             self.load_more_sent = false;
         }
     }
@@ -845,6 +899,9 @@ pub struct RowTableDelegate {
     on_load_more: Option<String>,
     on_sort: Option<String>,
     load_more_sent: bool,
+    /// True while a native-sort index remap is applying Kit selection.
+    /// `SelectRow` / `SelectCell` must not become Clojure `:on-change`.
+    suppress_select: bool,
 }
 
 impl RowTableDelegate {
@@ -864,6 +921,7 @@ impl RowTableDelegate {
             on_load_more: None,
             on_sort: None,
             load_more_sent: false,
+            suppress_select: false,
         };
         apply_active_column_sort(&this.columns, &mut this.rows, &this.source_order);
         this
@@ -890,14 +948,20 @@ impl RowTableDelegate {
         on_sort: Option<String>,
         collection_changed: bool,
     ) {
-        let callback_changed = self.on_load_more != on_load_more;
+        let reset = load_more_latch_resets(
+            collection_changed,
+            has_more,
+            loading,
+            self.on_load_more.is_some(),
+            on_load_more.is_some(),
+        );
         self.loading = loading;
         self.has_more = has_more;
         self.load_more_threshold = load_more_threshold;
         self.empty = empty;
         self.on_load_more = on_load_more;
         self.on_sort = on_sort;
-        if collection_changed || !has_more || loading || callback_changed {
+        if reset {
             self.load_more_sent = false;
         }
     }
@@ -921,6 +985,10 @@ impl RowTableDelegate {
     #[cfg(test)]
     pub fn source_ids(&self) -> &[String] {
         &self.source_order
+    }
+
+    pub fn suppress_select(&self) -> bool {
+        self.suppress_select
     }
 
     pub fn set_rows(&mut self, rows: Vec<Row>) {
@@ -1138,26 +1206,28 @@ impl TableDelegate for RowTableDelegate {
         sort_table_rows(&mut self.rows, col_ix, sort, &self.source_order);
         let new_ids: Vec<String> = self.rows.iter().map(|row| row.id.clone()).collect();
         if old_ids != new_ids {
-            cx.defer_in(window, move |table, _, cx| {
-                let (next_row, next_cell) = remap_table_selection_after_sort(
+            cx.defer_in(window, move |table, window, cx| {
+                let action = table_sort_selection_sync(
                     &old_ids,
                     &new_ids,
                     table.selected_row(),
                     table.selected_cell(),
                 );
-                if table.selected_cell().is_some() {
-                    if table.selected_cell() != next_cell {
-                        match next_cell {
-                            Some((row, col)) => table.set_selected_cell(row, col, cx),
-                            None => table.clear_selection(cx),
-                        }
-                    }
-                } else if table.selected_row() != next_row {
-                    match next_row {
-                        Some(row) => table.set_selected_row(row, cx),
-                        None => table.clear_selection(cx),
-                    }
+                if matches!(action, TableSelectionSync::Keep) {
+                    return;
                 }
+                table.delegate_mut().suppress_select = true;
+                match action {
+                    TableSelectionSync::SelectRow(ix) => table.set_selected_row(ix, cx),
+                    TableSelectionSync::SelectCell(row, col) => {
+                        table.set_selected_cell(row, col, cx)
+                    }
+                    TableSelectionSync::Clear => table.clear_selection(cx),
+                    TableSelectionSync::Keep => {}
+                }
+                cx.defer_in(window, |table, _, _| {
+                    table.delegate_mut().suppress_select = false;
+                });
             });
         }
         if let (Some(tx), Some(callback), Some(col)) =
@@ -1657,6 +1727,38 @@ mod tests {
     }
 
     #[test]
+    fn native_sort_remap_does_not_emit_on_change() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids[0], "a");
+        assert_eq!(new_ids[1], "b");
+
+        let row_action = table_sort_selection_sync(&old_ids, &new_ids, Some(0), None);
+        assert_eq!(row_action, TableSelectionSync::SelectRow(1));
+        assert!(table_sort_remap_suppresses_on_change(row_action));
+        let mut coalesce = crate::protocol::TableClickCoalesce::default();
+        assert!(!coalesce.on_select_row(1, table_sort_remap_suppresses_on_change(row_action)));
+        assert!(coalesce.take_pending().is_none());
+
+        let cell_action = table_sort_selection_sync(&old_ids, &new_ids, Some(0), Some((0, 1)));
+        assert_eq!(cell_action, TableSelectionSync::SelectCell(1, 1));
+        assert!(table_sort_remap_suppresses_on_change(cell_action));
+        let mut coalesce = crate::protocol::TableClickCoalesce::default();
+        assert!(!coalesce.on_select_cell(1, 1, table_sort_remap_suppresses_on_change(cell_action)));
+        assert!(coalesce.take_pending().is_none());
+
+        let keep = table_sort_selection_sync(&old_ids, &old_ids, Some(0), None);
+        assert_eq!(keep, TableSelectionSync::Keep);
+        assert!(!table_sort_remap_suppresses_on_change(keep));
+    }
+
+    #[test]
     fn load_more_latch_resets_on_collection_or_flags() {
         let mut delegate = RowListDelegate::new(rows_from_items(&items(json!([
             {"id": "alpha", "label": "Alpha"}
@@ -1676,6 +1778,17 @@ mod tests {
     }
 
     #[test]
+    fn load_more_latch_resets_only_when_callback_appears() {
+        assert!(!load_more_latch_resets(false, true, false, true, true));
+        assert!(load_more_latch_resets(false, true, false, false, true));
+        assert!(!load_more_latch_resets(false, true, false, true, false));
+        assert!(!load_more_latch_resets(false, true, false, false, false));
+        assert!(load_more_latch_resets(true, true, false, true, true));
+        assert!(load_more_latch_resets(false, false, false, true, true));
+        assert!(load_more_latch_resets(false, true, true, true, true));
+    }
+
+    #[test]
     fn load_more_latch_waits_for_callback() {
         let (tx, rx) = mpsc::channel();
         let mut list = RowListDelegate::new(rows_from_items(&items(json!([
@@ -1687,25 +1800,26 @@ mod tests {
         assert!(!list.load_more_sent());
         assert!(rx.try_recv().is_err());
 
-        list.sync_chrome(false, true, 20, None, Some("cb-more".into()), false);
+        list.sync_chrome(false, true, 20, None, Some("cb-1".into()), false);
         assert!(!list.load_more_sent());
         list.fire_load_more();
         assert!(list.load_more_sent());
         match rx.try_recv() {
             Ok(Cmd::Callback { id, value, seq }) => {
-                assert_eq!(id, "cb-more");
+                assert_eq!(id, "cb-1");
                 assert_eq!(value, None);
                 assert_eq!(seq, None);
             }
             other => panic!("expected load-more callback, got {other:?}"),
         }
-        list.sync_chrome(false, true, 20, None, Some("cb-other".into()), false);
-        assert!(!list.load_more_sent());
+        list.sync_chrome(false, true, 20, None, Some("cb-2".into()), false);
+        assert!(list.load_more_sent());
         list.fire_load_more();
-        match rx.try_recv() {
-            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-other"),
-            other => panic!("expected retargeted load-more callback, got {other:?}"),
-        }
+        assert!(rx.try_recv().is_err());
+        list.sync_chrome(false, true, 20, None, None, false);
+        assert!(list.load_more_sent());
+        list.sync_chrome(false, true, 20, None, Some("cb-1".into()), false);
+        assert!(!list.load_more_sent());
 
         let (tx, rx) = mpsc::channel();
         let cols = columns_from_items(&items(json!([{"id": "name", "label": "Name"}])));
@@ -1716,21 +1830,26 @@ mod tests {
         assert!(!table.load_more_sent());
         assert!(rx.try_recv().is_err());
 
-        table.sync_chrome(
-            false,
-            true,
-            20,
-            None,
-            Some("cb-table-more".into()),
-            None,
-            false,
-        );
+        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
         assert!(!table.load_more_sent());
         table.fire_load_more();
         assert!(table.load_more_sent());
         match rx.try_recv() {
-            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-table-more"),
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
             other => panic!("expected table load-more callback, got {other:?}"),
+        }
+        table.sync_chrome(false, true, 20, None, Some("cb-2".into()), None, false);
+        assert!(table.load_more_sent());
+        table.fire_load_more();
+        assert!(rx.try_recv().is_err());
+        table.sync_chrome(false, true, 20, None, None, None, false);
+        assert!(table.load_more_sent());
+        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
+        assert!(!table.load_more_sent());
+        table.fire_load_more();
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
+            other => panic!("expected table load-more after callback appeared, got {other:?}"),
         }
     }
 

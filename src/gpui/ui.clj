@@ -1893,7 +1893,9 @@
   load-more surface (Kit default threshold 20). The host latches
   `load_more` only after a callback is sent, and resets that latch
   when rows / `:has-more` / `:loading` change or when `:on-load-more`
-  appears or changes id. Custom empty widgets are not wrapped.
+  appears (`nil` → present). A regenerated wire id (`cb-1` → `cb-2`)
+  for the same handler does not reset it. Custom empty widgets are
+  not wrapped.
 
   (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
   (ui/list items {:searchable true :search-placeholder \"Filter…\"})"
@@ -1958,15 +1960,17 @@
   first paint, not only later header clicks. Header click cycles
   Default → Desc → Asc → Default, sorts in-memory by `cell_text`
   (numeric when both parse), remaps native row/cell selection by row
-  id, and sends `:on-sort` `{:id :sort}`. `Default` restores the last
-  Clojure row order. A later row-only tree with the same fingerprint
-  keeps native order. Column `:fixed` / `:fixed-left` (`true` or
-  `:left`), `:resizable`, `:movable`, `:min-width` / `:max-width`.
-  String `:empty` is `render_empty`. `:loading` / `:has-more` /
-  `:on-load-more` (0-arg) / `:load-more-threshold` (omit = 20). The
-  host latches `load_more` only after a callback is sent, and resets
-  that latch when rows / `:has-more` / `:loading` change or when
-  `:on-load-more` appears or changes id. Context menus and custom
+  id without emitting `:on-change`, and sends `:on-sort` `{:id :sort}`.
+  `Default` restores the last Clojure row order. A later row-only tree
+  with the same fingerprint keeps native order. Column `:fixed` /
+  `:fixed-left` (`true` or `:left`), `:resizable`, `:movable`,
+  `:min-width` / `:max-width`. String `:empty` is `render_empty`.
+  `:loading` / `:has-more` / `:on-load-more` (0-arg) /
+  `:load-more-threshold` (omit = 20). The host latches `load_more`
+  only after a callback is sent, and resets that latch when rows /
+  `:has-more` / `:loading` change or when `:on-load-more` appears
+  (`nil` → present). A regenerated wire id (`cb-1` → `cb-2`) for the
+  same handler does not reset it. Context menus and custom
   `render_th` / `render_loading` are not wrapped.
 
   `ui/table` is Kit's declarative (non-virtualized) Table.

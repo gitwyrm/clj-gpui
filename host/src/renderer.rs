@@ -3365,12 +3365,13 @@ impl RootView {
         cx.subscribe_in(
             &state,
             window,
-            move |this, _, event: &TableEvent, window, cx| match event {
+            move |this, table, event: &TableEvent, window, cx| match event {
                 TableEvent::SelectRow(ix) => {
                     let suppress = this
                         .tables
                         .get(&key_owned)
-                        .is_some_and(|s| s.suppress_select);
+                        .is_some_and(|s| s.suppress_select)
+                        || table.read(cx).delegate().suppress_select();
                     let schedule = this
                         .tables
                         .get_mut(&key_owned)
@@ -3387,7 +3388,8 @@ impl RootView {
                     let suppress = this
                         .tables
                         .get(&key_owned)
-                        .is_some_and(|s| s.suppress_select);
+                        .is_some_and(|s| s.suppress_select)
+                        || table.read(cx).delegate().suppress_select();
                     let schedule = this
                         .tables
                         .get_mut(&key_owned)
