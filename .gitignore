@@ -8,3 +8,5 @@
 *.AppImage
 *.deb
 *.app
+.clj-kondo/
+.lsp/

@@ -1026,7 +1026,7 @@
         page (or (some #(when (= (:id %) (:gallery-page state)) %) pages)
                  (first pages))]
     (ui/window
-     {:title "Widgets" :chrome :app :width 1040 :height 880 :theme "Tokyo Night"}
+     {:title "Widgets" :chrome :dev :width 1040 :height 880 :theme "Tokyo Night"}
      (ui/hstack
       {:gap 0 :flex 1 :align :stretch}
       (ui/vstack
