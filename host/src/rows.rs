@@ -72,6 +72,23 @@ fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
     }
 }
 
+/// Column ids/count/order only. Label, width, align, and selectable are
+/// `column_definition_fingerprint` so a metadata-only Clojure update after
+/// a header drag does not snap native order back to the tree.
+pub fn column_identity_fingerprint(items: &[Item]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    items.len().hash(&mut hasher);
+    for item in items {
+        item.id_or_label().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Column label/width/align/selectable (full Item hash).
+pub fn column_definition_fingerprint(items: &[Item]) -> u64 {
+    rows_fingerprint(items)
+}
+
 /// Header-group identity only. Row-only Clojure updates must not use a
 /// combined table fingerprint that would also rewrite native columns.
 pub fn header_groups_fingerprint(groups: &[Vec<Item>]) -> u64 {
@@ -380,19 +397,38 @@ pub fn remap_rows_to_columns(
     rows
 }
 
-/// Row-only Clojure updates keep host-owned column order (header drag).
-/// A Clojure column-identity change replaces native columns.
+/// Rebuild Clojure column objects so they follow `native_columns` id order.
+pub fn remap_columns_to_native_order(
+    clojure_columns: &[Column],
+    native_columns: &[Column],
+) -> Vec<Column> {
+    native_columns
+        .iter()
+        .map(|native| {
+            clojure_columns
+                .iter()
+                .find(|src| src.key.as_ref() == native.key.as_ref())
+                .cloned()
+                .unwrap_or_else(|| native.clone())
+        })
+        .collect()
+}
+
+/// `identity_changed`: Clojure column ids/count/order changed — Clojure
+/// order wins. Otherwise keep host-owned order (header drag) and remap
+/// Clojure column objects and row cells onto it by id.
 pub fn merge_table_data(
     native_columns: &[Column],
     clojure_columns: Vec<Column>,
     clojure_rows: Vec<Row>,
-    columns_changed: bool,
+    identity_changed: bool,
 ) -> (Vec<Column>, Vec<Row>) {
-    if columns_changed {
+    if identity_changed {
         (clojure_columns, clojure_rows)
     } else {
         let rows = remap_rows_to_columns(&clojure_columns, native_columns, clojure_rows);
-        (native_columns.to_vec(), rows)
+        let cols = remap_columns_to_native_order(&clojure_columns, native_columns);
+        (cols, rows)
     }
 }
 
@@ -689,6 +725,66 @@ mod tests {
         let narrow = items(json!([{"id": "name", "label": "Name", "width": 80}]));
         let wide = items(json!([{"id": "name", "label": "Name", "width": 140}]));
         assert_ne!(rows_fingerprint(&narrow), rows_fingerprint(&wide));
+        assert_eq!(
+            column_identity_fingerprint(&narrow),
+            column_identity_fingerprint(&wide)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&narrow),
+            column_definition_fingerprint(&wide)
+        );
+    }
+
+    #[test]
+    fn column_identity_fingerprint_ignores_definition_metadata() {
+        let base = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start"},
+            {"id": "lang", "label": "Lang"}
+        ]));
+        let relabeled = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start"},
+            {"id": "lang", "label": "Language"}
+        ]));
+        let aligned = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "end"},
+            {"id": "lang", "label": "Lang"}
+        ]));
+        let unselectable = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start", "selectable": false},
+            {"id": "lang", "label": "Lang"}
+        ]));
+        let reordered = items(json!([
+            {"id": "lang", "label": "Lang"},
+            {"id": "name", "label": "Name", "width": 80, "align": "start"}
+        ]));
+        assert_eq!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&relabeled)
+        );
+        assert_eq!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&aligned)
+        );
+        assert_eq!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&unselectable)
+        );
+        assert_ne!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&reordered)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&base),
+            column_definition_fingerprint(&relabeled)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&base),
+            column_definition_fingerprint(&aligned)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&base),
+            column_definition_fingerprint(&unselectable)
+        );
     }
 
     #[test]
@@ -918,5 +1014,56 @@ mod tests {
             merge_table_data(&native, clojure_cols, remapped.clone(), true);
         assert_eq!(column_keys(&replaced), vec!["name", "lang"]);
         assert_eq!(clojure_order[0].cells, vec!["Rust", "Grace"]);
+    }
+
+    #[test]
+    fn column_definition_merge_keeps_native_order() {
+        let clojure_cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start"},
+            {"id": "lang", "label": "Lang", "width": 100}
+        ])));
+        let clojure_rows = rows_from_items(&items(json!([
+            {"id": "ada", "cells": ["Ada", "Clojure"]}
+        ])));
+        let mut native = clojure_cols.clone();
+        let mut native_rows = clojure_rows.clone();
+        move_table_column(&mut native, &mut native_rows, 0, 1);
+        assert_eq!(column_keys(&native), vec!["lang", "name"]);
+        assert_eq!(native_rows[0].cells, vec!["Clojure", "Ada"]);
+
+        // Clojure still sends cells in tree column order. Merge remaps them
+        // (and rebuilt column objects) onto the host-owned header order.
+        let relabeled = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start"},
+            {"id": "lang", "label": "Language", "width": 100}
+        ])));
+        let (cols, remapped) = merge_table_data(&native, relabeled, clojure_rows.clone(), false);
+        assert_eq!(column_keys(&cols), vec!["lang", "name"]);
+        assert_eq!(cols[0].name.as_ref(), "Language");
+        assert_eq!(cols[1].name.as_ref(), "Name");
+        assert_eq!(remapped[0].cells, vec!["Clojure", "Ada"]);
+
+        let restyled = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "width": 140, "align": "end", "selectable": false},
+            {"id": "lang", "label": "Language", "width": 100}
+        ])));
+        let (cols, remapped) = merge_table_data(&native, restyled, clojure_rows.clone(), false);
+        assert_eq!(column_keys(&cols), vec!["lang", "name"]);
+        assert_eq!(cols[0].name.as_ref(), "Language");
+        assert_eq!(cols[1].width, px(140.));
+        assert_eq!(cols[1].align, TextAlign::Right);
+        assert!(!cols[1].selectable);
+        assert_eq!(remapped[0].cells, vec!["Clojure", "Ada"]);
+
+        let replaced = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name"},
+            {"id": "dialect", "label": "Dialect"}
+        ])));
+        let replaced_rows = rows_from_items(&items(json!([
+            {"id": "ada", "cells": ["Ada", "Lisp"]}
+        ])));
+        let (cols, clojure_order) = merge_table_data(&native, replaced, replaced_rows, true);
+        assert_eq!(column_keys(&cols), vec!["name", "dialect"]);
+        assert_eq!(clojure_order[0].cells, vec!["Ada", "Lisp"]);
     }
 }

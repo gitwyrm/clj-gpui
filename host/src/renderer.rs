@@ -279,9 +279,11 @@ struct ListSlot {
 
 struct TableSlot {
     state: Entity<TableState<RowTableDelegate>>,
-    /// Clojure column identity. Unchanged across a header drag, so a
-    /// later row-only tree must not overwrite native column order.
-    column_fingerprint: u64,
+    /// Clojure column ids/count/order. Unchanged across a header drag
+    /// and across label/width/align/selectable updates.
+    column_identity_fingerprint: u64,
+    /// Clojure column definitions (label/width/align/selectable).
+    column_definition_fingerprint: u64,
     row_fingerprint: u64,
     groups_fingerprint: u64,
     on_change: Option<String>,
@@ -3177,7 +3179,8 @@ impl RootView {
         let columns = rows::columns_from_items(&node.options);
         let rows_data = rows::rows_from_items(&node.items);
         let header_groups = rows::header_groups_from_items(&node.header_groups);
-        let column_fingerprint = rows::rows_fingerprint(&node.options);
+        let column_identity_fingerprint = rows::column_identity_fingerprint(&node.options);
+        let column_definition_fingerprint = rows::column_definition_fingerprint(&node.options);
         let row_fingerprint = rows::rows_fingerprint(&node.items);
         let groups_fingerprint = rows::header_groups_fingerprint(&node.header_groups);
         let cell_selectable = node.cell_selectable.unwrap_or(false);
@@ -3189,16 +3192,19 @@ impl RootView {
             slot.on_confirm = node.on_confirm.clone().or(node.on_double_click.clone());
             slot.on_export = node.on_export.clone();
             let state = slot.state.clone();
-            let columns_changed = slot.column_fingerprint != column_fingerprint;
+            let identity_changed = slot.column_identity_fingerprint != column_identity_fingerprint;
+            let definition_changed =
+                slot.column_definition_fingerprint != column_definition_fingerprint;
             let rows_changed = slot.row_fingerprint != row_fingerprint;
             let groups_changed = slot.groups_fingerprint != groups_fingerprint;
-            if columns_changed || rows_changed || groups_changed {
-                slot.column_fingerprint = column_fingerprint;
+            if identity_changed || definition_changed || rows_changed || groups_changed {
+                slot.column_identity_fingerprint = column_identity_fingerprint;
+                slot.column_definition_fingerprint = column_definition_fingerprint;
                 slot.row_fingerprint = row_fingerprint;
                 slot.groups_fingerprint = groups_fingerprint;
-                let apply_rows = columns_changed || rows_changed;
-                let columns = apply_rows.then(|| columns.clone());
-                let rows_data = apply_rows.then(|| rows_data.clone());
+                let apply_table = identity_changed || definition_changed || rows_changed;
+                let columns = apply_table.then(|| columns.clone());
+                let rows_data = apply_table.then(|| rows_data.clone());
                 let header_groups = groups_changed.then(|| header_groups.clone());
                 state.update(cx, |table, cx| {
                     if let (Some(columns), Some(rows_data)) = (columns, rows_data) {
@@ -3206,9 +3212,9 @@ impl RootView {
                             &table.delegate().columns,
                             columns,
                             rows_data,
-                            columns_changed,
+                            identity_changed,
                         );
-                        if columns_changed {
+                        if identity_changed || definition_changed {
                             table.delegate_mut().columns = next_cols;
                         }
                         table.delegate_mut().rows = next_rows;
@@ -3298,7 +3304,8 @@ impl RootView {
             key.to_string(),
             TableSlot {
                 state: state.clone(),
-                column_fingerprint,
+                column_identity_fingerprint,
+                column_definition_fingerprint,
                 row_fingerprint,
                 groups_fingerprint,
                 on_change: node.on_change.clone(),

@@ -264,7 +264,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `cell-selectable` | bool | `data-table`: Kit `TableState::cell_selectable`. Omitted is Kit false. `SelectColumn` is not forwarded as `:on-change` |
 | `row-header` | bool | `data-table`: Kit `TableState::row_header` (row-index column). Only effective when `cell-selectable` is true. Omitted is Kit true |
 | `row-height` | number | `data-table`: Kit `Size::Size` row height in pixels (`table_row_height`). Named `control-size` still maps to Kit `Sizable`. Viewport `height` is the outer wrapper, not the row. Omitted is Kit Medium (32px) |
-| `export-generation` | number or string | `data-table`: replay token for `TableState::dump`. Same shape as nav-stack `replace-generation`. A new token with `on-export` dumps the current native headers/rows (host-owned order after a header drag; row-only Clojure updates remap cells onto that order) |
+| `export-generation` | number or string | `data-table`: replay token for `TableState::dump`. Same shape as nav-stack `replace-generation`. A new token with `on-export` dumps the current native headers/rows (host-owned order after a header drag; row-only and column-definition Clojure updates remap onto that order; a Clojure column id/order change replaces it) |
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |
 | `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false) |
 | `autohide` | bool | `notification` (default true) |
