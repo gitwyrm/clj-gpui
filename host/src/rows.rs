@@ -414,6 +414,38 @@ pub fn remap_columns_to_native_order(
         .collect()
 }
 
+/// Which Kit `TableState` call to make after a Clojure table tree.
+///
+/// Kit stores user-resized widths in internal `col_groups`.
+/// `TableState::refresh()` rebuilds those from delegate `Column::width`,
+/// so a row-only or header-group update must not use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableRefreshKind {
+    /// Column identity or definition changed. Clojure `:width` wins.
+    Refresh,
+    /// Header groups changed. Keep runtime column widths.
+    RefreshHeaderLayout,
+    /// Rows only. Keep runtime column widths and column objects.
+    Notify,
+}
+
+pub fn table_refresh_kind(
+    identity_changed: bool,
+    definition_changed: bool,
+    rows_changed: bool,
+    groups_changed: bool,
+) -> Option<TableRefreshKind> {
+    if identity_changed || definition_changed {
+        Some(TableRefreshKind::Refresh)
+    } else if groups_changed {
+        Some(TableRefreshKind::RefreshHeaderLayout)
+    } else if rows_changed {
+        Some(TableRefreshKind::Notify)
+    } else {
+        None
+    }
+}
+
 /// `identity_changed`: Clojure column ids/count/order changed — Clojure
 /// order wins. Otherwise keep host-owned order (header drag) and remap
 /// Clojure column objects and row cells onto it by id.
@@ -1065,5 +1097,81 @@ mod tests {
         let (cols, clojure_order) = merge_table_data(&native, replaced, replaced_rows, true);
         assert_eq!(column_keys(&cols), vec!["name", "dialect"]);
         assert_eq!(clojure_order[0].cells, vec!["Ada", "Lisp"]);
+    }
+
+    /// Kit `TableState::refresh` rebuilds `col_groups` from `Column::width`.
+    /// Row-only and header-group updates must not take that path.
+    #[test]
+    fn native_column_width_survives_row_and_header_group_sync() {
+        assert_eq!(
+            table_refresh_kind(false, false, true, false),
+            Some(TableRefreshKind::Notify)
+        );
+        assert_eq!(
+            table_refresh_kind(false, false, false, true),
+            Some(TableRefreshKind::RefreshHeaderLayout)
+        );
+        assert_eq!(
+            table_refresh_kind(false, false, true, true),
+            Some(TableRefreshKind::RefreshHeaderLayout)
+        );
+        assert_eq!(
+            table_refresh_kind(false, true, false, false),
+            Some(TableRefreshKind::Refresh)
+        );
+        assert_eq!(
+            table_refresh_kind(true, false, true, false),
+            Some(TableRefreshKind::Refresh)
+        );
+        assert_eq!(table_refresh_kind(false, false, false, false), None);
+
+        let cols = items(json!([{"id": "name", "label": "Name", "width": 100}]));
+        let rows_a = items(json!([{"id": "ada", "cells": ["Ada"]}]));
+        let rows_b = items(json!([{"id": "grace", "cells": ["Grace"]}]));
+        let groups_a = vec![items(json!([{"label": "Identity", "span": 1}]))];
+        let groups_b = vec![items(json!([{"label": "People", "span": 1}]))];
+        let wide = items(json!([{"id": "name", "label": "Name", "width": 140}]));
+
+        // Native resize lives in Kit col_groups, not the Clojure :width.
+        let mut runtime_width = 180.0;
+        let clojure_width = 100.0;
+
+        let row_only = table_refresh_kind(
+            false,
+            false,
+            rows_fingerprint(&rows_a) != rows_fingerprint(&rows_b),
+            false,
+        );
+        apply_kit_col_groups(&mut runtime_width, clojure_width, row_only);
+        assert_eq!(runtime_width, 180.0);
+
+        let groups_only = table_refresh_kind(
+            false,
+            false,
+            false,
+            header_groups_fingerprint(&groups_a) != header_groups_fingerprint(&groups_b),
+        );
+        apply_kit_col_groups(&mut runtime_width, clojure_width, groups_only);
+        assert_eq!(runtime_width, 180.0);
+
+        let definition = table_refresh_kind(
+            column_identity_fingerprint(&cols) != column_identity_fingerprint(&wide),
+            column_definition_fingerprint(&cols) != column_definition_fingerprint(&wide),
+            false,
+            false,
+        );
+        apply_kit_col_groups(&mut runtime_width, 140.0, definition);
+        assert_eq!(runtime_width, 140.0);
+    }
+
+    /// Kit `prepare_col_groups` copies `Column::width` into runtime groups.
+    fn apply_kit_col_groups(
+        runtime_width: &mut f32,
+        column_width: f32,
+        kind: Option<TableRefreshKind>,
+    ) {
+        if kind == Some(TableRefreshKind::Refresh) {
+            *runtime_width = column_width;
+        }
     }
 }

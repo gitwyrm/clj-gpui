@@ -283,6 +283,8 @@ struct TableSlot {
     /// and across label/width/align/selectable updates.
     column_identity_fingerprint: u64,
     /// Clojure column definitions (label/width/align/selectable).
+    /// A definition change `TableState::refresh`es so Clojure `:width` wins.
+    /// Native resize lives in Kit col_groups until then.
     column_definition_fingerprint: u64,
     row_fingerprint: u64,
     groups_fingerprint: u64,
@@ -3197,7 +3199,12 @@ impl RootView {
                 slot.column_definition_fingerprint != column_definition_fingerprint;
             let rows_changed = slot.row_fingerprint != row_fingerprint;
             let groups_changed = slot.groups_fingerprint != groups_fingerprint;
-            if identity_changed || definition_changed || rows_changed || groups_changed {
+            if let Some(refresh) = rows::table_refresh_kind(
+                identity_changed,
+                definition_changed,
+                rows_changed,
+                groups_changed,
+            ) {
                 slot.column_identity_fingerprint = column_identity_fingerprint;
                 slot.column_definition_fingerprint = column_definition_fingerprint;
                 slot.row_fingerprint = row_fingerprint;
@@ -3222,7 +3229,13 @@ impl RootView {
                     if let Some(header_groups) = header_groups {
                         table.delegate_mut().header_groups = header_groups;
                     }
-                    table.refresh(cx);
+                    match refresh {
+                        rows::TableRefreshKind::Refresh => table.refresh(cx),
+                        rows::TableRefreshKind::RefreshHeaderLayout => {
+                            table.refresh_header_layout(cx)
+                        }
+                        rows::TableRefreshKind::Notify => cx.notify(),
+                    }
                 });
             }
             state.update(cx, |table, _| {
@@ -3295,6 +3308,11 @@ impl RootView {
                         .get_mut(&key_owned)
                         .is_some_and(|s| s.coalesce.on_double_clicked_cell(*row, *col));
                     emit_table_cell_activation(this, &key_owned, *row, *col, include_change, cx);
+                }
+                TableEvent::ColumnWidthsChanged(_) => {
+                    // Native widths live in Kit col_groups. Row-only and
+                    // header-group trees must not TableState::refresh, or a
+                    // later Clojure update snaps them back to :width.
                 }
                 _ => {}
             },
