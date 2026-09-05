@@ -734,7 +734,7 @@ pub struct Item {
     pub target: Option<String>,
     /// Area / radar series fill (hex string). Bar points may send Kit
     /// `BarChart::fill`: a hex string or `{stops, space, angle}` with
-    /// exactly two stops.
+    /// exactly two stops. `angle` is bar-local; `space: chart` ignores it.
     #[serde(default)]
     pub fill: Option<Value>,
     /// Area / radar series stroke (hex). `:color` is the same stroke when `stroke` is omitted.
@@ -1110,7 +1110,7 @@ pub struct Node {
     pub labels: Option<bool>,
     /// Bar default `BarChart::fill` when a point omits `fill` / `color`.
     /// Hex or `{stops, space, angle}` with exactly two stops.
-    /// `fill-gradient` still wins when set.
+    /// Chart-space fills ignore `angle`. `fill-gradient` still wins when set.
     #[serde(default)]
     pub fill: Option<Value>,
     /// Sankey links. Nodes stay on `items`.

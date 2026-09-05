@@ -1193,12 +1193,19 @@
                             :fill {:stops [{:color "#3366ff" :at 0}
                                            {:color "#88aaff" :at 1}]
                                    :space :chart
-                                   :angle 0}}]
+                                   :angle 45}}
+                           {:id :b :label "B" :value 7
+                            :fill {:stops [{:color "#22c55e" :at 0}
+                                           {:color "#86efac" :at 1}]
+                                   :space :bar
+                                   :angle 45}}]
                           {:fill "#112233"})]
       (is (= "3u" (get-in n [:items 0 :display])))
       (is (= "chart" (get-in n [:items 0 :fill :space])))
-      (is (= 0 (get-in n [:items 0 :fill :angle])))
+      (is (nil? (get-in n [:items 0 :fill :angle])))
       (is (= "#3366ff" (get-in n [:items 0 :fill :stops 0 :color])))
+      (is (= 45 (get-in n [:items 1 :fill :angle])))
+      (is (= "bar" (get-in n [:items 1 :fill :space])))
       (is (= "#112233" (:fill n))))
     (let [n (ui/chart :line [{:id :a :label "A" :value 1}] {:interactive true})]
       (is (true? (:interactive n))))

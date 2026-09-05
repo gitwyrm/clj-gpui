@@ -369,17 +369,21 @@
 
 (defn- chart-fill
   "Pass a hex string through. Keep a BarChart fill map (`:color` or
-  exactly two `:stops` plus `:space` / `:angle`) instead of `str` of
-  the map."
+  exactly two `:stops` plus `:space` / optional bar-local `:angle`)
+  instead of `str` of the map. `:space :chart` drops `:angle` (the
+  host always uses the alignment axis)."
   [fill]
   (cond
     (string? fill) fill
     (keyword? fill) (name fill)
     (map? fill)
-    (cond-> fill
-      (some? (:color fill)) (update :color chart-fill-color)
-      (keyword? (:space fill)) (update :space name)
-      (seq (:stops fill)) (update :stops (fn [stops] (mapv chart-fill-stop stops))))
+    (let [fill (cond-> fill
+                 (some? (:color fill)) (update :color chart-fill-color)
+                 (keyword? (:space fill)) (update :space name)
+                 (seq (:stops fill)) (update :stops (fn [stops] (mapv chart-fill-stop stops))))]
+      (if (= "chart" (:space fill))
+        (dissoc fill :angle)
+        fill))
     (some? fill) (str fill)
     :else fill))
 
@@ -2335,11 +2339,13 @@
   horizontal bars growing right). `:labels true` paints values on bars
   or pie slice labels. Bar points may set `:display` (Kit
   `BarChart::label`; omitted formats the value) and `:fill` (hex,
-  `{:color}`, or two `{color, at}` stops with `:space :bar|:chart` and
-  optional `:angle`). `:space :bar` is 0 = base (zero) / 1 = tip; a
-  negative value flips the default angle 180° so that still holds.
+  `{:color}`, or two `{color, at}` stops with `:space :bar|:chart`).
+  `:space :bar` is stop 0 = base (zero) and stop 1 = tip when `:angle`
+  is omitted; a negative value flips that default angle 180°. An
+  explicit `:angle` is bar-local and chooses the gradient direction.
   `:space :chart` remaps those two stops through pixel bounds on the
-  unflipped alignment axis. Chart-level `:fill` is the default when a
+  alignment value axis and always uses `BarAlignment::gradient_angle`
+  (`:angle` is dropped). Chart-level `:fill` is the default when a
   point omits `:fill` / `:color`. `:fill-gradient` still maps to Kit
   `fill_gradient` and replaces `fill`. Radar dimensions may use
   `:values [a b]` (or `:value [a b]`) with `:series` names/colors/fills. Candlesticks use

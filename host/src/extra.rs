@@ -1482,7 +1482,8 @@ pub enum ChartFillGradient {
 }
 
 /// Kit `BarChart::fill` after JSON. `stops` is exactly two entries.
-/// `space: chart` remaps those stops through bar/chart pixel bounds.
+/// `space: chart` remaps those stops through bar/chart pixel bounds
+/// along the alignment axis and ignores `angle`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartBarFill {
     Solid(String),
@@ -1523,7 +1524,13 @@ pub fn parse_chart_bar_fill(value: Option<&Value>) -> Option<ChartBarFill> {
                     Some("chart") => ChartFillSpace::Chart,
                     _ => ChartFillSpace::Bar,
                 };
-                let angle = map.get("angle").and_then(json_f64).map(|n| n as f32);
+                // Chart-space remap is along the value axis only. An explicit
+                // angle would not be a global diagonal; drop it so paint
+                // always uses `BarAlignment::gradient_angle()`.
+                let angle = match space {
+                    ChartFillSpace::Chart => None,
+                    ChartFillSpace::Bar => map.get("angle").and_then(json_f64).map(|n| n as f32),
+                };
                 Some(ChartBarFill::Linear {
                     start,
                     start_at,
@@ -1573,23 +1580,25 @@ pub fn bar_value_axis_ends(bar: Bounds<f32>, alignment: BarAlignment, value: f64
 
 /// Default `linear_gradient` angle for a bar fill.
 ///
-/// `:space :bar` with no `:angle` flips 180° on a negative value so stop 0
-/// stays at base (zero) and stop 1 at the tip. `:space :chart` never flips:
-/// the angle is the chart-wide alignment axis.
+/// `:space :bar` with no `:angle` uses `BarAlignment::gradient_angle()`,
+/// flipped 180° on a negative value so omitted-angle stop 0 is base and
+/// stop 1 is the tip. An explicit bar `:angle` is used as given.
+/// `:space :chart` always uses the alignment angle (explicit `:angle` is
+/// not accepted; a diagonal cannot be a chart-global gradient per quad).
 pub fn chart_bar_fill_angle(
     space: ChartFillSpace,
     alignment: BarAlignment,
     value: f64,
     explicit: Option<f32>,
 ) -> f32 {
-    if let Some(angle) = explicit {
-        return angle;
-    }
     let angle = alignment.gradient_angle();
-    if space == ChartFillSpace::Bar && value < 0.0 {
-        (angle + 180.0).rem_euclid(360.0)
-    } else {
-        angle
+    match space {
+        ChartFillSpace::Chart => angle,
+        ChartFillSpace::Bar => match explicit {
+            Some(given) => given,
+            None if value < 0.0 => (angle + 180.0).rem_euclid(360.0),
+            None => angle,
+        },
     }
 }
 
@@ -3926,7 +3935,7 @@ mod tests {
                     {"color": "#ffffff", "at": 0.75}
                 ],
                 "space": "chart",
-                "angle": 90
+                "angle": 45
             }))),
             Some(ChartBarFill::Linear {
                 start: "#111111".into(),
@@ -3934,7 +3943,26 @@ mod tests {
                 end: "#ffffff".into(),
                 end_at: 0.75,
                 space: ChartFillSpace::Chart,
-                angle: Some(90.0),
+                angle: None,
+            }),
+            "chart-space drops explicit :angle"
+        );
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({
+                "stops": [
+                    {"color": "#111111", "at": 0},
+                    {"color": "#ffffff", "at": 1}
+                ],
+                "space": "bar",
+                "angle": 45
+            }))),
+            Some(ChartBarFill::Linear {
+                start: "#111111".into(),
+                start_at: 0.0,
+                end: "#ffffff".into(),
+                end_at: 1.0,
+                space: ChartFillSpace::Bar,
+                angle: Some(45.0),
             })
         );
         assert_eq!(parse_chart_bar_fill(Some(&json!(""))), None);
@@ -4055,9 +4083,18 @@ mod tests {
             "chart-space keeps the alignment angle so the pixel gradient is global"
         );
         assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Chart, BarAlignment::Bottom, 5.0, Some(45.0)),
+            0.0,
+            "chart-space ignores explicit :angle"
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Chart, BarAlignment::Left, -5.0, Some(45.0)),
+            90.0
+        );
+        assert_eq!(
             chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Bottom, -5.0, Some(45.0)),
             45.0,
-            "explicit :angle is not flipped"
+            "bar-space explicit :angle is not flipped"
         );
     }
 
