@@ -648,22 +648,20 @@ impl RowTableDelegate {
         self.index_of(id).is_some()
     }
 
-    /// Logical cell path: `table-key/td/{len}:{row-id}/{len}:{col-id}`.
+    /// Logical cell path: `table-key/td/row/{id|index}/…/col/{id|index}/…`.
     pub(crate) fn td_element_id(&self, row_ix: usize, col_ix: usize) -> String {
-        let row_id = self
+        let row = self
             .rows
             .get(row_ix)
             .map(|row| row.id.as_str())
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("#{row_ix}"));
-        let col_id = self
+            .map(|id| table_cell_axis(id, row_ix))
+            .unwrap_or(TableCellAxis::Index(row_ix));
+        let col = self
             .columns
             .get(col_ix)
-            .map(|col| col.key.to_string())
-            .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| format!("#{col_ix}"));
-        table_cell_element_id(&self.path, &row_id, &col_id)
+            .map(|col| table_cell_axis(col.key.as_ref(), col_ix))
+            .unwrap_or(TableCellAxis::Index(col_ix));
+        table_cell_element_id(&self.path, &row, &col)
     }
 }
 
@@ -673,32 +671,61 @@ pub(crate) fn encode_wire_id(id: &str) -> String {
     format!("{}:{id}", id.len())
 }
 
-/// GPUI element id for a table cell widget. Logical row/column ids, not
-/// visible indices, so header-drag reorder keeps retained widget state
-/// (Progress `transition`, HoverCard, …).
-pub(crate) fn table_cell_element_id(table_key: &str, row_id: &str, col_id: &str) -> String {
-    format!(
-        "{table_key}/td/{}/{}",
-        encode_wire_id(row_id),
-        encode_wire_id(col_id)
-    )
+/// Named wire id, or a positional fallback when the id is missing.
+/// Index fallbacks are a separate namespace from real ids (`"#0"` is not
+/// row 0).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TableCellAxis {
+    Id(String),
+    Index(usize),
 }
 
-pub(crate) fn table_cell_row_id(row: &Item, row_ix: usize) -> String {
-    let id = row.id_or_label();
+fn table_cell_axis(id: &str, ix: usize) -> TableCellAxis {
     if id.is_empty() {
-        format!("#{row_ix}")
+        TableCellAxis::Index(ix)
     } else {
-        id
+        TableCellAxis::Id(id.to_string())
     }
 }
 
-pub(crate) fn table_cell_col_id(columns: &[Item], col_ix: usize) -> String {
+fn encode_row_axis(axis: &TableCellAxis) -> String {
+    match axis {
+        TableCellAxis::Id(id) => format!("row/id/{}", encode_wire_id(id)),
+        TableCellAxis::Index(ix) => format!("row/index/{ix}"),
+    }
+}
+
+fn encode_col_axis(axis: &TableCellAxis) -> String {
+    match axis {
+        TableCellAxis::Id(id) => format!("col/id/{}", encode_wire_id(id)),
+        TableCellAxis::Index(ix) => format!("col/index/{ix}"),
+    }
+}
+
+/// GPUI element id for a table cell widget. Logical row/column ids, not
+/// visible indices, so header-drag reorder keeps retained widget state
+/// (Progress `transition`, HoverCard, …).
+pub(crate) fn table_cell_element_id(
+    table_key: &str,
+    row: &TableCellAxis,
+    col: &TableCellAxis,
+) -> String {
+    format!(
+        "{table_key}/td/{}/{}",
+        encode_row_axis(row),
+        encode_col_axis(col)
+    )
+}
+
+pub(crate) fn table_cell_row_id(row: &Item, row_ix: usize) -> TableCellAxis {
+    table_cell_axis(&row.id_or_label(), row_ix)
+}
+
+pub(crate) fn table_cell_col_id(columns: &[Item], col_ix: usize) -> TableCellAxis {
     columns
         .get(col_ix)
-        .map(Item::id_or_label)
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| format!("#{col_ix}"))
+        .map(|col| table_cell_axis(&col.id_or_label(), col_ix))
+        .unwrap_or(TableCellAxis::Index(col_ix))
 }
 
 /// Fallback/declarative `options`/`items` table cell path. Same encoding
@@ -796,6 +823,10 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    fn id(s: &str) -> TableCellAxis {
+        TableCellAxis::Id(s.to_string())
+    }
+
     #[test]
     fn table_cells_fall_back_to_label() {
         let rows = rows_from_items(&items(json!([
@@ -860,22 +891,22 @@ mod tests {
     #[test]
     fn table_cell_element_id_is_logical_and_unambiguous() {
         assert_eq!(
-            table_cell_element_id("tbl", "ada", "done"),
-            "tbl/td/3:ada/4:done"
+            table_cell_element_id("tbl", &id("ada"), &id("done")),
+            "tbl/td/row/id/3:ada/col/id/4:done"
         );
         // Namespaced keywords keep `/` on the wire; length-prefixing
         // keeps (row, col) pairs distinct under naïve `/` splits.
         assert_eq!(
-            table_cell_element_id("tbl", "user/ada", "col/done"),
-            "tbl/td/8:user/ada/8:col/done"
+            table_cell_element_id("tbl", &id("user/ada"), &id("col/done")),
+            "tbl/td/row/id/8:user/ada/col/id/8:col/done"
         );
         assert_ne!(
-            table_cell_element_id("tbl", "user/ada", "done"),
-            table_cell_element_id("tbl", "user", "ada/done")
+            table_cell_element_id("tbl", &id("user/ada"), &id("done")),
+            table_cell_element_id("tbl", &id("user"), &id("ada/done"))
         );
         assert_ne!(
-            table_cell_element_id("tbl", "user/ada", "x"),
-            table_cell_element_id("tbl", "user", "ada/x")
+            table_cell_element_id("tbl", &id("user/ada"), &id("x")),
+            table_cell_element_id("tbl", &id("user"), &id("ada/x"))
         );
     }
 
@@ -897,10 +928,13 @@ mod tests {
         }])));
         let mut delegate = RowTableDelegate::new(cols, rows).with_cell_host("tbl", tx);
         let progress = delegate.td_element_id(0, 1);
-        assert_eq!(progress, "tbl/td/3:ada/4:done");
+        assert_eq!(progress, "tbl/td/row/id/3:ada/col/id/4:done");
         move_table_column(&mut delegate.columns, &mut delegate.rows, 1, 2);
         assert_eq!(delegate.td_element_id(0, 2), progress);
-        assert_eq!(delegate.td_element_id(0, 1), "tbl/td/3:ada/6:status");
+        assert_eq!(
+            delegate.td_element_id(0, 1),
+            "tbl/td/row/id/3:ada/col/id/6:status"
+        );
         assert_ne!(delegate.td_element_id(0, 1), progress);
     }
 
@@ -913,14 +947,71 @@ mod tests {
         let cols = items(json!([{"id": "done", "label": "Done"}]));
         let ada = table_row_cell_path("table", &rows[0], 0, &cols, 0);
         let grace = table_row_cell_path("table", &rows[1], 1, &cols, 0);
-        assert_eq!(ada, "table/td/3:ada/4:done");
-        assert_eq!(grace, "table/td/5:grace/4:done");
+        assert_eq!(ada, "table/td/row/id/3:ada/col/id/4:done");
+        assert_eq!(grace, "table/td/row/id/5:grace/col/id/4:done");
         assert_ne!(ada, grace);
         let namespaced = items(json!([{"id": "user/ada", "cells": ["x"]}]));
         assert_eq!(
             table_row_cell_path("t", &namespaced[0], 0, &[], 0),
-            "t/td/8:user/ada/2:#0"
+            "t/td/row/id/8:user/ada/col/index/0"
         );
+    }
+
+    #[test]
+    fn fallback_index_ids_do_not_collide_with_wire_ids() {
+        let missing_row = items(json!([{"cells": ["A"]}]));
+        let hashed_row = items(json!([{"id": "#0", "cells": ["B"]}]));
+        let col = items(json!([{"id": "done", "label": "Done"}]));
+        assert_eq!(
+            table_row_cell_path("t", &missing_row[0], 0, &col, 0),
+            "t/td/row/index/0/col/id/4:done"
+        );
+        assert_eq!(
+            table_row_cell_path("t", &hashed_row[0], 0, &col, 0),
+            "t/td/row/id/2:#0/col/id/4:done"
+        );
+        assert_ne!(
+            table_row_cell_path("t", &missing_row[0], 0, &col, 0),
+            table_row_cell_path("t", &hashed_row[0], 0, &col, 0)
+        );
+
+        let row = items(json!([{"id": "ada", "cells": ["x", "y"]}]));
+        let missing_col: Vec<Item> = Vec::new();
+        let hashed_col = items(json!([{"id": "#0", "label": "Zero"}]));
+        assert_eq!(
+            table_row_cell_path("t", &row[0], 0, &missing_col, 0),
+            "t/td/row/id/3:ada/col/index/0"
+        );
+        assert_eq!(
+            table_row_cell_path("t", &row[0], 0, &hashed_col, 0),
+            "t/td/row/id/3:ada/col/id/2:#0"
+        );
+        assert_ne!(
+            table_row_cell_path("t", &row[0], 0, &missing_col, 0),
+            table_row_cell_path("t", &row[0], 0, &hashed_col, 0)
+        );
+
+        let (tx, _) = mpsc::channel();
+        let missing_key = columns_from_items(&items(json!([{}])));
+        let hashed_key = columns_from_items(&items(json!([{"id": "#0", "label": "Zero"}])));
+        let rows = rows_from_items(&items(json!([{"id": "ada", "cells": ["A"]}])));
+        let missing =
+            RowTableDelegate::new(missing_key, rows.clone()).with_cell_host("tbl", tx.clone());
+        let hashed = RowTableDelegate::new(hashed_key, rows).with_cell_host("tbl", tx);
+        assert_ne!(missing.td_element_id(0, 0), hashed.td_element_id(0, 0));
+        assert!(missing.td_element_id(0, 0).contains("col/index/0"));
+        assert!(hashed.td_element_id(0, 0).contains("col/id/2:#0"));
+
+        let (tx, _) = mpsc::channel();
+        let col = columns_from_items(&items(json!([{"id": "done"}])));
+        let missing_row = rows_from_items(&items(json!([{"cells": ["A"]}])));
+        let hashed_row = rows_from_items(&items(json!([{"id": "#0", "cells": ["B"]}])));
+        let missing =
+            RowTableDelegate::new(col.clone(), missing_row).with_cell_host("tbl", tx.clone());
+        let hashed = RowTableDelegate::new(col, hashed_row).with_cell_host("tbl", tx);
+        assert_ne!(missing.td_element_id(0, 0), hashed.td_element_id(0, 0));
+        assert!(missing.td_element_id(0, 0).contains("row/index/0"));
+        assert!(hashed.td_element_id(0, 0).contains("row/id/2:#0"));
     }
 
     #[test]
