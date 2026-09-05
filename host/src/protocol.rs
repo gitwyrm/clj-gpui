@@ -647,9 +647,9 @@ pub struct Item {
     pub text: Option<String>,
     #[serde(default)]
     pub disabled: bool,
-    /// Select string form of `SelectItem::display_title`. Kit's API is
-    /// `Option<AnyElement>`; custom display widgets are not wrapped yet.
-    /// Omitted falls back to `label`.
+    /// Select: string form of `SelectItem::display_title` (custom
+    /// `AnyElement` display is not wrapped). Omitted falls back to `label`.
+    /// Bar points: Kit `BarChart::label` text; empty/omitted formats the value.
     #[serde(default)]
     pub display: Option<String>,
     #[serde(default)]
@@ -732,9 +732,10 @@ pub struct Item {
     pub source: Option<String>,
     #[serde(default)]
     pub target: Option<String>,
-    /// Area / radar series fill (hex). Distinct from `color` (stroke / bar fill).
+    /// Area / radar series fill (hex string). Bar points may send Kit
+    /// `BarChart::fill`: a hex string or `{stops, space, angle}`.
     #[serde(default)]
-    pub fill: Option<String>,
+    pub fill: Option<Value>,
     /// Area / radar series stroke (hex). `:color` is the same stroke when `stroke` is omitted.
     #[serde(default)]
     pub stroke: Option<String>,
@@ -785,6 +786,11 @@ impl Item {
             || self.id.as_deref() == Some("-")
             || self.label.as_deref() == Some("-")
             || self.text.as_deref() == Some("-")
+    }
+
+    /// Area-series hex, or a bar point's solid `fill` string.
+    pub fn fill_hex(&self) -> Option<&str> {
+        self.fill.as_ref().and_then(Value::as_str)
     }
 
     pub fn number_value(&self) -> Option<f32> {
@@ -1097,9 +1103,14 @@ pub struct Node {
     /// Chart: grid lines. Default true.
     #[serde(default)]
     pub grid: Option<bool>,
-    /// Bar chart: paint numeric labels on bars. Default false.
+    /// Bar chart: paint labels on bars (Kit `BarChart::label`). Default
+    /// false. Point `display` is the string; omitted display formats the value.
     #[serde(default)]
     pub labels: Option<bool>,
+    /// Bar default `BarChart::fill` when a point omits `fill` / `color`.
+    /// Hex or `{stops, space, angle}`. `fill-gradient` still wins when set.
+    #[serde(default)]
+    pub fill: Option<Value>,
     /// Sankey links. Nodes stay on `items`.
     #[serde(default)]
     pub links: Vec<Item>,

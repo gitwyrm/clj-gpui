@@ -11,9 +11,9 @@ use crate::protocol::{
 };
 use chrono::NaiveDate;
 use gpui::{
-    AnyElement, App, Axis, Context, Corners, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    linear_color_stop, prelude::*, px, relative, size,
+    AnyElement, App, Axis, Background, Bounds, Context, Corners, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, Hsla, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, linear_color_stop, linear_gradient, prelude::*, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Placement, Side, VirtualListScrollHandle,
@@ -1216,6 +1216,10 @@ pub struct ChartPoint {
     pub value: Option<f64>,
     pub values: Vec<f64>,
     pub color: Option<String>,
+    /// Kit `BarChart::label` string. Empty/omitted formats the value.
+    pub display: Option<String>,
+    /// Kit `BarChart::fill` wire value (hex or `{stops, space, angle}`).
+    pub fill: Option<Value>,
     pub open: Option<f64>,
     pub high: Option<f64>,
     pub low: Option<f64>,
@@ -1244,6 +1248,8 @@ impl ChartPoint {
             value,
             values,
             color: item.color.clone(),
+            display: item.display.clone(),
+            fill: item.fill.clone(),
             open: item.open.map(|n| n as f64),
             high: item.high.map(|n| n as f64),
             low: item.low.map(|n| n as f64),
@@ -1264,6 +1270,15 @@ impl ChartPoint {
 
     pub fn series_y(&self) -> Option<f64> {
         self.value.or_else(|| self.values.first().copied())
+    }
+
+    /// Kit `BarChart::label`: point `:display`, else the formatted value.
+    pub fn bar_label(&self) -> String {
+        self.display
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| format_chart_number(self.series_y().unwrap_or(0.0)))
     }
 
     pub fn has_ohlc(&self) -> bool {
@@ -1466,6 +1481,163 @@ pub enum ChartFillGradient {
     },
 }
 
+/// Kit `BarChart::fill` after JSON. `space: chart` uses bar/chart pixel bounds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartBarFill {
+    Solid(String),
+    Linear {
+        start: String,
+        start_at: f32,
+        end: String,
+        end_at: f32,
+        space: ChartFillSpace,
+        angle: Option<f32>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartFillSpace {
+    Bar,
+    Chart,
+}
+
+pub fn parse_chart_bar_fill(value: Option<&Value>) -> Option<ChartBarFill> {
+    match value? {
+        Value::String(s) if !s.is_empty() => Some(ChartBarFill::Solid(s.clone())),
+        Value::Object(map) => {
+            if let Some(stops) = map.get("stops").and_then(Value::as_array) {
+                if stops.len() < 2 {
+                    return None;
+                }
+                let (start, start_at) = gradient_stop(&stops[0])?;
+                let (end, end_at) = gradient_stop(&stops[1])?;
+                let space = match map
+                    .get("space")
+                    .and_then(Value::as_str)
+                    .map(crate::catalog::normalize)
+                    .as_deref()
+                {
+                    Some("chart") => ChartFillSpace::Chart,
+                    _ => ChartFillSpace::Bar,
+                };
+                let angle = map.get("angle").and_then(json_f64).map(|n| n as f32);
+                Some(ChartBarFill::Linear {
+                    start,
+                    start_at,
+                    end,
+                    end_at,
+                    space,
+                    angle,
+                })
+            } else {
+                let color = map.get("color").and_then(Value::as_str)?;
+                if color.is_empty() {
+                    None
+                } else {
+                    Some(ChartBarFill::Solid(color.to_string()))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Ends of the value axis in pixel space: `(base, tip)`.
+fn fill_axis_ends(bounds: Bounds<f32>, alignment: BarAlignment) -> (f32, f32) {
+    match alignment {
+        BarAlignment::Bottom => (bounds.origin.y + bounds.size.height, bounds.origin.y),
+        BarAlignment::Top => (bounds.origin.y, bounds.origin.y + bounds.size.height),
+        BarAlignment::Left => (bounds.origin.x, bounds.origin.x + bounds.size.width),
+        BarAlignment::Right => (bounds.origin.x + bounds.size.width, bounds.origin.x),
+    }
+}
+
+/// Chart-space stop `t` (0 = chart base, 1 = chart tip) in bar-local 0..=1.
+pub fn chart_space_stop_on_bar(
+    t: f32,
+    bar: Bounds<f32>,
+    chart: Bounds<f32>,
+    alignment: BarAlignment,
+) -> f32 {
+    let (c0, c1) = fill_axis_ends(chart, alignment);
+    let (b0, b1) = fill_axis_ends(bar, alignment);
+    let span = b1 - b0;
+    if span.abs() < f32::EPSILON {
+        return 0.0;
+    }
+    let pos = c0 + (c1 - c0) * t;
+    (pos - b0) / span
+}
+
+fn clip_linear_stops(stops: [gpui::LinearColorStop; 2]) -> [gpui::LinearColorStop; 2] {
+    let [a, b] = stops;
+    let span = b.percentage - a.percentage;
+    let sample = |target: f32| -> Hsla {
+        if span.abs() < f32::EPSILON {
+            a.color
+        } else {
+            let t = (target - a.percentage) / span;
+            Hsla {
+                h: a.color.h + (b.color.h - a.color.h) * t,
+                s: a.color.s + (b.color.s - a.color.s) * t,
+                l: a.color.l + (b.color.l - a.color.l) * t,
+                a: a.color.a + (b.color.a - a.color.a) * t,
+            }
+        }
+    };
+    let clip = |stop: gpui::LinearColorStop| {
+        if (0. ..=1.).contains(&stop.percentage) {
+            stop
+        } else {
+            let p = stop.percentage.clamp(0., 1.);
+            linear_color_stop(sample(p), p)
+        }
+    };
+    [clip(a), clip(b)]
+}
+
+pub fn chart_bar_background(
+    fill: Option<&ChartBarFill>,
+    color: Option<&str>,
+    fallback: Hsla,
+    bar_bounds: Bounds<f32>,
+    chart_bounds: Bounds<f32>,
+    alignment: BarAlignment,
+) -> Background {
+    match fill {
+        Some(ChartBarFill::Solid(hex)) => parse_hex_color(hex).unwrap_or(fallback).into(),
+        Some(ChartBarFill::Linear {
+            start,
+            start_at,
+            end,
+            end_at,
+            space,
+            angle,
+        }) => {
+            let start_c = parse_hex_color(start).unwrap_or(fallback);
+            let end_c = parse_hex_color(end).unwrap_or(fallback);
+            let angle = angle.unwrap_or_else(|| alignment.gradient_angle());
+            let stops = match space {
+                ChartFillSpace::Bar => [
+                    linear_color_stop(start_c, *start_at),
+                    linear_color_stop(end_c, *end_at),
+                ],
+                ChartFillSpace::Chart => {
+                    let s0 =
+                        chart_space_stop_on_bar(*start_at, bar_bounds, chart_bounds, alignment);
+                    let s1 = chart_space_stop_on_bar(*end_at, bar_bounds, chart_bounds, alignment);
+                    [linear_color_stop(start_c, s0), linear_color_stop(end_c, s1)]
+                }
+            };
+            let [a, b] = clip_linear_stops(stops);
+            linear_gradient(angle, a, b)
+        }
+        None => parse_hex_color(color.unwrap_or(""))
+            .unwrap_or(fallback)
+            .into(),
+    }
+}
+
 fn gradient_stop(value: &Value) -> Option<(String, f32)> {
     match value {
         Value::Object(map) => {
@@ -1575,7 +1747,7 @@ fn chart_series_meta(node: &Node) -> Vec<ChartSeriesMeta> {
         .map(|item| ChartSeriesMeta {
             name: item.label_or_id(),
             stroke: custom_hex(item.stroke.as_deref().or(item.color.as_deref())),
-            fill: custom_hex(item.fill.as_deref()),
+            fill: custom_hex(item.fill_hex()),
             stroke_style: item.stroke_style.clone(),
         })
         .collect()
@@ -1709,6 +1881,10 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let stroke = cx.theme().chart_1;
     let chart: gpui::AnyElement = match kind.as_str() {
         "bar" => {
+            let labels_on = node.labels.unwrap_or(false)
+                || points
+                    .iter()
+                    .any(|p| p.display.as_deref().is_some_and(|s| !s.trim().is_empty()));
             let mut bar = BarChart::new(points)
                 .band(|p| p.label.clone())
                 .value(|p| p.series_y().unwrap_or(0.0))
@@ -1754,7 +1930,21 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
                     });
                 }
                 None => {
-                    bar = bar.fill(move |p, _, _, _| point_fill(p, stroke));
+                    // Kit `fill` (not `fill_gradient`): solid hex or a linear
+                    // gradient in bar-local or chart pixel space.
+                    let node_fill = parse_chart_bar_fill(node.fill.as_ref());
+                    bar = bar.fill(move |p, bar_bounds, chart_bounds, alignment| {
+                        chart_bar_background(
+                            parse_chart_bar_fill(p.fill.as_ref())
+                                .as_ref()
+                                .or(node_fill.as_ref()),
+                            p.color.as_deref(),
+                            stroke,
+                            bar_bounds,
+                            chart_bounds,
+                            alignment,
+                        )
+                    });
                 }
             }
             if let Some(corners) = chart_corner_radii(node) {
@@ -1768,8 +1958,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             if let Some(ticks) = node.value_tick_count {
                 bar = bar.value_tick_count(ticks as usize);
             }
-            if node.labels.unwrap_or(false) {
-                bar = bar.label(|p| format_chart_number(p.series_y().unwrap_or(0.0)));
+            if labels_on {
+                bar = bar.label(|p| p.bar_label());
             }
             bar.into_any_element()
         }
@@ -2574,9 +2764,9 @@ pub fn sync_input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::EntityId;
+    use gpui::{Bounds, EntityId, Point, Size};
     use gpui_component::plot::shape::{BarAlignment, SankeyAlign, SankeyValueScale};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn iso_dates_round_trip() {
@@ -3657,6 +3847,173 @@ mod tests {
     }
 
     #[test]
+    fn parse_chart_bar_fill_solid_and_linear() {
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!("#3366ff"))),
+            Some(ChartBarFill::Solid("#3366ff".into()))
+        );
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({"color": "#ff0000"}))),
+            Some(ChartBarFill::Solid("#ff0000".into()))
+        );
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({
+                "stops": [
+                    {"color": "#111111", "at": 0},
+                    {"color": "#ffffff", "at": 1}
+                ]
+            }))),
+            Some(ChartBarFill::Linear {
+                start: "#111111".into(),
+                start_at: 0.0,
+                end: "#ffffff".into(),
+                end_at: 1.0,
+                space: ChartFillSpace::Bar,
+                angle: None,
+            })
+        );
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({
+                "stops": [
+                    {"color": "#111111", "at": 0.25},
+                    {"color": "#ffffff", "at": 0.75}
+                ],
+                "space": "chart",
+                "angle": 90
+            }))),
+            Some(ChartBarFill::Linear {
+                start: "#111111".into(),
+                start_at: 0.25,
+                end: "#ffffff".into(),
+                end_at: 0.75,
+                space: ChartFillSpace::Chart,
+                angle: Some(90.0),
+            })
+        );
+        assert_eq!(parse_chart_bar_fill(Some(&json!(""))), None);
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({"stops": [{"color": "#111111", "at": 0}]}))),
+            None
+        );
+    }
+
+    #[test]
+    fn chart_space_stop_on_bar_maps_pixel_axis() {
+        let chart = Bounds {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size {
+                width: 100.0,
+                height: 100.0,
+            },
+        };
+        let full = Bounds {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size {
+                width: 100.0,
+                height: 100.0,
+            },
+        };
+        assert_eq!(
+            chart_space_stop_on_bar(0.0, full, chart, BarAlignment::Bottom),
+            0.0
+        );
+        assert_eq!(
+            chart_space_stop_on_bar(1.0, full, chart, BarAlignment::Bottom),
+            1.0
+        );
+        // Bottom: chart base y=100, tip y=0. Bar y=40..80 → base 80, tip 40.
+        let bar = Bounds {
+            origin: Point { x: 10.0, y: 40.0 },
+            size: Size {
+                width: 20.0,
+                height: 40.0,
+            },
+        };
+        let t0 = chart_space_stop_on_bar(0.0, bar, chart, BarAlignment::Bottom);
+        let t1 = chart_space_stop_on_bar(1.0, bar, chart, BarAlignment::Bottom);
+        let mid = chart_space_stop_on_bar(0.5, bar, chart, BarAlignment::Bottom);
+        assert!((t0 - (-0.5)).abs() < 1e-5, "{t0}");
+        assert!((t1 - 2.0).abs() < 1e-5, "{t1}");
+        assert!((mid - 0.75).abs() < 1e-5, "{mid}");
+        let left = chart_space_stop_on_bar(0.0, full, chart, BarAlignment::Left);
+        let left_tip = chart_space_stop_on_bar(1.0, full, chart, BarAlignment::Left);
+        assert_eq!(left, 0.0);
+        assert_eq!(left_tip, 1.0);
+    }
+
+    #[test]
+    fn bar_label_prefers_display_over_formatted_value() {
+        let custom = ChartPoint::from_item(&Item {
+            id: Some("a".into()),
+            label: Some("A".into()),
+            value: Some(json!(3.5)),
+            display: Some("3 units".into()),
+            ..Item::default()
+        });
+        assert_eq!(custom.bar_label(), "3 units");
+        let numeric = ChartPoint::from_item(&Item {
+            id: Some("b".into()),
+            label: Some("B".into()),
+            value: Some(json!(4.0)),
+            display: Some("  ".into()),
+            ..Item::default()
+        });
+        assert_eq!(numeric.bar_label(), "4");
+        let omitted = ChartPoint::from_item(&Item {
+            id: Some("c".into()),
+            label: Some("C".into()),
+            value: Some(json!(2.5)),
+            ..Item::default()
+        });
+        assert_eq!(omitted.bar_label(), "2.5");
+    }
+
+    #[test]
+    fn chart_points_copy_bar_fill_and_display() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "chart",
+            "variant": "bar",
+            "labels": true,
+            "fill": "#112233",
+            "items": [
+                {
+                    "id": "a",
+                    "label": "A",
+                    "value": 3,
+                    "display": "3u",
+                    "fill": {
+                        "stops": [
+                            {"color": "#3366ff", "at": 0},
+                            {"color": "#88aaff", "at": 1}
+                        ],
+                        "space": "bar"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(node.fill.as_ref().and_then(Value::as_str), Some("#112233"));
+        let points = chart_points(&node);
+        assert_eq!(points[0].display.as_deref(), Some("3u"));
+        assert_eq!(points[0].bar_label(), "3u");
+        assert_eq!(
+            parse_chart_bar_fill(points[0].fill.as_ref()),
+            Some(ChartBarFill::Linear {
+                start: "#3366ff".into(),
+                start_at: 0.0,
+                end: "#88aaff".into(),
+                end_at: 1.0,
+                space: ChartFillSpace::Bar,
+                angle: None,
+            })
+        );
+        assert_eq!(
+            parse_chart_bar_fill(node.fill.as_ref()),
+            Some(ChartBarFill::Solid("#112233".into()))
+        );
+    }
+
+    #[test]
     fn chart_stroke_style_and_line_opt_in_dot() {
         assert_eq!(chart_stroke_style_name(Some("linear")), Some("linear"));
         assert_eq!(
@@ -3695,7 +4052,7 @@ mod tests {
         let points = chart_points(&node);
         assert_eq!(points[0].values, vec![4.0, 8.0]);
         assert_eq!(points[1].values, vec![5.0, 9.0]);
-        assert_eq!(node.series[0].fill.as_deref(), Some("#3366ff"));
+        assert_eq!(node.series[0].fill_hex(), Some("#3366ff"));
         assert_eq!(node.series[1].stroke_style.as_deref(), Some("linear"));
     }
 
