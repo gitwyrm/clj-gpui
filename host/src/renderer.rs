@@ -9,9 +9,8 @@ use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync, TableSelectionSync};
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
-    EntityId, Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
-    PathPromptOptions, Pixels, SharedString, Styled, Subscription, Window, canvas, div, prelude::*,
-    px, size,
+    EntityId, Focusable, GlobalElementId, InspectorElementId, LayoutId, PathPromptOptions, Pixels,
+    SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
@@ -1506,9 +1505,11 @@ impl RootView {
                 }
             }
             "button" => {
-                let label = node.text.clone().unwrap_or_default();
-                let mut button =
-                    overlay::apply_button_chrome(Button::new(eid(&key)).label(label), node);
+                let mut button = Button::new(eid(&key));
+                if let Some(label) = mapping::jump_button_visible_label(node) {
+                    button = button.label(label.to_string());
+                }
+                let mut button = overlay::apply_button_chrome(button, node);
                 if node.on_click.is_some() {
                     let emit = Self::action_emitter(cx);
                     let key = key.clone();
@@ -1590,7 +1591,7 @@ impl RootView {
             "rating" => self.render_rating(node, &key, cx),
             "stepper" => self.render_stepper(node, &key, cx),
             "pagination" => self.render_pagination(node, &key, cx),
-            "progress" => self.render_progress(node, cx),
+            "progress" => self.render_progress(node, &key, cx),
             "progress-circle" => self.render_progress_circle(node, path, &key, window, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
@@ -1870,10 +1871,9 @@ impl RootView {
             .into_any_element()
     }
 
-    fn render_progress(&self, node: &Node, cx: &App) -> AnyElement {
-        let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
+    fn render_progress(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         apply_style(
-            Progress::new(node.id.clone().unwrap_or_else(|| "progress".into())).value(value),
+            mapping::apply_progress_chrome(Progress::new(eid(key)), node),
             node,
             cx,
         )
@@ -1988,13 +1988,12 @@ impl RootView {
     }
 
     fn render_spinner(&self, node: &Node, cx: &App) -> AnyElement {
-        let mut spinner =
-            Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
-            spinner = spinner.icon(icon);
-        }
         // Spinner is not `Styled`; a host div owns Clojure layout/visual keys.
-        style_host(spinner, node, cx)
+        style_host(
+            mapping::apply_spinner_chrome(Spinner::new(), node),
+            node,
+            cx,
+        )
     }
 
     fn render_tag(&self, node: &Node, cx: &App) -> AnyElement {
@@ -2021,10 +2020,7 @@ impl RootView {
             Some("error") | Some("danger") => Alert::error(eid(key), message),
             _ => Alert::new(eid(key), message),
         };
-        if let Some(title) = node.title.clone() {
-            alert = alert.title(title);
-        }
-        alert = alert.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        alert = mapping::apply_alert_chrome(alert, node);
         if let Some(callback_id) = node.on_close.clone() {
             alert = alert.on_close(self.click(callback_id));
         }
@@ -2032,14 +2028,22 @@ impl RootView {
     }
 
     fn render_skeleton(&self, node: &Node, cx: &App) -> AnyElement {
-        apply_style(Skeleton::new(), node, cx).into_any_element()
+        apply_style(
+            mapping::apply_skeleton_chrome(Skeleton::new(), node),
+            node,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_kbd(&self, node: &Node, cx: &App) -> AnyElement {
         let text = node.text.clone().unwrap_or_default();
-        match Keystroke::parse(&text) {
-            Ok(stroke) => apply_style(Kbd::new(stroke), node, cx).into_any_element(),
-            Err(_) => apply_style(div().child(text), node, cx).into_any_element(),
+        match mapping::parse_keystroke(&text) {
+            Some(stroke) => {
+                apply_style(mapping::apply_kbd_chrome(Kbd::new(stroke), node), node, cx)
+                    .into_any_element()
+            }
+            None => apply_style(div().child(text), node, cx).into_any_element(),
         }
     }
 
@@ -2087,19 +2091,12 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut badge = Badge::new();
-        if node.dot {
-            badge = badge.dot();
-        } else if let Some(count) = node.count {
-            badge = badge.count(count as usize);
-        } else if let Some(n) = node.number_value() {
-            badge = badge.count(n.max(0.0) as usize);
-        }
-        badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        let badge = mapping::apply_badge_chrome(Badge::new(), node);
         // Badge is not `Styled`; wrapper owns :width/:height/:size/:flex.
+        // `:color` stays on Kit Badge (overlay), not the host text color.
         style_host(
             badge.children(self.render_children(node, path, window, cx)),
-            node,
+            &mapping::badge_host_node(node),
             cx,
         )
     }
@@ -6578,6 +6575,10 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
     let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
         return el;
     };
+    // Button uses Kit `Button::tooltip`. Wrapping again would nest two tips.
+    if node.kind == "button" {
+        return el;
+    }
     copy_outer_layout(div().id(eid(&format!("{key}-tip"))), node)
         .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
         .child(el)

@@ -146,7 +146,17 @@
     (is (nil? (:size n))))
   (let [n (ui/input "" {:size :large})]
     (is (= "large" (:control-size n)))
-    (is (nil? (:size n)))))
+    (is (nil? (:size n))))
+  (let [n (ui/button "More" {:icon :chevron-down :caret true :loading true
+                             :rounded :none :tab-stop false})]
+    (is (true? (:dropdown-caret n)))
+    (is (nil? (:caret n)))
+    (is (true? (:loading n)))
+    (is (= :none (:rounded n)))
+    (is (false? (:tab-stop n))))
+  (let [n (ui/button "More" {:caret true :dropdown-caret false})]
+    (is (false? (:dropdown-caret n)))
+    (is (nil? (:caret n)))))
 
 (deftest option-item-normalization
   (is (= {:id "light" :label "light"} (ui/option-item :light)))
@@ -278,7 +288,13 @@
       (is (= :underline (:variant n)))))
   (testing "progress clamps in host; Clojure passes the number"
     (is (= 45 (:value (ui/progress 45))))
-    (is (= 0 (:value (ui/progress nil)))))
+    (is (= 0 (:value (ui/progress nil))))
+    (let [n (ui/progress nil {:loading true :size :small :color "#3366ff"
+                              :accessibility-label "Upload"})]
+      (is (true? (:loading n)))
+      (is (= "small" (:control-size n)))
+      (is (nil? (:size n)))
+      (is (= "Upload" (:accessibility-label n)))))
   (testing "progress-circle pagination shimmer"
     (let [n (ui/progress-circle 45 {:size :large :loading true :color "#3366ff"}
                                 (ui/label "45"))]
@@ -320,14 +336,28 @@
   (testing "tag alert kbd link"
     (is (= :danger (:variant (ui/tag "Err" {:variant :danger}))))
     (is (= "Saved" (:text (ui/alert "Saved" {:variant :success}))))
+    (let [n (ui/alert "Down" {:banner true :visible false :icon :info})]
+      (is (true? (:banner n)))
+      (is (false? (:visible n)))
+      (is (= :info (:icon n))))
     (is (= "ctrl-s" (:text (ui/kbd "ctrl-s"))))
+    (is (true? (:outline (ui/kbd "ctrl-s" {:outline true}))))
+    (is (false? (:appearance (ui/kbd "ctrl-s" {:appearance false}))))
     (is (= "https://clojure.org" (:href (ui/link "https://clojure.org" "Clojure"))))
     (is (= "Clojure" (:text (ui/link "https://clojure.org" "Clojure")))))
   (testing "badge wraps children"
     (let [n (ui/badge 4 (ui/icon :bell))]
       (is (= 4 (:count n)))
       (is (= :icon (get-in n [:children 0 :type]))))
-    (is (true? (:dot (ui/badge {:dot true} (ui/label "x"))))))
+    (is (true? (:dot (ui/badge {:dot true} (ui/label "x")))))
+    (let [n (ui/badge {:icon :check :max 9 :color "#3366ff"} (ui/icon :user))]
+      (is (= :check (:icon n)))
+      (is (= 9 (:max n)))))
+  (testing "skeleton spinner extras"
+    (is (= :secondary (:variant (ui/skeleton {:secondary true}))))
+    (is (= :secondary (:variant (ui/skeleton {:variant :secondary}))))
+    (is (nil? (:secondary (ui/skeleton {:secondary true}))))
+    (is (= "#3366ff" (:color (ui/spinner {:color "#3366ff"})))))
   (testing "group-box flattens children"
     (let [n (ui/group-box {:title "Audio" :variant :outline}
                           (ui/label "a")

@@ -1125,6 +1125,8 @@ pub struct Node {
     pub options: Vec<Item>,
     #[serde(default)]
     pub href: Option<String>,
+    /// `icon` widget; Spinner; Button / Alert / Badge; Avatar placeholder;
+    /// Select / Combobox trigger chevron.
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default, rename = "control-size")]
@@ -1135,6 +1137,7 @@ pub struct Node {
     pub dot: bool,
     #[serde(default)]
     pub dashed: bool,
+    /// Tag / Button / DropdownButton. Kbd: Kit `outline()`.
     #[serde(default)]
     pub outline: bool,
     /// Button / dropdown-button Kit `Selectable` chrome. List / table /
@@ -1290,7 +1293,8 @@ pub struct Node {
     #[serde(default)]
     pub span: u32,
     /// Kit `Table::accessibility_label`. Caption is visible text and is
-    /// not used as the accessible name.
+    /// not used as the accessible name. Button / Progress /
+    /// ProgressCircle: Kit `accessibility_label`.
     #[serde(default, rename = "accessibility-label")]
     pub accessibility_label: Option<String>,
     /// `BarChart` alignment: `bottom` (default), `top`, `left`, `right`.
@@ -1412,8 +1416,9 @@ pub struct Node {
     /// Pagination visible page buttons. Kit default 5. Omitted leaves Kit's default.
     #[serde(default, rename = "visible-pages")]
     pub visible_pages: Option<f32>,
-    /// ProgressCircle indeterminate animation. When true, Kit ignores `value`.
-    /// Marker: Kit `Marker::loading`. Command: `CommandState::set_loading`.
+    /// ProgressCircle / Progress indeterminate animation. When true, Kit
+    /// ignores `value`. Button: Kit `Button::loading`. Marker: Kit
+    /// `Marker::loading`. Command: `CommandState::set_loading`.
     /// List / DataTable: Kit `ListDelegate` / `TableDelegate` `loading`.
     #[serde(default)]
     pub loading: bool,
@@ -1491,6 +1496,7 @@ pub struct Node {
     pub close_delay: Option<f32>,
     /// HoverCard default popover chrome. Kit default true. Omitted leaves Kit's default.
     /// Select / Combobox: Kit `appearance` (Kit default true).
+    /// Kbd: Kit `Kbd::appearance` (Kit default true).
     #[serde(default)]
     pub appearance: Option<bool>,
     /// AvatarGroup overflow ellipsis avatar. Kit default false.
@@ -1534,6 +1540,8 @@ pub struct Node {
     #[serde(default, rename = "loading-style")]
     pub loading_style: Option<String>,
     /// Marker: Kit `role` (`status`, `alert`, `log`). Takes effect with `id`.
+    /// Button: Kit `RoleOverride` (`button`, `link`, `menuitem`, …;
+    /// `none` / `presentation` is presentational). Omitted is Kit implicit.
     #[serde(default)]
     pub role: Option<String>,
     /// Message: Kit `with_stack_style`. Nested style map, not a child widget.
@@ -1638,6 +1646,32 @@ pub struct Node {
     /// Omitted is Kit 20.
     #[serde(default, rename = "load-more-threshold")]
     pub load_more_threshold: Option<f32>,
+    /// Button: Kit `ButtonRounded` (`none` / `small` / `medium` / `large`
+    /// or a pixel number). Omitted is Kit Medium.
+    #[serde(default)]
+    pub rounded: Option<Value>,
+    /// Button: Kit `dropdown_caret`. JSON `caret` is the same flag.
+    #[serde(default, rename = "dropdown-caret", alias = "caret")]
+    pub dropdown_caret: bool,
+    /// Button: Kit `toggled` (assistive pressed state). Omitted is an
+    /// ordinary push button.
+    #[serde(default)]
+    pub toggled: Option<bool>,
+    /// Button: Kit `tab_index`. Omitted is Kit 0.
+    #[serde(default, rename = "tab-index")]
+    pub tab_index: Option<f32>,
+    /// Button: Kit `tab_stop`. Omitted is Kit true.
+    #[serde(default, rename = "tab-stop")]
+    pub tab_stop: Option<bool>,
+    /// Button: Kit `loading_icon` (kebab icon name). Omitted is Kit spinner.
+    #[serde(default, rename = "loading-icon")]
+    pub loading_icon: Option<String>,
+    /// Alert: Kit `banner()`. Omitted is Kit false.
+    #[serde(default)]
+    pub banner: bool,
+    /// Alert: Kit `visible`. Omitted is Kit true.
+    #[serde(default)]
+    pub visible: Option<bool>,
 }
 
 impl Node {
@@ -1859,6 +1893,103 @@ mod tests {
         assert_eq!(node.text.as_deref(), Some("+"));
         assert_eq!(node.on_click.as_deref(), Some("cb-1"));
         assert!(node.primary);
+    }
+
+    #[test]
+    fn decodes_button_alert_and_feedback_chrome() {
+        let button: Node = serde_json::from_value(json!({
+            "type": "button",
+            "text": "More",
+            "icon": "chevron-down",
+            "loading": true,
+            "loading-icon": "loader",
+            "rounded": "none",
+            "dropdown-caret": true,
+            "toggled": true,
+            "tab-index": 2,
+            "tab-stop": false,
+            "tooltip": "Open menu",
+            "accessibility-label": "More actions",
+            "role": "button"
+        }))
+        .unwrap();
+        assert!(button.loading);
+        assert_eq!(button.icon.as_deref(), Some("chevron-down"));
+        assert_eq!(button.loading_icon.as_deref(), Some("loader"));
+        assert_eq!(button.rounded, Some(json!("none")));
+        assert!(button.dropdown_caret);
+        assert_eq!(button.toggled, Some(true));
+        assert_eq!(button.tab_index, Some(2.0));
+        assert_eq!(button.tab_stop, Some(false));
+        assert_eq!(button.role.as_deref(), Some("button"));
+
+        let caret: Node = serde_json::from_value(json!({
+            "type": "button",
+            "caret": true
+        }))
+        .unwrap();
+        assert!(caret.dropdown_caret);
+        assert!(
+            serde_json::from_value::<Node>(json!({
+                "type": "button",
+                "caret": true,
+                "dropdown-caret": false
+            }))
+            .is_err(),
+            "both alias names on the wire are a Serde duplicate field"
+        );
+
+        let alert: Node = serde_json::from_value(json!({
+            "type": "alert",
+            "text": "Heads up",
+            "banner": true,
+            "visible": false,
+            "icon": "info"
+        }))
+        .unwrap();
+        assert!(alert.banner);
+        assert_eq!(alert.visible, Some(false));
+        assert_eq!(alert.icon.as_deref(), Some("info"));
+
+        let badge: Node = serde_json::from_value(json!({
+            "type": "badge",
+            "count": 120,
+            "max": 99,
+            "color": "#3366ff",
+            "icon": "bell"
+        }))
+        .unwrap();
+        assert_eq!(badge.max, Some(99.0));
+        assert_eq!(badge.color.as_deref(), Some("#3366ff"));
+        assert_eq!(badge.icon.as_deref(), Some("bell"));
+
+        let progress: Node = serde_json::from_value(json!({
+            "type": "progress",
+            "value": 40,
+            "loading": true,
+            "color": "#22c55e",
+            "accessibility-label": "Upload"
+        }))
+        .unwrap();
+        assert!(progress.loading);
+        assert_eq!(progress.accessibility_label.as_deref(), Some("Upload"));
+
+        let skeleton: Node = serde_json::from_value(json!({
+            "type": "skeleton",
+            "variant": "secondary"
+        }))
+        .unwrap();
+        assert_eq!(skeleton.variant.as_deref(), Some("secondary"));
+
+        let kbd: Node = serde_json::from_value(json!({
+            "type": "kbd",
+            "text": "ctrl-s",
+            "appearance": false,
+            "outline": true
+        }))
+        .unwrap();
+        assert_eq!(kbd.appearance, Some(false));
+        assert!(kbd.outline);
     }
 
     #[test]
