@@ -280,6 +280,7 @@ struct ListSlot {
     state: Entity<ListState<RowListDelegate>>,
     fingerprint: u64,
     searchable: bool,
+    selectable: bool,
     on_change: Option<String>,
     on_confirm: Option<String>,
 }
@@ -3128,7 +3129,12 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.list_slot(key, node, window, cx);
-        viewport_sized(List::new(&state), node, 200.0, cx)
+        viewport_sized(
+            mapping::apply_list_chrome(List::new(&state), node),
+            node,
+            200.0,
+            cx,
+        )
     }
 
     fn list_slot(
@@ -3142,28 +3148,59 @@ impl RootView {
         let items = rows::rows_from_items(node.collection());
         let fingerprint = rows::rows_fingerprint(node.collection());
         let searchable = node.searchable;
+        let selectable = node.selectable.or(node.row_selectable).unwrap_or(true);
         let selected = node.string_value();
+        let collection_changed;
 
         if let Some(slot) = self.lists.get_mut(key) {
             slot.on_change = node.on_change.clone();
             slot.on_confirm = node.on_confirm.clone();
             let state = slot.state.clone();
-            if slot.fingerprint != fingerprint || slot.searchable != searchable {
+            collection_changed = slot.fingerprint != fingerprint || slot.searchable != searchable;
+            if collection_changed || slot.selectable != selectable {
                 slot.fingerprint = fingerprint;
                 slot.searchable = searchable;
+                slot.selectable = selectable;
                 let items = items.clone();
                 state.update(cx, |list, cx| {
-                    list.delegate_mut().set_items(items);
+                    if collection_changed {
+                        list.delegate_mut().set_items(items);
+                    }
                     list.set_searchable(searchable, cx);
+                    list.set_selectable(selectable, cx);
                     cx.notify();
                 });
             }
+            state.update(cx, |list, _| {
+                list.delegate_mut().sync_chrome(
+                    node.loading,
+                    node.has_more,
+                    list_load_more_threshold(node),
+                    node.empty.clone(),
+                    node.on_load_more.clone(),
+                    collection_changed,
+                );
+            });
             sync_list_selection(&state, selected.as_deref(), window, cx);
             return state;
         }
 
-        let delegate = RowListDelegate::new(items);
-        let state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(searchable));
+        let delegate = RowListDelegate::new(items).with_host(self.cmd_tx.clone());
+        let state = cx.new(|cx| {
+            ListState::new(delegate, window, cx)
+                .searchable(searchable)
+                .selectable(selectable)
+        });
+        state.update(cx, |list, _| {
+            list.delegate_mut().sync_chrome(
+                node.loading,
+                node.has_more,
+                list_load_more_threshold(node),
+                node.empty.clone(),
+                node.on_load_more.clone(),
+                true,
+            );
+        });
         sync_list_selection(&state, selected.as_deref(), window, cx);
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &ListEvent, cx| match event {
@@ -3190,6 +3227,7 @@ impl RootView {
                 state: state.clone(),
                 fingerprint,
                 searchable,
+                selectable,
                 on_change: node.on_change.clone(),
                 on_confirm: node.on_confirm.clone(),
             },
@@ -3206,7 +3244,10 @@ impl RootView {
     ) -> AnyElement {
         let state = self.table_slot(key, node, window, cx);
         viewport_sized(
-            DataTable::new(&state).with_size(mapping::table_row_size(node)),
+            mapping::apply_data_table_chrome(
+                DataTable::new(&state).with_size(mapping::table_row_size(node)),
+                node,
+            ),
             node,
             220.0,
             cx,
@@ -3267,7 +3308,7 @@ impl RootView {
                         if identity_changed || definition_changed {
                             table.delegate_mut().columns = next_cols;
                         }
-                        table.delegate_mut().rows = next_rows;
+                        table.delegate_mut().set_rows(next_rows);
                     }
                     if let Some(header_groups) = header_groups {
                         table.delegate_mut().header_groups = header_groups;
@@ -3282,8 +3323,16 @@ impl RootView {
                 });
             }
             state.update(cx, |table, _| {
-                table.cell_selectable = cell_selectable;
-                table.row_header = row_header;
+                apply_table_state_flags(table, node);
+                table.delegate_mut().sync_chrome(
+                    node.loading,
+                    node.has_more,
+                    load_more_threshold_rows(node),
+                    node.empty.clone(),
+                    node.on_load_more.clone(),
+                    node.on_sort.clone(),
+                    rows_changed || identity_changed || definition_changed,
+                );
             });
             self.sync_table_selection(key, &state, &wanted, cx);
             self.flush_table_export(key, node, &state, cx);
@@ -3294,9 +3343,20 @@ impl RootView {
             .with_header_groups(header_groups)
             .with_cell_host(key.to_string(), self.cmd_tx.clone());
         let state = cx.new(|cx| {
-            TableState::new(delegate, window, cx)
+            let mut table = TableState::new(delegate, window, cx)
                 .cell_selectable(cell_selectable)
-                .row_header(row_header)
+                .row_header(row_header);
+            apply_table_state_flags(&mut table, node);
+            table.delegate_mut().sync_chrome(
+                node.loading,
+                node.has_more,
+                load_more_threshold_rows(node),
+                node.empty.clone(),
+                node.on_load_more.clone(),
+                node.on_sort.clone(),
+                true,
+            );
+            table
         });
         // Subscribe after the first programmatic select so SelectRow from
         // `set_selected_row` has no listener yet. Reuse uses suppress_select.
@@ -6122,6 +6182,43 @@ fn notify_nav_forward_change(
             )],
         );
     });
+}
+
+fn load_more_threshold_rows(node: &Node) -> usize {
+    node.load_more_threshold
+        .filter(|n| n.is_finite() && *n >= 1.0)
+        .map(|n| n.round() as usize)
+        .unwrap_or(20)
+}
+
+fn list_load_more_threshold(node: &Node) -> usize {
+    load_more_threshold_rows(node)
+}
+
+fn apply_table_state_flags(table: &mut TableState<RowTableDelegate>, node: &Node) {
+    table.cell_selectable = node.cell_selectable.unwrap_or(false);
+    table.row_header = node.row_header.unwrap_or(true);
+    if let Some(value) = node.sortable {
+        table.sortable = value;
+    }
+    if let Some(value) = node.col_movable {
+        table.col_movable = value;
+    }
+    if let Some(value) = node.col_resizable {
+        table.col_resizable = value;
+    }
+    if let Some(value) = node.col_fixed {
+        table.col_fixed = value;
+    }
+    if let Some(value) = node.loop_selection {
+        table.loop_selection = value;
+    }
+    if let Some(value) = node.row_selectable {
+        table.row_selectable = value;
+    }
+    if let Some(value) = node.col_selectable {
+        table.col_selectable = value;
+    }
 }
 
 fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {

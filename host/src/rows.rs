@@ -8,14 +8,14 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    IndexPath, h_flex,
+    ActiveTheme as _, Icon, IconName, IndexPath, h_flex,
     list::{ListDelegate, ListItem, ListState},
-    table::{Column, ColumnGroup, TableDelegate, TableState},
+    table::{Column, ColumnGroup, ColumnSort, TableDelegate, TableState},
     tree::TreeItem,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
@@ -68,6 +68,12 @@ fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
         item.span.hash(hasher);
         item.align.hash(hasher);
         item.selectable.hash(hasher);
+        item.sort.hash(hasher);
+        item.fixed.hash(hasher);
+        item.resizable.hash(hasher);
+        item.movable.hash(hasher);
+        item.min_width.map(f32::to_bits).hash(hasher);
+        item.max_width.map(f32::to_bits).hash(hasher);
         item.checked.hash(hasher);
         item.icon.hash(hasher);
         item.separator.hash(hasher);
@@ -87,7 +93,7 @@ pub fn column_identity_fingerprint(items: &[Item]) -> u64 {
     hasher.finish()
 }
 
-/// Column label/width/align/selectable (full Item hash).
+/// Column label/width/align/selectable/sort/fixed/resize (full Item hash).
 pub fn column_definition_fingerprint(items: &[Item]) -> u64 {
     rows_fingerprint(items)
 }
@@ -345,9 +351,96 @@ pub fn columns_from_items(items: &[Item]) -> Vec<Column> {
             if let Some(selectable) = item.selectable {
                 col = col.selectable(selectable);
             }
+            if let Some(sort) = column_sort(item.sort.as_deref()) {
+                col = col.sort(sort);
+            }
+            if column_fixed(item.fixed.as_deref()) {
+                col = col.fixed_left();
+            }
+            if let Some(resizable) = item.resizable {
+                col = col.resizable(resizable);
+            }
+            if let Some(movable) = item.movable {
+                col = col.movable(movable);
+            }
+            if let Some(min_width) = item.min_width.filter(|w| w.is_finite() && *w > 0.0) {
+                col = col.min_width(px(min_width));
+            }
+            if let Some(max_width) = item.max_width.filter(|w| w.is_finite() && *w > 0.0) {
+                col = col.max_width(px(max_width));
+            }
             col
         })
         .collect()
+}
+
+fn column_sort(value: Option<&str>) -> Option<ColumnSort> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "asc" | "ascending" => Some(ColumnSort::Ascending),
+        "desc" | "descending" => Some(ColumnSort::Descending),
+        "default" | "true" | "sortable" => Some(ColumnSort::Default),
+        "false" | "none" | "" => None,
+        _ => Some(ColumnSort::Default),
+    }
+}
+
+fn column_fixed(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|s| s.trim().to_ascii_lowercase()),
+        Some(name) if name == "left" || name == "true" || name == "1"
+    )
+}
+
+fn cell_sort_key(row: &Row, col_ix: usize) -> String {
+    row.cells
+        .get(col_ix)
+        .map(TableCell::export_text)
+        .unwrap_or_default()
+}
+
+fn cmp_cell(a: &Row, b: &Row, col_ix: usize) -> std::cmp::Ordering {
+    let sa = cell_sort_key(a, col_ix);
+    let sb = cell_sort_key(b, col_ix);
+    match (sa.parse::<f64>(), sb.parse::<f64>()) {
+        (Ok(na), Ok(nb)) => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
+        _ => sa.to_lowercase().cmp(&sb.to_lowercase()),
+    }
+}
+
+/// Sort displayed rows. `Default` restores `source_order` (last Clojure tree).
+pub fn sort_table_rows(rows: &mut [Row], col_ix: usize, sort: ColumnSort, source_order: &[String]) {
+    match sort {
+        ColumnSort::Default => rows.sort_by_key(|row| {
+            source_order
+                .iter()
+                .position(|id| id == &row.id)
+                .unwrap_or(usize::MAX)
+        }),
+        ColumnSort::Ascending => rows.sort_by(|a, b| cmp_cell(a, b, col_ix)),
+        ColumnSort::Descending => rows.sort_by(|a, b| cmp_cell(b, a, col_ix)),
+    }
+}
+
+/// After a Clojure column merge, re-apply an active Asc/Desc so row order
+/// matches header chrome. Default / no-sort restores `source_order`.
+pub fn apply_active_column_sort(columns: &[Column], rows: &mut Vec<Row>, source_order: &[String]) {
+    if let Some((ix, sort)) = columns.iter().enumerate().find_map(|(ix, col)| {
+        col.sort
+            .filter(|sort| !matches!(sort, ColumnSort::Default))
+            .map(|sort| (ix, sort))
+    }) {
+        sort_table_rows(rows, ix, sort, source_order);
+    } else {
+        sort_table_rows(rows, 0, ColumnSort::Default, source_order);
+    }
+}
+
+fn column_sort_name(sort: ColumnSort) -> &'static str {
+    match sort {
+        ColumnSort::Ascending => "asc",
+        ColumnSort::Descending => "desc",
+        ColumnSort::Default => "default",
+    }
 }
 
 /// Kit `TableDelegate::move_column`: reorder columns and matching cells
@@ -496,6 +589,13 @@ pub struct RowListDelegate {
     pub visible: Vec<usize>,
     pub selected: Option<IndexPath>,
     query: String,
+    loading: bool,
+    has_more: bool,
+    load_more_threshold: usize,
+    empty: Option<String>,
+    on_load_more: Option<String>,
+    load_more_sent: bool,
+    cmd_tx: Option<std::sync::mpsc::Sender<Cmd>>,
 }
 
 impl RowListDelegate {
@@ -506,7 +606,48 @@ impl RowListDelegate {
             visible,
             selected: None,
             query: String::new(),
+            loading: false,
+            has_more: false,
+            load_more_threshold: 20,
+            empty: None,
+            on_load_more: None,
+            load_more_sent: false,
+            cmd_tx: None,
         }
+    }
+
+    pub fn with_host(mut self, cmd_tx: std::sync::mpsc::Sender<Cmd>) -> Self {
+        self.cmd_tx = Some(cmd_tx);
+        self
+    }
+
+    pub fn sync_chrome(
+        &mut self,
+        loading: bool,
+        has_more: bool,
+        load_more_threshold: usize,
+        empty: Option<String>,
+        on_load_more: Option<String>,
+        collection_changed: bool,
+    ) {
+        self.loading = loading;
+        self.has_more = has_more;
+        self.load_more_threshold = load_more_threshold;
+        self.empty = empty;
+        self.on_load_more = on_load_more;
+        if collection_changed || !has_more || loading {
+            self.load_more_sent = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn load_more_sent(&self) -> bool {
+        self.load_more_sent
+    }
+
+    #[cfg(test)]
+    pub fn mark_load_more_sent(&mut self) {
+        self.load_more_sent = true;
     }
 
     pub fn set_items(&mut self, items: Vec<Row>) {
@@ -591,25 +732,86 @@ impl ListDelegate for RowListDelegate {
     ) {
         self.selected = ix;
     }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        let el = h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(cx.theme().muted_foreground.opacity(0.6));
+        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
+            el.child(text.to_string()).into_any_element()
+        } else {
+            el.child(Icon::new(IconName::Inbox).size_12())
+                .into_any_element()
+        }
+    }
+
+    fn loading(&self, _: &App) -> bool {
+        self.loading
+    }
+
+    fn has_more(&self, _: &App) -> bool {
+        self.has_more
+    }
+
+    fn load_more_threshold(&self) -> usize {
+        self.load_more_threshold
+    }
+
+    fn load_more(&mut self, _: &mut Window, _: &mut Context<ListState<Self>>) {
+        if !self.has_more || self.loading || self.load_more_sent {
+            return;
+        }
+        self.load_more_sent = true;
+        if let (Some(tx), Some(id)) = (&self.cmd_tx, self.on_load_more.clone()) {
+            let _ = tx.send(Cmd::Callback {
+                id,
+                value: None,
+                seq: None,
+            });
+        }
+    }
 }
 
 pub struct RowTableDelegate {
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
     pub header_groups: Vec<Vec<ColumnGroup>>,
+    /// Last Clojure row-id order; `ColumnSort::Default` restores this.
+    source_order: Vec<String>,
     /// Table slot key; prefixes `render_td` element ids.
     path: String,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
+    loading: bool,
+    has_more: bool,
+    load_more_threshold: usize,
+    empty: Option<String>,
+    on_load_more: Option<String>,
+    on_sort: Option<String>,
+    load_more_sent: bool,
 }
 
 impl RowTableDelegate {
     pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
+        let source_order = rows.iter().map(|row| row.id.clone()).collect();
         Self {
             columns,
             rows,
             header_groups: Vec::new(),
+            source_order,
             path: String::new(),
             cmd_tx: None,
+            loading: false,
+            has_more: false,
+            load_more_threshold: 20,
+            empty: None,
+            on_load_more: None,
+            on_sort: None,
+            load_more_sent: false,
         }
     }
 
@@ -622,6 +824,33 @@ impl RowTableDelegate {
         self.path = path.into();
         self.cmd_tx = Some(cmd_tx);
         self
+    }
+
+    pub fn sync_chrome(
+        &mut self,
+        loading: bool,
+        has_more: bool,
+        load_more_threshold: usize,
+        empty: Option<String>,
+        on_load_more: Option<String>,
+        on_sort: Option<String>,
+        collection_changed: bool,
+    ) {
+        self.loading = loading;
+        self.has_more = has_more;
+        self.load_more_threshold = load_more_threshold;
+        self.empty = empty;
+        self.on_load_more = on_load_more;
+        self.on_sort = on_sort;
+        if collection_changed || !has_more || loading {
+            self.load_more_sent = false;
+        }
+    }
+
+    pub fn set_rows(&mut self, rows: Vec<Row>) {
+        self.source_order = rows.iter().map(|row| row.id.clone()).collect();
+        self.rows = rows;
+        apply_active_column_sort(&self.columns, &mut self.rows, &self.source_order);
     }
 
     pub fn col_id_at(&self, col: usize) -> Option<String> {
@@ -812,11 +1041,86 @@ impl TableDelegate for RowTableDelegate {
     ) {
         move_table_column(&mut self.columns, &mut self.rows, col_ix, to_ix);
     }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) {
+        for (ix, col) in self.columns.iter_mut().enumerate() {
+            if col.sort.is_some() {
+                col.sort = Some(if ix == col_ix {
+                    sort
+                } else {
+                    ColumnSort::Default
+                });
+            }
+        }
+        sort_table_rows(&mut self.rows, col_ix, sort, &self.source_order);
+        if let (Some(tx), Some(callback), Some(col)) =
+            (&self.cmd_tx, self.on_sort.clone(), self.columns.get(col_ix))
+        {
+            let _ = tx.send(Cmd::Callback {
+                id: callback,
+                value: Some(json!({
+                    "id": col.key.to_string(),
+                    "sort": column_sort_name(sort)
+                })),
+                seq: None,
+            });
+        }
+    }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let el = h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(cx.theme().muted_foreground.opacity(0.6));
+        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
+            el.child(text.to_string()).into_any_element()
+        } else {
+            el.child(Icon::new(IconName::Inbox).size_12())
+                .into_any_element()
+        }
+    }
+
+    fn loading(&self, _: &App) -> bool {
+        self.loading
+    }
+
+    fn has_more(&self, _: &App) -> bool {
+        self.has_more
+    }
+
+    fn load_more_threshold(&self) -> usize {
+        self.load_more_threshold
+    }
+
+    fn load_more(&mut self, _: &mut Window, _: &mut Context<TableState<Self>>) {
+        if !self.has_more || self.loading || self.load_more_sent {
+            return;
+        }
+        self.load_more_sent = true;
+        if let (Some(tx), Some(id)) = (&self.cmd_tx, self.on_load_more.clone()) {
+            let _ = tx.send(Cmd::Callback {
+                id,
+                value: None,
+                seq: None,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::component::table::ColumnFixed;
     use serde_json::{Value, json};
 
     fn items(value: serde_json::Value) -> Vec<Item> {
@@ -1113,6 +1417,73 @@ mod tests {
             column_definition_fingerprint(&base),
             column_definition_fingerprint(&unselectable)
         );
+        let sorted = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start", "sort": "asc"},
+            {"id": "lang", "label": "Lang"}
+        ]));
+        assert_eq!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&sorted)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&base),
+            column_definition_fingerprint(&sorted)
+        );
+    }
+
+    #[test]
+    fn column_sort_fixed_and_row_reorder() {
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "asc", "fixed": "left",
+             "min-width": 40, "max-width": 200, "resizable": false, "movable": false},
+            {"id": "n", "label": "N", "sort": "desc"}
+        ])));
+        assert_eq!(columns[0].sort, Some(ColumnSort::Ascending));
+        assert!(matches!(columns[0].fixed, Some(ColumnFixed::Left)));
+        assert!(!columns[0].resizable);
+        assert!(!columns[0].movable);
+        assert_eq!(columns[1].sort, Some(ColumnSort::Descending));
+
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "2"]},
+            {"id": "a", "cells": ["A", "10"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        assert_eq!(rows[0].id, "a");
+        sort_table_rows(&mut rows, 1, ColumnSort::Descending, &source);
+        assert_eq!(rows[0].id, "a");
+        sort_table_rows(&mut rows, 0, ColumnSort::Default, &source);
+        assert_eq!(rows[0].id, "b");
+        apply_active_column_sort(&columns, &mut rows, &source);
+        assert_eq!(rows[0].id, "a");
+
+        let default_cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "default"}
+        ])));
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        assert_eq!(rows[0].id, "a");
+        apply_active_column_sort(&default_cols, &mut rows, &source);
+        assert_eq!(rows[0].id, "b");
+    }
+
+    #[test]
+    fn load_more_latch_resets_on_collection_or_flags() {
+        let mut delegate = RowListDelegate::new(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"}
+        ]))));
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), true);
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), false);
+        assert!(delegate.load_more_sent());
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), true);
+        assert!(!delegate.load_more_sent());
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(false, false, 20, None, Some("cb-more".into()), false);
+        assert!(!delegate.load_more_sent());
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(true, true, 20, None, Some("cb-more".into()), false);
+        assert!(!delegate.load_more_sent());
     }
 
     #[test]

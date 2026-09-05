@@ -880,10 +880,20 @@
       (is (= 1 (get-in ctx [:children 0 :flex])))))
   (testing "list selected alias and searchable"
     (let [n (ui/list [{:id :alpha :label "Alpha"} :beta]
-                     {:selected :alpha :searchable true :height 180})]
+                     {:selected :alpha
+                      :searchable true
+                      :search-placeholder "Filter…"
+                      :selectable false
+                      :empty :none
+                      :has-more true
+                      :height 180})]
       (is (= :list (:type n)))
       (is (= "alpha" (:value n)))
       (is (true? (:searchable n)))
+      (is (= "Filter…" (:search-placeholder n)))
+      (is (false? (:selectable n)))
+      (is (= "none" (:empty n)))
+      (is (true? (:has-more n)))
       (is (= 180 (:height n)))
       (is (nil? (:selected n)))
       (is (= ["alpha" "beta"] (mapv :id (:items n))))))
@@ -939,6 +949,39 @@
       (is (= 2 (get-in n [:header-groups 0 0 :span])))
       (is (= "end" (get-in n [:options 0 :align])))
       (is (false? (get-in n [:options 0 :selectable]))))
+    (let [chrome (ui/data-table {:columns [{:id :name :label "Name" :sort :asc :fixed :left
+                                            :min-width 40 :max-width 200 :resizable false :movable false}
+                                           {:id :lang :label "Lang" :sortable true}
+                                           {:id :pin :label "Pin" :fixed-left true}]
+                                 :rows [{:id :ada :cells ["Ada" "Clojure" "x"]}]
+                                 :stripe true
+                                 :bordered false
+                                 :scrollbar false
+                                 :sortable false
+                                 :col-movable false
+                                 :empty :none
+                                 :has-more true
+                                 :load-more-threshold 8
+                                 :on-sort (fn [_])
+                                 :on-load-more (fn [])})]
+      (is (true? (:stripe chrome)))
+      (is (false? (:bordered chrome)))
+      (is (false? (:scrollbar chrome)))
+      (is (false? (:sortable chrome)))
+      (is (false? (:col-movable chrome)))
+      (is (= "none" (:empty chrome)))
+      (is (true? (:has-more chrome)))
+      (is (= 8 (:load-more-threshold chrome)))
+      (is (fn? (:on-sort chrome)))
+      (is (fn? (:on-load-more chrome)))
+      (is (= "asc" (get-in chrome [:options 0 :sort])))
+      (is (= "left" (get-in chrome [:options 0 :fixed])))
+      (is (= 40 (get-in chrome [:options 0 :min-width])))
+      (is (= 200 (get-in chrome [:options 0 :max-width])))
+      (is (false? (get-in chrome [:options 0 :resizable])))
+      (is (false? (get-in chrome [:options 0 :movable])))
+      (is (= "default" (get-in chrome [:options 1 :sort])))
+      (is (= "left" (get-in chrome [:options 2 :fixed]))))
     (let [vec-sel (ui/data-table {:columns [{:id :name :label "Name"}
                                             {:id :lang :label "Lang"}]
                                   :rows [{:id :ada :cells ["Ada" "Clojure"]}]
@@ -1738,6 +1781,25 @@
     (is (= {:ok true :id (:on-change exported)}
            (runtime/invoke-callback! (:on-change exported) "ada")))
     (is (= :ada @got))))
+
+(deftest data-table-sort-callback-restores-column-id
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/data-table
+                   {:columns [{:id :name :label "Name" :sortable true}
+                              {:id :lang :label "Lang"}]
+                    :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                    :on-sort #(reset! got %)
+                    :on-load-more #(reset! got :more)}))]
+    (is (string? (:on-sort exported)))
+    (is (string? (:on-load-more exported)))
+    (is (= {:ok true :id (:on-sort exported)}
+           (runtime/invoke-callback! (:on-sort exported) {:id "name" :sort "asc"})))
+    (is (= {:id :name :sort "asc"} @got))
+    (is (= {:ok true :id (:on-load-more exported)}
+           (runtime/invoke-callback! (:on-load-more exported))))
+    (is (= :more @got))))
 
 (deftest data-table-row-and-column-ids-are-separate-namespaces
   (runtime/reset-callbacks!)

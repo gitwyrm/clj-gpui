@@ -258,6 +258,21 @@
            :else (resolve-option-id row-id-map wire-value)))))
     on-change))
 
+(defn- wrap-sort-callback
+  "Restore the original Clojure column id for Kit `perform_sort`."
+  [on-sort columns]
+  (if (fn? on-sort)
+    (let [col-id-map (option-id-map columns)]
+      (fn [wire-value]
+        (on-sort
+         (if (map? wire-value)
+           {:id (resolve-option-id col-id-map
+                                   (or (table-payload-id wire-value :id)
+                                       (table-payload-id wire-value :column)))
+            :sort (or (table-payload-id wire-value :sort) "default")}
+           wire-value))))
+    on-sort))
+
 (defn- with-table-callbacks
   [opts rows columns ks]
   (reduce (fn [m k]
@@ -1393,6 +1408,14 @@
         (and (map? x) (seq (:items x)))
         (assoc :items (into [] (keep tree-item) (:items x)))))))
 
+(defn- column-sort-name [x]
+  (cond
+    (true? x) "default"
+    (false? x) nil
+    (keyword? x) (name x)
+    (some? x) (str x)
+    :else nil))
+
 (defn- table-column [x]
   (let [n (option-item x)]
     (cond-> n
@@ -1400,7 +1423,21 @@
       (and (map? x) (some? (:span x))) (assoc :span (:span x))
       (and (map? x) (some? (:selectable x))) (assoc :selectable (boolean (:selectable x)))
       (and (map? x) (some? (:align x)))
-      (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x)))))))
+      (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x))))
+      (or (some? (:sort x)) (true? (:sortable x)))
+      (assoc :sort (or (column-sort-name (:sort x))
+                       (when (true? (:sortable x)) "default")))
+      (some? (:fixed x))
+      (assoc :fixed (cond
+                      (true? (:fixed x)) "left"
+                      (false? (:fixed x)) nil
+                      (keyword? (:fixed x)) (name (:fixed x))
+                      :else (str (:fixed x))))
+      (true? (:fixed-left x)) (assoc :fixed "left")
+      (some? (:resizable x)) (assoc :resizable (boolean (:resizable x)))
+      (some? (:movable x)) (assoc :movable (boolean (:movable x)))
+      (some? (:min-width x)) (assoc :min-width (:min-width x))
+      (some? (:max-width x)) (assoc :max-width (:max-width x)))))
 
 (defn- table-header-groups
   [groups]
@@ -1846,10 +1883,18 @@
   arrows and Confirm only for click/Enter; the host maps those to this
   contract. Click/Enter is one batch: `:on-change` then `:on-confirm`
   against the same callback generation, then one tree fetch. Escape /
-  Cancel sends `on-change` with `nil`. `:searchable true` filters by label
-  and keeps that query when Clojure replaces the rows.
+  Cancel sends `on-change` with `nil`. `:searchable true` filters by
+  label and keeps that query when Clojure replaces the rows.
+  `:search-placeholder` is Kit `search_placeholder`.
+  `:scrollbar false` hides the list scrollbar (omit = Kit true).
+  `:selectable false` is Kit `ListState::selectable` (omit = Kit true).
+  String `:empty` is `render_empty`. `:loading` / `:has-more` /
+  `:on-load-more` (0-arg) / `:load-more-threshold` are the delegate
+  load-more surface (Kit default threshold 20). Custom empty widgets
+  are not wrapped.
 
-  (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})"
+  (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
+  (ui/list items {:searchable true :search-placeholder \"Filter…\"})"
   ([items]
    (list items nil))
   ([items opts]
@@ -1858,10 +1903,11 @@
                   rewrite-selected
                   apply-control-size)
          selected (:value opts)
-         opts (with-id-callbacks
-                (dissoc opts :items :options :value)
-                raw
-                [:on-change :on-confirm])]
+         opts (cond-> (with-id-callbacks
+                        (dissoc opts :items :options :value)
+                        raw
+                        [:on-change :on-confirm])
+                (keyword? (:empty opts)) (update :empty name))]
      (merge-widget {:type :list
                     :value (wire-id selected)
                     :items (option-items raw)}
@@ -1899,6 +1945,23 @@
   namespaces: a row `:lang` and a column `\"lang\"` both wire to
   `\"lang\"` and restore independently.
 
+  `:stripe` is Kit `DataTable::stripe` (omit = false). `:bordered`
+  omit = Kit true. `:scrollbar false` hides both axes (omit = true).
+  TableState: `:sortable` / `:col-movable` / `:col-resizable` /
+  `:col-fixed` / `:loop-selection` / `:row-selectable` /
+  `:col-selectable` (omit = Kit true except where noted). Column
+  `:sort` (`:asc` / `:desc` / `true` for Default) or `:sortable true`
+  opts a header into sorting. Header click cycles Default → Desc →
+  Asc → Default, sorts in-memory by `cell_text` (numeric when both
+  parse), and sends `:on-sort` `{:id :sort}`. `Default` restores the
+  last Clojure row order. A later row-only tree with the same
+  fingerprint keeps native order. Column `:fixed` / `:fixed-left`
+  (`true` or `:left`), `:resizable`, `:movable`, `:min-width` /
+  `:max-width`. String `:empty` is `render_empty`. `:loading` /
+  `:has-more` / `:on-load-more` (0-arg) / `:load-more-threshold`
+  (omit = 20). Context menus and custom `render_th` / `render_loading`
+  are not wrapped.
+
   `ui/table` is Kit's declarative (non-virtualized) Table.
 
   (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
@@ -1926,7 +1989,10 @@
                opts
                rows
                columns
-               [:on-change :on-confirm :on-double-click])]
+               [:on-change :on-confirm :on-double-click])
+        opts (cond-> opts
+               (fn? (:on-sort opts)) (update :on-sort wrap-sort-callback columns)
+               (keyword? (:empty opts)) (update :empty name))]
     (cond-> (merge-widget {:type :data-table
                            :value (wire-table-selected selected)
                            :options (into [] (keep table-column) columns)

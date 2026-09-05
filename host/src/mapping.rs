@@ -10,9 +10,11 @@ use gpui_component::{
     group_box::GroupBoxVariant,
     input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
     label::{HighlightsMatch, Label},
+    list::{List, ListDelegate},
     shimmer::ShimmerStyle,
     slider::SliderScale,
     tab::TabVariant,
+    table::{DataTable, TableDelegate},
     tag::TagVariant,
 };
 use gpui_kit as gpui;
@@ -51,6 +53,39 @@ pub fn table_row_size(node: &Node) -> Size {
     } else {
         parse_scale(node.control_size.as_deref())
     }
+}
+
+/// Kit `DataTable` stripe / bordered / scrollbar. Omitted keeps Kit
+/// (stripe false, bordered true, both scrollbars true).
+pub fn apply_data_table_chrome<D: TableDelegate>(
+    mut table: DataTable<D>,
+    node: &Node,
+) -> DataTable<D> {
+    if let Some(stripe) = node.stripe {
+        table = table.stripe(stripe);
+    }
+    if let Some(bordered) = node.bordered {
+        table = table.bordered(bordered);
+    }
+    if let Some(visible) = node.scrollbar {
+        table = table.scrollbar_visible(visible, visible);
+    }
+    table
+}
+
+/// Kit `List` scrollbar, search placeholder, and `Sizable`. Selectable
+/// is on `ListState`.
+pub fn apply_list_chrome<D: ListDelegate + 'static>(mut list: List<D>, node: &Node) -> List<D> {
+    if let Some(visible) = node.scrollbar {
+        list = list.scrollbar_visible(visible);
+    }
+    if let Some(placeholder) = node.search_placeholder.as_deref().filter(|s| !s.is_empty()) {
+        list = list.search_placeholder(placeholder.to_string());
+    }
+    if node.control_size.is_some() {
+        list = list.with_size(parse_scale(node.control_size.as_deref()));
+    }
+    list
 }
 
 pub fn parse_hsla(value: &str) -> Option<Hsla> {

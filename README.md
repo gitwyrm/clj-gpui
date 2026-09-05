@@ -328,11 +328,12 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
    :on-change handle! :on-query #(reset! !q %)})
 (ui/status-bar {:left (ui/label "Ln 1") :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
   (ui/shimmer scan-path {:flex 1 :truncate true}))
-(ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
-(ui/data-table {:columns [{:id :name :label "Name" :align :end}
+(ui/list items {:selected sel :on-change set-sel! :searchable true :search-placeholder "Filter…" :height 200})
+(ui/data-table {:columns [{:id :name :label "Name" :align :end :sortable true :fixed :left}
                           {:id :lang :label "Lang"}]
                 :rows [{:id :ada :cells ["Ada" "Clojure"]}]
                 :header-groups [[{:label "Identity" :span 2}]]
+                :stripe true
                 :cell-selectable true
                 :row-height 40
                 :selected {:row :ada :col :lang}
