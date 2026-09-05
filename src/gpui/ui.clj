@@ -368,8 +368,9 @@
     stop))
 
 (defn- chart-fill
-  "Pass a hex string through. Keep BarChart fill maps (`:color` or
-  `:stops` / `:space` / `:angle`) instead of `str` of the map."
+  "Pass a hex string through. Keep a BarChart fill map (`:color` or
+  exactly two `:stops` plus `:space` / `:angle`) instead of `str` of
+  the map."
   [fill]
   (cond
     (string? fill) fill
@@ -2334,11 +2335,14 @@
   horizontal bars growing right). `:labels true` paints values on bars
   or pie slice labels. Bar points may set `:display` (Kit
   `BarChart::label`; omitted formats the value) and `:fill` (hex,
-  `{:color}`, or `{:stops [{:color :at} …] :space :bar|:chart :angle?}`).
-  Chart-level `:fill` is the default when a point omits `:fill` /
-  `:color`. `:fill-gradient` still maps to Kit `fill_gradient` and
-  replaces `fill`. Radar dimensions may use `:values [a b]` (or
-  `:value [a b]`) with `:series` names/colors/fills. Candlesticks use
+  `{:color}`, or two `{color, at}` stops with `:space :bar|:chart` and
+  optional `:angle`). `:space :bar` is 0 = base (zero) / 1 = tip; a
+  negative value flips the default angle 180° so that still holds.
+  `:space :chart` remaps those two stops through pixel bounds on the
+  unflipped alignment axis. Chart-level `:fill` is the default when a
+  point omits `:fill` / `:color`. `:fill-gradient` still maps to Kit
+  `fill_gradient` and replaces `fill`. Radar dimensions may use
+  `:values [a b]` (or `:value [a b]`) with `:series` names/colors/fills. Candlesticks use
   `:open` / `:high` / `:low` / `:close`. Sankey nodes are `points`;
   flows are `:links [{:source :target :value}]`.
 
@@ -2372,7 +2376,7 @@
 
 (defn bar-chart
   "See `chart` with `:bar`. Point `:display` is Kit `BarChart::label`;
-  `:fill` is Kit `fill` (hex or a stops map). `:fill-gradient` is the
+  `:fill` is Kit `fill` (hex or a two-stop map). `:fill-gradient` is the
   separate Kit `fill_gradient` builder."
   ([points] (chart :bar points nil))
   ([points opts] (chart :bar points opts)))

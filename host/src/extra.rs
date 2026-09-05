@@ -1481,7 +1481,8 @@ pub enum ChartFillGradient {
     },
 }
 
-/// Kit `BarChart::fill` after JSON. `space: chart` uses bar/chart pixel bounds.
+/// Kit `BarChart::fill` after JSON. `stops` is exactly two entries.
+/// `space: chart` remaps those stops through bar/chart pixel bounds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartBarFill {
     Solid(String),
@@ -1506,7 +1507,9 @@ pub fn parse_chart_bar_fill(value: Option<&Value>) -> Option<ChartBarFill> {
         Value::String(s) if !s.is_empty() => Some(ChartBarFill::Solid(s.clone())),
         Value::Object(map) => {
             if let Some(stops) = map.get("stops").and_then(Value::as_array) {
-                if stops.len() < 2 {
+                // Kit `linear_gradient` is two stops. Extra entries are not a
+                // multi-stop gradient; reject so Clojure does not think they apply.
+                if stops.len() != 2 {
                     return None;
                 }
                 let (start, start_at) = gradient_stop(&stops[0])?;
@@ -1542,8 +1545,11 @@ pub fn parse_chart_bar_fill(value: Option<&Value>) -> Option<ChartBarFill> {
     }
 }
 
-/// Ends of the value axis in pixel space: `(base, tip)`.
-fn fill_axis_ends(bounds: Bounds<f32>, alignment: BarAlignment) -> (f32, f32) {
+/// Unflipped gradient-axis ends in pixel space: `(stop 0, stop 1)` for
+/// [`BarAlignment::gradient_angle`]. Bottom is frame-bottom → frame-top,
+/// independent of value sign, so a chart-space gradient stays continuous
+/// across positive and negative bars.
+fn gradient_axis_ends(bounds: Bounds<f32>, alignment: BarAlignment) -> (f32, f32) {
     match alignment {
         BarAlignment::Bottom => (bounds.origin.y + bounds.size.height, bounds.origin.y),
         BarAlignment::Top => (bounds.origin.y, bounds.origin.y + bounds.size.height),
@@ -1552,15 +1558,54 @@ fn fill_axis_ends(bounds: Bounds<f32>, alignment: BarAlignment) -> (f32, f32) {
     }
 }
 
-/// Chart-space stop `t` (0 = chart base, 1 = chart tip) in bar-local 0..=1.
+/// Pixel ends of a painted bar along the value axis: `(base, tip)`.
+///
+/// Base is the zero edge of the frame; tip is the value end. Kit grows bars
+/// away from zero, so a negative value swaps the ends relative to alignment.
+pub fn bar_value_axis_ends(bar: Bounds<f32>, alignment: BarAlignment, value: f64) -> (f32, f32) {
+    let (along, against) = gradient_axis_ends(bar, alignment);
+    if value < 0.0 {
+        (against, along)
+    } else {
+        (along, against)
+    }
+}
+
+/// Default `linear_gradient` angle for a bar fill.
+///
+/// `:space :bar` with no `:angle` flips 180° on a negative value so stop 0
+/// stays at base (zero) and stop 1 at the tip. `:space :chart` never flips:
+/// the angle is the chart-wide alignment axis.
+pub fn chart_bar_fill_angle(
+    space: ChartFillSpace,
+    alignment: BarAlignment,
+    value: f64,
+    explicit: Option<f32>,
+) -> f32 {
+    if let Some(angle) = explicit {
+        return angle;
+    }
+    let angle = alignment.gradient_angle();
+    if space == ChartFillSpace::Bar && value < 0.0 {
+        (angle + 180.0).rem_euclid(360.0)
+    } else {
+        angle
+    }
+}
+
+/// Chart-space stop `t` (0 = alignment-base edge of the chart, 1 = tip edge)
+/// in unflipped bar-local 0..=1 (same axis as [`BarAlignment::gradient_angle`]).
+///
+/// Does not use per-bar data base/tip. Negative bars occupy the opposite
+/// side of zero and receive that slice of the same pixel gradient.
 pub fn chart_space_stop_on_bar(
     t: f32,
     bar: Bounds<f32>,
     chart: Bounds<f32>,
     alignment: BarAlignment,
 ) -> f32 {
-    let (c0, c1) = fill_axis_ends(chart, alignment);
-    let (b0, b1) = fill_axis_ends(bar, alignment);
+    let (c0, c1) = gradient_axis_ends(chart, alignment);
+    let (b0, b1) = gradient_axis_ends(bar, alignment);
     let span = b1 - b0;
     if span.abs() < f32::EPSILON {
         return 0.0;
@@ -1603,6 +1648,7 @@ pub fn chart_bar_background(
     bar_bounds: Bounds<f32>,
     chart_bounds: Bounds<f32>,
     alignment: BarAlignment,
+    value: f64,
 ) -> Background {
     match fill {
         Some(ChartBarFill::Solid(hex)) => parse_hex_color(hex).unwrap_or(fallback).into(),
@@ -1616,7 +1662,7 @@ pub fn chart_bar_background(
         }) => {
             let start_c = parse_hex_color(start).unwrap_or(fallback);
             let end_c = parse_hex_color(end).unwrap_or(fallback);
-            let angle = angle.unwrap_or_else(|| alignment.gradient_angle());
+            let angle = chart_bar_fill_angle(*space, alignment, value, *angle);
             let stops = match space {
                 ChartFillSpace::Bar => [
                     linear_color_stop(start_c, *start_at),
@@ -1943,6 +1989,7 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
                             bar_bounds,
                             chart_bounds,
                             alignment,
+                            p.series_y().unwrap_or(0.0),
                         )
                     });
                 }
@@ -3895,6 +3942,17 @@ mod tests {
             parse_chart_bar_fill(Some(&json!({"stops": [{"color": "#111111", "at": 0}]}))),
             None
         );
+        assert_eq!(
+            parse_chart_bar_fill(Some(&json!({
+                "stops": [
+                    {"color": "#111111", "at": 0},
+                    {"color": "#888888", "at": 0.5},
+                    {"color": "#ffffff", "at": 1}
+                ]
+            }))),
+            None,
+            "linear_gradient is two stops; extra entries are rejected"
+        );
     }
 
     #[test]
@@ -3921,7 +3979,8 @@ mod tests {
             chart_space_stop_on_bar(1.0, full, chart, BarAlignment::Bottom),
             1.0
         );
-        // Bottom: chart base y=100, tip y=0. Bar y=40..80 → base 80, tip 40.
+        // Bottom unflipped axis: chart 0 at y=100, 1 at y=0. Bar y=40..80 →
+        // gradient 0 at y=80, 1 at y=40 (frame edges, not data base/tip).
         let bar = Bounds {
             origin: Point { x: 10.0, y: 40.0 },
             size: Size {
@@ -3939,6 +3998,67 @@ mod tests {
         let left_tip = chart_space_stop_on_bar(1.0, full, chart, BarAlignment::Left);
         assert_eq!(left, 0.0);
         assert_eq!(left_tip, 1.0);
+    }
+
+    #[test]
+    fn bar_value_axis_ends_follow_growth_from_zero() {
+        let bar = Bounds {
+            origin: Point { x: 10.0, y: 40.0 },
+            size: Size {
+                width: 20.0,
+                height: 40.0,
+            },
+        };
+        let (base, tip) = bar_value_axis_ends(bar, BarAlignment::Bottom, 5.0);
+        assert_eq!(base, 80.0, "positive Bottom: zero/base at frame bottom");
+        assert_eq!(tip, 40.0, "positive Bottom: tip at upper edge");
+        let (base, tip) = bar_value_axis_ends(bar, BarAlignment::Bottom, -5.0);
+        assert_eq!(base, 40.0, "negative Bottom: zero/base at frame top");
+        assert_eq!(tip, 80.0, "negative Bottom: tip at lower edge");
+        let (base, tip) = bar_value_axis_ends(bar, BarAlignment::Left, 5.0);
+        assert_eq!(base, 10.0, "positive Left: zero/base at left");
+        assert_eq!(tip, 30.0, "positive Left: tip to the right");
+        let (base, tip) = bar_value_axis_ends(bar, BarAlignment::Left, -5.0);
+        assert_eq!(base, 30.0, "negative Left: zero/base at right of the frame");
+        assert_eq!(tip, 10.0, "negative Left: tip to the left");
+    }
+
+    #[test]
+    fn bar_space_fill_angle_flips_for_negative_values() {
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Bottom, 5.0, None),
+            0.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Bottom, 0.0, None),
+            0.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Bottom, -5.0, None),
+            180.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Left, 5.0, None),
+            90.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Left, -5.0, None),
+            270.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Top, -5.0, None),
+            0.0
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Chart, BarAlignment::Bottom, -5.0, None),
+            0.0,
+            "chart-space keeps the alignment angle so the pixel gradient is global"
+        );
+        assert_eq!(
+            chart_bar_fill_angle(ChartFillSpace::Bar, BarAlignment::Bottom, -5.0, Some(45.0)),
+            45.0,
+            "explicit :angle is not flipped"
+        );
     }
 
     #[test]
