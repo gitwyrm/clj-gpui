@@ -72,10 +72,10 @@ fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
     }
 }
 
-pub fn table_fingerprint(columns: &[Item], rows: &[Item], groups: &[Vec<Item>]) -> u64 {
+/// Header-group identity only. Row-only Clojure updates must not use a
+/// combined table fingerprint that would also rewrite native columns.
+pub fn header_groups_fingerprint(groups: &[Vec<Item>]) -> u64 {
     let mut hasher = DefaultHasher::new();
-    hash_items(columns, &mut hasher);
-    hash_items(rows, &mut hasher);
     groups.len().hash(&mut hasher);
     for row in groups {
         hash_items(row, &mut hasher);
@@ -332,18 +332,67 @@ pub fn columns_from_items(items: &[Item]) -> Vec<Column> {
 
 /// Kit `TableDelegate::move_column`: reorder columns and matching cells
 /// so `cell_text` / `dump` follow the native header order after a drag.
+/// Short `:cells` vectors are padded to the column count first so a
+/// trailing move cannot leave a present cell under the wrong header.
 pub fn move_table_column(columns: &mut Vec<Column>, rows: &mut [Row], col_ix: usize, to_ix: usize) {
     if col_ix == to_ix || col_ix >= columns.len() || to_ix >= columns.len() {
         return;
     }
+    let n = columns.len();
     let col = columns.remove(col_ix);
     columns.insert(to_ix, col);
     for row in rows {
-        if col_ix < row.cells.len() {
-            let cell = row.cells.remove(col_ix);
-            let insert_at = to_ix.min(row.cells.len());
-            row.cells.insert(insert_at, cell);
+        if row.cells.len() < n {
+            row.cells.resize(n, String::new());
         }
+        let cell = row.cells.remove(col_ix);
+        row.cells.insert(to_ix, cell);
+    }
+}
+
+/// Rebuild `cells` so index `i` belongs to `native_columns[i]`.
+/// `cells[j]` is the value for `source_columns[j]` (Clojure order).
+pub fn remap_row_cells(
+    source_columns: &[Column],
+    native_columns: &[Column],
+    cells: &[String],
+) -> Vec<String> {
+    native_columns
+        .iter()
+        .map(|native| {
+            source_columns
+                .iter()
+                .position(|src| src.key.as_ref() == native.key.as_ref())
+                .and_then(|ix| cells.get(ix).cloned())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+pub fn remap_rows_to_columns(
+    source_columns: &[Column],
+    native_columns: &[Column],
+    mut rows: Vec<Row>,
+) -> Vec<Row> {
+    for row in &mut rows {
+        row.cells = remap_row_cells(source_columns, native_columns, &row.cells);
+    }
+    rows
+}
+
+/// Row-only Clojure updates keep host-owned column order (header drag).
+/// A Clojure column-identity change replaces native columns.
+pub fn merge_table_data(
+    native_columns: &[Column],
+    clojure_columns: Vec<Column>,
+    clojure_rows: Vec<Row>,
+    columns_changed: bool,
+) -> (Vec<Column>, Vec<Row>) {
+    if columns_changed {
+        (clojure_columns, clojure_rows)
+    } else {
+        let rows = remap_rows_to_columns(&clojure_columns, native_columns, clojure_rows);
+        (native_columns.to_vec(), rows)
     }
 }
 
@@ -640,10 +689,6 @@ mod tests {
         let narrow = items(json!([{"id": "name", "label": "Name", "width": 80}]));
         let wide = items(json!([{"id": "name", "label": "Name", "width": 140}]));
         assert_ne!(rows_fingerprint(&narrow), rows_fingerprint(&wide));
-        assert_ne!(
-            table_fingerprint(&narrow, &[], &[]),
-            table_fingerprint(&wide, &[], &[])
-        );
     }
 
     #[test]
@@ -813,8 +858,8 @@ mod tests {
         assert!(table_export_generation(Some(&json!(""))).is_none());
         let grouped = items(json!([{"label": "Identity", "span": 2}]));
         assert_ne!(
-            table_fingerprint(&[], &[], &[grouped.clone()]),
-            table_fingerprint(&[], &[], &[])
+            header_groups_fingerprint(&[grouped.clone()]),
+            header_groups_fingerprint(&[])
         );
         let mut moved_cols = columns_from_items(&items(json!([
             {"id": "name", "label": "Name"},
@@ -826,5 +871,52 @@ mod tests {
         move_table_column(&mut moved_cols, &mut moved_rows, 0, 1);
         assert_eq!(moved_cols[0].key.as_ref(), "lang");
         assert_eq!(moved_rows[0].cells, vec!["Clojure", "Ada"]);
+    }
+
+    fn column_keys(columns: &[Column]) -> Vec<String> {
+        columns.iter().map(|col| col.key.to_string()).collect()
+    }
+
+    #[test]
+    fn move_table_column_pads_short_rows() {
+        let mut cols = columns_from_items(&items(json!([
+            {"id": "a", "label": "A"},
+            {"id": "b", "label": "B"},
+            {"id": "c", "label": "C"}
+        ])));
+        let mut rows = rows_from_items(&items(json!([{"id": "r", "cells": ["A"]}])));
+        move_table_column(&mut cols, &mut rows, 0, 2);
+        assert_eq!(column_keys(&cols), vec!["b", "c", "a"]);
+        assert_eq!(rows[0].cells, vec!["", "", "A"]);
+    }
+
+    #[test]
+    fn row_only_merge_keeps_native_column_order() {
+        let clojure_cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name"},
+            {"id": "lang", "label": "Lang"}
+        ])));
+        let mut native = clojure_cols.clone();
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "ada", "cells": ["Ada", "Clojure"]}
+        ])));
+        move_table_column(&mut native, &mut rows, 0, 1);
+        assert_eq!(column_keys(&native), vec!["lang", "name"]);
+        assert_eq!(rows[0].cells, vec!["Clojure", "Ada"]);
+
+        let updated = rows_from_items(&items(json!([
+            {"id": "grace", "cells": ["Grace", "Rust"]},
+            {"id": "alan", "cells": ["Alan", "Go"]}
+        ])));
+        let (kept, remapped) = merge_table_data(&native, clojure_cols.clone(), updated, false);
+        assert_eq!(column_keys(&kept), vec!["lang", "name"]);
+        assert_eq!(remapped[0].id, "grace");
+        assert_eq!(remapped[0].cells, vec!["Rust", "Grace"]);
+        assert_eq!(remapped[1].cells, vec!["Go", "Alan"]);
+
+        let (replaced, clojure_order) =
+            merge_table_data(&native, clojure_cols, remapped.clone(), true);
+        assert_eq!(column_keys(&replaced), vec!["name", "lang"]);
+        assert_eq!(clojure_order[0].cells, vec!["Rust", "Grace"]);
     }
 }

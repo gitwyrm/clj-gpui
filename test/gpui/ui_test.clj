@@ -1658,6 +1658,26 @@
            (runtime/invoke-callback! (:on-change exported) "ada")))
     (is (= :ada @got))))
 
+(deftest data-table-row-and-column-ids-are-separate-namespaces
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/data-table
+                   {:columns [{:id "lang" :label "Lang"}]
+                    :rows [{:id :lang :cells ["Clojure"]}]
+                    :cell-selectable true
+                    :on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:row "lang" :col "lang"})))
+    (is (= {:row :lang :col "lang"} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) ["lang" "lang"])))
+    (is (= {:row :lang :col "lang"} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) "lang")))
+    (is (= :lang @got))))
+
 (deftest product-widget-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)
   (let [got (atom nil)

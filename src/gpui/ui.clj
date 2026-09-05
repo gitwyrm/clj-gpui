@@ -230,11 +230,15 @@
   (or (get m k) (get m (name k))))
 
 (defn- wrap-table-callback
-  "Restore row and column ids. Cell payloads are `{:row … :col …}`.
-  Export dumps are not wrapped — they are headers/rows text."
+  "Restore row and column ids from separate namespaces.
+
+  Rows and columns can share a wire string (`:lang` vs `\"lang\"`)
+  without colliding. Cell payloads are `{:row … :col …}`. Export
+  dumps are not wrapped — they are headers/rows text."
   [on-change rows columns]
   (if (fn? on-change)
-    (let [id-map (option-id-map (concat rows columns))]
+    (let [row-id-map (option-id-map rows)
+          col-id-map (option-id-map columns)]
       (fn [wire-value]
         (on-change
          (cond
@@ -242,15 +246,16 @@
            (let [row (table-payload-id wire-value :row)
                  col (table-payload-id wire-value :col)]
              (if (some? col)
-               {:row (resolve-option-id id-map row)
-                :col (resolve-option-id id-map col)}
-               (resolve-option-id id-map (or row (table-payload-id wire-value :id)))))
+               {:row (resolve-option-id row-id-map row)
+                :col (resolve-option-id col-id-map col)}
+               (resolve-option-id row-id-map
+                                  (or row (table-payload-id wire-value :id)))))
            (and (sequential? wire-value)
                 (not (string? wire-value))
                 (= 2 (count wire-value)))
-           {:row (resolve-option-id id-map (first wire-value))
-            :col (resolve-option-id id-map (second wire-value))}
-           :else (resolve-option-id id-map wire-value)))))
+           {:row (resolve-option-id row-id-map (first wire-value))
+            :col (resolve-option-id col-id-map (second wire-value))}
+           :else (resolve-option-id row-id-map wire-value)))))
     on-change))
 
 (defn- with-table-callbacks
@@ -1767,7 +1772,9 @@
   `:size` is control size. Viewport `:height` is the outer wrapper.
   `:export-generation` plus `:on-export` dumps native `headers` / `rows`
   (column order after a header drag). `:on-export` is dump text — it
-  does not restore option ids.
+  does not restore option ids. Row and column ids are separate
+  namespaces: a row `:lang` and a column `\"lang\"` both wire to
+  `\"lang\"` and restore independently.
 
   `ui/table` is Kit's declarative (non-virtualized) Table.
 

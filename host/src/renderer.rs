@@ -279,7 +279,11 @@ struct ListSlot {
 
 struct TableSlot {
     state: Entity<TableState<RowTableDelegate>>,
-    fingerprint: u64,
+    /// Clojure column identity. Unchanged across a header drag, so a
+    /// later row-only tree must not overwrite native column order.
+    column_fingerprint: u64,
+    row_fingerprint: u64,
+    groups_fingerprint: u64,
     on_change: Option<String>,
     on_confirm: Option<String>,
     on_export: Option<String>,
@@ -3173,7 +3177,9 @@ impl RootView {
         let columns = rows::columns_from_items(&node.options);
         let rows_data = rows::rows_from_items(&node.items);
         let header_groups = rows::header_groups_from_items(&node.header_groups);
-        let fingerprint = rows::table_fingerprint(&node.options, &node.items, &node.header_groups);
+        let column_fingerprint = rows::rows_fingerprint(&node.options);
+        let row_fingerprint = rows::rows_fingerprint(&node.items);
+        let groups_fingerprint = rows::header_groups_fingerprint(&node.header_groups);
         let cell_selectable = node.cell_selectable.unwrap_or(false);
         let row_header = node.row_header.unwrap_or(true);
         let wanted = rows::table_selection_for_mode(node.value.as_ref(), cell_selectable);
@@ -3183,15 +3189,33 @@ impl RootView {
             slot.on_confirm = node.on_confirm.clone().or(node.on_double_click.clone());
             slot.on_export = node.on_export.clone();
             let state = slot.state.clone();
-            if slot.fingerprint != fingerprint {
-                slot.fingerprint = fingerprint;
-                let columns = columns.clone();
-                let rows_data = rows_data.clone();
-                let header_groups = header_groups.clone();
+            let columns_changed = slot.column_fingerprint != column_fingerprint;
+            let rows_changed = slot.row_fingerprint != row_fingerprint;
+            let groups_changed = slot.groups_fingerprint != groups_fingerprint;
+            if columns_changed || rows_changed || groups_changed {
+                slot.column_fingerprint = column_fingerprint;
+                slot.row_fingerprint = row_fingerprint;
+                slot.groups_fingerprint = groups_fingerprint;
+                let apply_rows = columns_changed || rows_changed;
+                let columns = apply_rows.then(|| columns.clone());
+                let rows_data = apply_rows.then(|| rows_data.clone());
+                let header_groups = groups_changed.then(|| header_groups.clone());
                 state.update(cx, |table, cx| {
-                    table.delegate_mut().columns = columns;
-                    table.delegate_mut().rows = rows_data;
-                    table.delegate_mut().header_groups = header_groups;
+                    if let (Some(columns), Some(rows_data)) = (columns, rows_data) {
+                        let (next_cols, next_rows) = rows::merge_table_data(
+                            &table.delegate().columns,
+                            columns,
+                            rows_data,
+                            columns_changed,
+                        );
+                        if columns_changed {
+                            table.delegate_mut().columns = next_cols;
+                        }
+                        table.delegate_mut().rows = next_rows;
+                    }
+                    if let Some(header_groups) = header_groups {
+                        table.delegate_mut().header_groups = header_groups;
+                    }
                     table.refresh(cx);
                 });
             }
@@ -3274,7 +3298,9 @@ impl RootView {
             key.to_string(),
             TableSlot {
                 state: state.clone(),
-                fingerprint,
+                column_fingerprint,
+                row_fingerprint,
+                groups_fingerprint,
                 on_change: node.on_change.clone(),
                 on_confirm: node.on_confirm.clone().or(node.on_double_click.clone()),
                 on_export: node.on_export.clone(),
