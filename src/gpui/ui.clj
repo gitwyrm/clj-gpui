@@ -589,7 +589,9 @@
     (assoc style :type :vstack :children (flatten-children children))))
 
 (defn hstack
-  "Horizontal stack. Same optional style map convention as `vstack`."
+  "Horizontal stack. Same optional style map convention as `vstack`.
+  Use `:align :stretch` for columns that fill the stack's height, such as
+  a sidebar beside an independently scrolling content pane."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :hstack :children (flatten-children children))))

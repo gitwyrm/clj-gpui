@@ -107,6 +107,7 @@ pub fn apply_visual_style<E: Styled>(mut el: E, node: &Node) -> E {
         el = el.shadow_lg();
     }
     match node.align.as_deref() {
+        Some("stretch") => el = el.items_stretch(),
         Some("center") => el = el.items_center(),
         Some("end") => el = el.items_end(),
         Some("start") => el = el.items_start(),

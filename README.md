@@ -48,6 +48,13 @@ cd examples/todomvc && clj -M:dev
 cd examples/themes/catppuccin-violet && clj -M:dev
 ```
 
+The widget gallery has a sidebar of focused sections, with `ui/` function
+labels and short explanations above live examples. Look up those functions
+in `gpui.ui`, or follow the examples in `examples/widgets/src/widgets/app.clj`.
+State and testing controls sit in expandable sections. The gallery uses
+`:chrome :app` to keep the developer HUD out of the way; nREPL and hot reload
+remain available when launched with `-M:dev`.
+
 Or from the repo root:
 
 ```bash
