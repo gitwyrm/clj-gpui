@@ -1208,9 +1208,9 @@ pub struct Node {
     #[serde(default)]
     pub language: Option<String>,
     /// OTP masked cells. `input`: Kit `InputState::masked` (applied when
-    /// the Clojure value changes so a native mask-toggle is not overwritten
-    /// every frame). Kit `Label`: mask as bullets (see `secondary` /
-    /// `highlights`).
+    /// the Clojure value changes, or when `:mask-toggle` is removed, so a
+    /// native mask-toggle is not overwritten every frame). Kit `Label`:
+    /// mask as bullets (see `secondary` / `highlights`).
     #[serde(default)]
     pub masked: bool,
     /// Kit `Label::secondary`: muted trailing text after the main label.
@@ -1240,6 +1240,7 @@ pub struct Node {
     #[serde(default)]
     pub suffix: Option<String>,
     /// OTP: Kit `groups` (clusters of cells). Omitted is Kit 2.
+    /// `0` is forwarded so Kit `resolved_groups` can clamp to 1.
     #[serde(default)]
     pub groups: Option<u32>,
     /// Sidebar collapsed chrome.
@@ -2602,6 +2603,12 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(otp.groups, Some(3));
+        let zero: Node = serde_json::from_value(json!({
+            "type": "otp-input",
+            "groups": 0
+        }))
+        .unwrap();
+        assert_eq!(zero.groups, Some(0));
         let omitted: Node = serde_json::from_value(json!({"type": "input", "text": ""})).unwrap();
         assert!(!omitted.readonly);
         assert!(!omitted.mask_toggle);

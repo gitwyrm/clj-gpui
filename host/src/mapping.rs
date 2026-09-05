@@ -5,7 +5,7 @@ use crate::protocol::{Node, StyledKeys};
 use gpui::{AnyElement, Axis, FontWeight, Hsla, IntoElement, StyleRefinement, Styled, div, px};
 use gpui_component::{
     Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, Selectable as _,
-    Side, Sizable as _, Size,
+    Side, Sizable, Size,
     button::{Button, ButtonVariants, ToggleVariant},
     group_box::GroupBoxVariant,
     input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
@@ -832,8 +832,40 @@ pub fn affix_element(text: Option<&str>, icon: Option<&str>) -> Option<AnyElemen
     }
 }
 
+/// Kit `Input::with_size` argument. Omitted `:control-size` is Medium.
+pub fn input_control_size(node: &Node) -> Size {
+    parse_scale(node.control_size.as_deref())
+}
+
+/// Forward named `:size` / `:control-size` onto a Kit `Sizable` field.
+pub fn apply_input_size<T: Sizable>(input: T, node: &Node) -> T {
+    input.with_size(input_control_size(node))
+}
+
+/// Whether a retained `InputState` should `set_masked` from Clojure.
+///
+/// While `:mask-toggle` is on, the native eye button may diverge from
+/// Clojure `:masked`. Resync when Clojure `:masked` changes, or when the
+/// toggle is removed (`true`→`false`) so a stuck native mask cannot
+/// outlive the button.
+pub fn input_masked_needs_resync(
+    last_masked: bool,
+    last_mask_toggle: bool,
+    masked: bool,
+    mask_toggle: bool,
+) -> bool {
+    last_masked != masked || (last_mask_toggle && !mask_toggle)
+}
+
+/// Kit `OtpInput::groups` when Clojure sent `groups`. Omitted leaves Kit 2.
+/// `0` is forwarded so Kit `resolved_groups` can clamp to 1.
+pub fn otp_groups(node: &Node) -> Option<usize> {
+    node.groups.map(|n| n as usize)
+}
+
 /// Kit `Input` chrome that is not `Styled` / `InputState`.
-pub fn apply_input_chrome(mut input: Input, node: &Node) -> Input {
+pub fn apply_input_chrome(input: Input, node: &Node) -> Input {
+    let mut input = apply_input_size(input, node);
     if node.cleanable {
         input = input.cleanable(true);
     }
@@ -947,8 +979,8 @@ pub fn apply_number_input_chrome(mut input: NumberInput, node: &Node) -> NumberI
 
 /// Kit `OtpInput` groups + focus ring. Size / disabled stay in the renderer.
 pub fn apply_otp_chrome(mut input: OtpInput, node: &Node) -> OtpInput {
-    if let Some(groups) = node.groups.filter(|n| *n >= 1) {
-        input = input.groups(groups as usize);
+    if let Some(groups) = otp_groups(node) {
+        input = input.groups(groups);
     }
     if let Some(focus) = node.focus_ring {
         input = input.focus_ring(focus);
@@ -959,6 +991,7 @@ pub fn apply_otp_chrome(mut input: OtpInput, node: &Node) -> OtpInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_component::Sizable;
 
     #[test]
     fn scale_keywords() {
@@ -1146,6 +1179,83 @@ mod tests {
         assert!(affix_element(None, Some("search")).is_some());
         assert!(affix_element(None, Some("not-an-icon")).is_none());
         assert!(affix_element(Some("  "), None).is_none());
+    }
+
+    #[test]
+    fn input_chrome_forwards_named_size_to_with_size() {
+        struct SizeSink {
+            size: Option<Size>,
+        }
+        impl Sizable for SizeSink {
+            fn with_size(mut self, size: impl Into<Size>) -> Self {
+                self.size = Some(size.into());
+                self
+            }
+        }
+        let small = Node {
+            kind: "input".into(),
+            control_size: Some("small".into()),
+            ..Node::default()
+        };
+        let large = Node {
+            kind: "input".into(),
+            control_size: Some("large".into()),
+            ..Node::default()
+        };
+        let omitted = Node {
+            kind: "input".into(),
+            ..Node::default()
+        };
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &small).size,
+            Some(Size::Small)
+        );
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &large).size,
+            Some(Size::Large)
+        );
+        assert_eq!(
+            apply_input_size(SizeSink { size: None }, &omitted).size,
+            Some(Size::Medium)
+        );
+    }
+
+    #[test]
+    fn input_masked_resyncs_when_mask_toggle_is_removed() {
+        // Native eye button flipped masked, Clojure `:masked` unchanged.
+        assert!(!input_masked_needs_resync(false, true, false, true));
+        assert!(!input_masked_needs_resync(true, true, true, true));
+        // Removing the toggle restores Clojure `:masked` even when equal.
+        assert!(input_masked_needs_resync(false, true, false, false));
+        assert!(input_masked_needs_resync(true, true, true, false));
+        // Clojure `:masked` still wins when it changes while the toggle exists.
+        assert!(input_masked_needs_resync(false, true, true, true));
+        assert!(input_masked_needs_resync(true, true, false, true));
+        // No toggle: only a Clojure `:masked` change resyncs.
+        assert!(!input_masked_needs_resync(false, false, false, false));
+        assert!(input_masked_needs_resync(false, false, true, false));
+        // Adding the toggle does not overwrite native state by itself.
+        assert!(!input_masked_needs_resync(false, false, false, true));
+    }
+
+    #[test]
+    fn otp_groups_zero_is_forwarded_for_kit_clamp() {
+        // Kit 0.6 `resolved_groups(length, 0)` is `requested.max(1).min(length.max(1))`.
+        assert_eq!(
+            otp_groups(&Node {
+                groups: Some(0),
+                ..Node::default()
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            otp_groups(&Node {
+                groups: Some(3),
+                ..Node::default()
+            }),
+            Some(3)
+        );
+        assert!(otp_groups(&Node::default()).is_none());
     }
 
     #[test]

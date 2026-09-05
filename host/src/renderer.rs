@@ -102,8 +102,12 @@ struct InputSlot {
     /// flush once per callback-id generation. See
     /// `protocol::InputChangeCoalesce`.
     change: protocol::InputChangeCoalesce,
-    /// Last Clojure `:masked`. Native mask-toggle may differ until this changes.
+    /// Last Clojure `:masked`. Native mask-toggle may differ until this
+    /// changes or `:mask-toggle` is removed.
     masked: bool,
+    /// Last Clojure `:mask-toggle`. Native eye-button state may diverge
+    /// from `:masked` while this is true.
+    mask_toggle: bool,
 }
 
 struct TextControlSlot<S> {
@@ -1067,12 +1071,18 @@ impl RootView {
                     input.set_placeholder(placeholder, window, cx);
                 });
             }
-            if slot.masked != node.masked {
+            if mapping::input_masked_needs_resync(
+                slot.masked,
+                slot.mask_toggle,
+                node.masked,
+                node.mask_toggle,
+            ) {
                 slot.masked = node.masked;
                 state.update(cx, |input, cx| {
                     input.set_masked(node.masked, window, cx);
                 });
             }
+            slot.mask_toggle = node.mask_toggle;
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
                 state.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -1108,6 +1118,7 @@ impl RootView {
                 number_stepped: false,
                 change: protocol::InputChangeCoalesce::default(),
                 masked: node.masked,
+                mask_toggle: node.mask_toggle,
             },
         );
 

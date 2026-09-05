@@ -717,10 +717,11 @@
 
   Kit chrome: `:cleanable`, `:appearance`, `:bordered`, `:focus-ring`
   (Kit `focus_bordered`; omit = Kit true), `:readonly`, `:masked`
-  (InputState bullets; applied when the Clojure value changes),
-  `:mask-toggle` (show/hide button), `:content-type` (`:password`,
-  `:email`, … — autofill hint, not masking), `:prefix` / `:suffix`
-  strings, `:icon` as the prefix when `:prefix` is omitted,
+  (InputState bullets; applied when the Clojure value changes or when
+  `:mask-toggle` is removed), `:mask-toggle` (show/hide button),
+  `:content-type` (`:password`, `:email`, … — autofill hint, not
+  masking), `:prefix` / `:suffix` strings, `:icon` as the prefix when
+  `:prefix` is omitted, named `:size` (`Input::with_size`),
   `:accessibility-label`. Custom prefix/suffix widgets and
   `context_menu` builders are not wrapped.
 
@@ -2312,7 +2313,8 @@
 (defn otp-input
   "Fixed-length digit cells. `:on-change` fires when every cell is
   filled (crate complete-only). `:count` defaults to 6 (clamped 1–12).
-  `:masked true` hides digits. `:groups` is Kit `groups` (omit = Kit 2).
+  `:masked true` hides digits. `:groups` is Kit `groups` (omit = Kit 2;
+  `:groups 0` is forwarded and Kit clamps it to 1).
   `:focus-ring` omit = Kit true. `:on-blur` receives the current string.
 
   (ui/otp-input code {:count 6 :masked true :on-change set!})

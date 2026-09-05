@@ -125,6 +125,7 @@
       (is (false? (:bordered n)))
       (is (true? (:masked n))))
     (is (= 3 (:groups (ui/otp-input "" {:groups 3}))))
+    (is (= 0 (:groups (ui/otp-input "" {:groups 0}))))
     (is (= "$" (:prefix (ui/number-input 1 {:prefix "$"}))))))
 
 (deftest named-control-size-does-not-use-pixel-size
@@ -138,6 +139,12 @@
     (is (= "small" (:control-size n)))
     (is (nil? (:size n))))
   (let [n (ui/button "Go" (fn []) {:size :large})]
+    (is (= "large" (:control-size n)))
+    (is (nil? (:size n))))
+  (let [n (ui/input "" {:size :small})]
+    (is (= "small" (:control-size n)))
+    (is (nil? (:size n))))
+  (let [n (ui/input "" {:size :large})]
     (is (= "large" (:control-size n)))
     (is (nil? (:size n)))))
 
