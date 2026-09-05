@@ -781,6 +781,14 @@
             (ui/bar-chart [{:id :a :label "A" :value 3}
                            {:id :b :label "B" :value 7}]
                           {:name "Count" :width 220 :height 140 :corner-radii 4 :fill-gradient true}))
+   (example "ui/bar-chart · :fill :display" "Kit BarChart fill maps and custom bar labels."
+            (ui/bar-chart [{:id :a :label "A" :value 3 :display "3u"
+                            :fill {:stops [{:color "#3366ff" :at 0}
+                                           {:color "#88aaff" :at 1}]
+                                   :space :bar}}
+                           {:id :b :label "B" :value 7 :display "7u"
+                            :fill "#22c55e"}]
+                          {:name "Count" :width 220 :height 140 :corner-radii 4}))
    (example "ui/area-chart" "Display multiple series with a filled area."
             (ui/area-chart [{:id :a :label "Mon" :values [4 2]}
                             {:id :b :label "Tue" :values [8 5]}

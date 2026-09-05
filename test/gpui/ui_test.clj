@@ -125,6 +125,14 @@
          (ui/option-item {:id :clj :label "Clojure"})))
   (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
   (is (= "#ff0000" (:stroke (ui/option-item {:id :desk :stroke "#ff0000"}))))
+  (is (= "#aabbcc" (:fill (ui/option-item {:id :s :fill "#aabbcc"}))))
+  (is (= "3 units" (:display (ui/option-item {:id :a :label "A" :value 3 :display "3 units"}))))
+  (is (= {:stops [{:color "#111111" :at 0} {:color "#ffffff" :at 1}]
+          :space "bar"}
+         (:fill (ui/option-item {:id :a :value 1
+                                 :fill {:stops [{:color "#111111" :at 0}
+                                                {:color "#ffffff" :at 1}]
+                                        :space :bar}}))))
   (is (= 20 (:inner-radius (ui/option-item {:id :a :value 2 :inner-radius 20 :outer-radius 80}))))
   (is (= [80 60] (:values (ui/option-item {:id :s :label "Speed" :values [80 60]}))))
   (is (= [80 60] (:value (ui/option-item {:id :s :label "Speed" :value [80 60]}))))
@@ -1181,6 +1189,24 @@
       (is (= "chart" (:fill-gradient-mode n)))
       (is (= 4 (:corner-radii n)))
       (is (= "linear" (:stroke-style n))))
+    (let [n (ui/bar-chart [{:id :a :label "A" :value 3 :display "3u"
+                            :fill {:stops [{:color "#3366ff" :at 0}
+                                           {:color "#88aaff" :at 1}]
+                                   :space :chart
+                                   :angle 45}}
+                           {:id :b :label "B" :value 7
+                            :fill {:stops [{:color "#22c55e" :at 0}
+                                           {:color "#86efac" :at 1}]
+                                   :space :bar
+                                   :angle 45}}]
+                          {:fill "#112233"})]
+      (is (= "3u" (get-in n [:items 0 :display])))
+      (is (= "chart" (get-in n [:items 0 :fill :space])))
+      (is (nil? (get-in n [:items 0 :fill :angle])))
+      (is (= "#3366ff" (get-in n [:items 0 :fill :stops 0 :color])))
+      (is (= 45 (get-in n [:items 1 :fill :angle])))
+      (is (= "bar" (get-in n [:items 1 :fill :space])))
+      (is (= "#112233" (:fill n))))
     (let [n (ui/chart :line [{:id :a :label "A" :value 1}] {:interactive true})]
       (is (true? (:interactive n))))
     (let [n (ui/area-chart [{:id :mon :label "Mon" :values [4 8]}]

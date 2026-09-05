@@ -356,16 +356,47 @@
       (some? (:font-size line)) (assoc :font-size (:font-size line)))
     {:text (str line)}))
 
+(defn- chart-fill-color
+  [c]
+  (if (keyword? c) (name c) (str c)))
+
+(defn- chart-fill-stop
+  [stop]
+  (if (map? stop)
+    (cond-> stop
+      (some? (:color stop)) (update :color chart-fill-color))
+    stop))
+
+(defn- chart-fill
+  "Pass a hex string through. Keep a BarChart fill map (`:color` or
+  exactly two `:stops` plus `:space` / optional bar-local `:angle`)
+  instead of `str` of the map. `:space :chart` drops `:angle` (the
+  host always uses the alignment axis)."
+  [fill]
+  (cond
+    (string? fill) fill
+    (keyword? fill) (name fill)
+    (map? fill)
+    (let [fill (cond-> fill
+                 (some? (:color fill)) (update :color chart-fill-color)
+                 (keyword? (:space fill)) (update :space name)
+                 (seq (:stops fill)) (update :stops (fn [stops] (mapv chart-fill-stop stops))))]
+      (if (= "chart" (:space fill))
+        (dissoc fill :angle)
+        fill))
+    (some? fill) (str fill)
+    :else fill))
+
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
-  `:label` / `:text`, `:disabled`, `:display` (select trigger copy),
-  `:on-click`, and `:content`.   Nested `:items` are menu submenus, tree
-  children, or Select `SelectGroup` sections. Chart items also keep
-  `:fill`, `:stroke`, `:stroke-style`, `:inner-radius`,
-  `:outer-radius`, and `:label-lines`. Command items may set
-  `:keywords`."
+  `:label` / `:text`, `:disabled`, `:display` (select trigger copy, or
+  a bar-chart label), `:on-click`, and `:content`.   Nested `:items`
+  are menu submenus, tree children, or Select `SelectGroup` sections.
+  Chart items also keep `:fill` (hex or a bar fill map), `:stroke`,
+  `:stroke-style`, `:inner-radius`, `:outer-radius`, and `:label-lines`.
+  Command items may set `:keywords`."
   [x]
   (cond
     (nil? x) nil
@@ -398,7 +429,7 @@
         (some? (:step x)) (assoc :step (:step x))
         (some? (:color x)) (assoc :color (str (:color x)))
         (some? (:stroke x)) (assoc :stroke (str (:stroke x)))
-        (some? (:fill x)) (assoc :fill (str (:fill x)))
+        (some? (:fill x)) (assoc :fill (chart-fill (:fill x)))
         (some? (:inner-radius x)) (assoc :inner-radius (:inner-radius x))
         (some? (:outer-radius x)) (assoc :outer-radius (:outer-radius x))
         (some? (:stroke-style x)) (assoc :stroke-style (if (keyword? (:stroke-style x))
@@ -2293,6 +2324,7 @@
       (keyword? (:stroke-style opts)) (update :stroke-style name)
       (keyword? (:fill-gradient opts)) (update :fill-gradient name)
       (keyword? (:fill-gradient-mode opts)) (update :fill-gradient-mode name)
+      (some? (:fill opts)) (update :fill chart-fill)
       (seq (:links opts)) (update :links option-items)
       (seq (:series opts)) (update :series option-items))))
 
@@ -2305,15 +2337,26 @@
   `{id, label, value}` maps (`:values` for multi-series area/radar).
   Bar charts take Kit `:alignment` (`:bottom` default, `:left` for
   horizontal bars growing right). `:labels true` paints values on bars
-  or pie slice labels. Radar dimensions may use `:values [a b]` (or
-  `:value [a b]`) with `:series` names/colors/fills. Candlesticks use
+  or pie slice labels. Bar points may set `:display` (Kit
+  `BarChart::label`; omitted formats the value) and `:fill` (hex,
+  `{:color}`, or two `{color, at}` stops with `:space :bar|:chart`).
+  `:space :bar` is stop 0 = base (zero) and stop 1 = tip when `:angle`
+  is omitted; a negative value flips that default angle 180°. An
+  explicit `:angle` is bar-local and chooses the gradient direction.
+  `:space :chart` remaps those two stops through pixel bounds on the
+  alignment value axis and always uses `BarAlignment::gradient_angle`
+  (`:angle` is dropped). Chart-level `:fill` is the default when a
+  point omits `:fill` / `:color`. `:fill-gradient` still maps to Kit
+  `fill_gradient` and replaces `fill`. Radar dimensions may use
+  `:values [a b]` (or `:value [a b]`) with `:series` names/colors/fills. Candlesticks use
   `:open` / `:high` / `:low` / `:close`. Sankey nodes are `points`;
   flows are `:links [{:source :target :value}]`.
 
   Kit-named options include `:name`, `:stroke`, `:stroke-style`
   (`:natural` / `:linear` / `:step-after`), `:dot`, `:tick-margin`
   (clamped to ≥1 on the host), `:x-axis`, `:grid`, `:corner-radii`,
-  `:fill-gradient` (stop `at` is unclamped), `:inner-radius` (donut),
+  `:fill-gradient` (stop `at` is unclamped), `:fill` (bar solid/gradient
+  fill; `fill-gradient` wins when set), `:inner-radius` (donut),
   `:outer-radius`, `:pad-angle`, `:label-color`, `:label-gap`,
   `:grid-levels`, `:body-width-ratio` (unclamped), `:interactive`
   (Kit hover tooltip; default off), and Sankey `:node-width` /
@@ -2338,7 +2381,9 @@
   ([points opts] (chart :line points opts)))
 
 (defn bar-chart
-  "See `chart` with `:bar`."
+  "See `chart` with `:bar`. Point `:display` is Kit `BarChart::label`;
+  `:fill` is Kit `fill` (hex or a two-stop map). `:fill-gradient` is the
+  separate Kit `fill_gradient` builder."
   ([points] (chart :bar points nil))
   ([points opts] (chart :bar points opts)))
 
