@@ -307,7 +307,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `primary` | bool | `button` / `dropdown-button` (alias for `variant: primary` when `variant` is omitted) |
 | `selected` | bool | `button` / `dropdown-button`: Kit `Selectable` chrome. Not list / table / tree selection (those Clojure `:selected` keys become `value`) |
 | `rounded` | string or number | `button`: Kit `ButtonRounded` (`none` / `small` / `medium` / `large` or pixels). Omitted is Kit Medium |
-| `dropdown-caret` | bool | `button`: Kit `dropdown_caret`. JSON / Clojure `:caret` is the same flag |
+| `dropdown-caret` | bool | `button`: Kit `dropdown_caret`. JSON / Clojure `:caret` is the same flag. Explicit `dropdown-caret` wins; `:caret` is dropped from the wire so Serde does not see both names |
 | `toggled` | bool | `button`: Kit `toggled` (assistive pressed state). Omitted is an ordinary push button |
 | `tab-index` | number | `button`: Kit `tab_index`. Omitted is Kit 0 |
 | `tab-stop` | bool | `button`: Kit `tab_stop`. Omitted is Kit true |
@@ -368,7 +368,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `font-size` | number | text |
 | `font-family` | string | text (e.g. `.SystemUIFont`) |
 | `font-weight` | string (`thin`, `extralight`, `light`, `bold`, `semibold`, `medium`, …) | text |
-| `color` | hex string (`#b83f45`) | text; `progress` / `progress-circle` fill (Kit theme `progress_bar` when omitted); `badge` background; `spinner` icon |
+| `color` | hex string (`#b83f45`) | text; `progress` / `progress-circle` fill (Kit theme `progress_bar` when omitted); `badge` overlay background (not host text color on the wrapped child); `spinner` icon |
 | `theme` | string | any node: `system` (default), `light`, `dark`, a shipped GPUI Kit palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer + `gpui-fps` HUD) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |

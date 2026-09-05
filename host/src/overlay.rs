@@ -907,7 +907,7 @@ fn paint_static_tree(
             badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
                 paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
             }));
-            chart_host(badge, node, path)
+            chart_host(badge, &mapping::badge_host_node(node), path)
         }
         "icon" => {
             let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");

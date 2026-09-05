@@ -680,6 +680,15 @@ pub fn apply_badge_chrome(mut badge: Badge, node: &Node) -> Badge {
     badge.with_size(parse_scale(node.control_size.as_deref()))
 }
 
+/// Badge `:color` is Kit overlay background (`Badge::color`), not GPUI
+/// `text_color` on the host wrapper. Clear it so wrapped children do
+/// not inherit the badge color. Other layout/visual keys stay.
+pub fn badge_host_node(node: &Node) -> Node {
+    let mut host = node.clone();
+    host.color = None;
+    host
+}
+
 /// Kit `Skeleton` chrome (`secondary()`).
 ///
 /// Label already owns Node `secondary` as muted trailing text, so
@@ -2063,5 +2072,42 @@ mod tests {
             ..Node::default()
         }));
         assert!(!skeleton_secondary(&Node::default()));
+    }
+
+    #[test]
+    fn badge_host_node_drops_color_keeps_layout() {
+        let node = Node {
+            color: Some("#22c55e".into()),
+            width: Some(40.0),
+            flex: Some(1.0),
+            bg: Some("#111111".into()),
+            ..Node::default()
+        };
+        let host = badge_host_node(&node);
+        assert!(host.color.is_none());
+        assert_eq!(host.width, Some(40.0));
+        assert_eq!(host.flex, Some(1.0));
+        assert_eq!(host.bg.as_deref(), Some("#111111"));
+        assert_eq!(node.color.as_deref(), Some("#22c55e"));
+    }
+
+    #[test]
+    fn badge_host_style_does_not_inherit_overlay_color() {
+        let node = Node {
+            color: Some("#22c55e".into()),
+            ..Node::default()
+        };
+        let mut with_color = apply_visual_style(div(), &node);
+        assert!(
+            with_color.style().text.color.is_some(),
+            "Badge :color would otherwise become host text_color"
+        );
+
+        let host = badge_host_node(&node);
+        let mut without = apply_visual_style(div(), &host);
+        assert!(
+            without.style().text.color.is_none(),
+            "host wrapper must not pass Badge overlay color to wrapped children"
+        );
     }
 }

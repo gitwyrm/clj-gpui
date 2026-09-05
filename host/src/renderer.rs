@@ -2093,9 +2093,10 @@ impl RootView {
     ) -> AnyElement {
         let badge = mapping::apply_badge_chrome(Badge::new(), node);
         // Badge is not `Styled`; wrapper owns :width/:height/:size/:flex.
+        // `:color` stays on Kit Badge (overlay), not the host text color.
         style_host(
             badge.children(self.render_children(node, path, window, cx)),
-            node,
+            &mapping::badge_host_node(node),
             cx,
         )
     }

@@ -594,12 +594,17 @@
    (merge {:type :label :text (str text)} style)))
 
 (defn- button-style
-  "Named `:size` becomes `:control-size`. `:caret` is Kit `dropdown_caret`."
+  "Named `:size` becomes `:control-size`. `:caret` is Kit `dropdown_caret`.
+  Explicit `:dropdown-caret` wins; `:caret` is always dropped so Serde
+  does not see two names for the same field."
   [style]
-  (let [style (apply-control-size (or style {}))]
+  (let [style (apply-control-size (or style {}))
+        has-caret? (contains? style :caret)
+        caret (:caret style)
+        style (dissoc style :caret)]
     (cond-> style
-      (and (contains? style :caret) (not (contains? style :dropdown-caret)))
-      (-> (dissoc :caret) (assoc :dropdown-caret (:caret style))))))
+      (and has-caret? (not (contains? style :dropdown-caret)))
+      (assoc :dropdown-caret caret))))
 
 (defn button
   "A clickable button. `on-click` is a real Clojure function (often `#()`).
@@ -612,7 +617,8 @@
   is a kebab icon name (empty `:text` is icon-button mode). `:tooltip`
   is Kit `Button::tooltip` (not the generic wrapper). `:rounded` is
   `:none` / `:small` / `:medium` / `:large` or a pixel number.
-  `:dropdown-caret` (`:caret`) shows a caret. `:toggled` is assistive
+  `:dropdown-caret` (`:caret`) shows a caret. Explicit `:dropdown-caret`
+  wins; `:caret` is never on the wire. `:toggled` is assistive
   pressed state. `:tab-index` (omit = 0) and `:tab-stop` (omit = true)
   are Kit tab order. `:accessibility-label` / `:id` / `:role` forward
   to Kit a11y. `:loading-icon` is a kebab name (omit = Kit spinner).
@@ -1093,8 +1099,9 @@
 
 (defn badge
   "Count, dot, or icon overlay around a child. `:max` is Kit's overflow
-  cap (default 99). `:color` is a hex background. `:icon` is a kebab
-  icon name (Kit `Badge::icon`, not a count).
+  cap (default 99). `:color` is a hex overlay background (Kit
+  `Badge::color`), not host text color on the wrapped child. `:icon`
+  is a kebab icon name (Kit `Badge::icon`, not a count).
 
   (ui/badge 3 (ui/icon :bell))
   (ui/badge {:dot true} (ui/button \"Alerts\" …))

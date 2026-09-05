@@ -1929,6 +1929,15 @@ mod tests {
         }))
         .unwrap();
         assert!(caret.dropdown_caret);
+        assert!(
+            serde_json::from_value::<Node>(json!({
+                "type": "button",
+                "caret": true,
+                "dropdown-caret": false
+            }))
+            .is_err(),
+            "both alias names on the wire are a Serde duplicate field"
+        );
 
         let alert: Node = serde_json::from_value(json!({
             "type": "alert",

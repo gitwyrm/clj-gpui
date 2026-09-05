@@ -153,7 +153,10 @@
     (is (nil? (:caret n)))
     (is (true? (:loading n)))
     (is (= :none (:rounded n)))
-    (is (false? (:tab-stop n)))))
+    (is (false? (:tab-stop n))))
+  (let [n (ui/button "More" {:caret true :dropdown-caret false})]
+    (is (false? (:dropdown-caret n)))
+    (is (nil? (:caret n)))))
 
 (deftest option-item-normalization
   (is (= {:id "light" :label "light"} (ui/option-item :light)))
