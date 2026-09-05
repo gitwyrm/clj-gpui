@@ -97,6 +97,14 @@
     (is (= 6 (:rows (ui/textarea "x" {:rows 6})))))
   (testing "style keys pass through"
     (is (true? (:strikethrough (ui/label "x" {:strikethrough true}))))
+    (is (true? (:truncate (ui/label "path" {:truncate true}))))
+    (is (= :nowrap (:whitespace (ui/label "path" {:whitespace :nowrap}))))
+    (is (= :ellipsis-middle (:text-overflow (ui/label "path" {:text-overflow :ellipsis-middle}))))
+    (is (= 2 (:line-clamp (ui/label "wrap" {:line-clamp 2}))))
+    (is (= "Lovelace" (:secondary (ui/label "Ada" {:secondary "Lovelace"}))))
+    (is (true? (:masked (ui/label "secret" {:masked true}))))
+    (is (= "Hel" (:highlights (ui/label "Hello" {:highlights "Hel" :highlights-match :prefix}))))
+    (is (= :prefix (:highlights-match (ui/label "Hello" {:highlights "Hel" :highlights-match :prefix}))))
     (is (= :ghost (:variant (ui/button "All" (fn []) {:variant :ghost}))))
     (is (= :circle (:shape (ui/checkbox false (fn []) {:shape :circle}))))
     (is (fn? (:on-double-click (ui/label "x" {:on-double-click (fn [])}))))
@@ -271,7 +279,8 @@
     (is (= 1 (:value (ui/pagination nil))))
     (let [n (ui/shimmer "Thinking…" {:duration 1 :spread 0.4 :spread-px 48
                                      :reverse true :once true
-                                     :highlight-color "#ffffff"})]
+                                     :highlight-color "#ffffff"
+                                     :truncate true :flex 1})]
       (is (= :shimmer (:type n)))
       (is (= "Thinking…" (:text n)))
       (is (= 1 (:duration n)))
@@ -279,7 +288,9 @@
       (is (= 48 (:spread-px n)))
       (is (true? (:reverse n)))
       (is (true? (:once n)))
-      (is (= "#ffffff" (:highlight-color n)))))
+      (is (= "#ffffff" (:highlight-color n)))
+      (is (true? (:truncate n)))
+      (is (= 1 (:flex n))))
   (testing "separator"
     (is (= :separator (:type (ui/separator))))
     (is (= "or" (:text (ui/separator "or"))))

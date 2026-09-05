@@ -535,12 +535,29 @@
   (merge base (apply-control-size (or opts {}))))
 
 (defn label
-  "A text label. Optional style map uses GPUI-oriented keys, not CSS.
+  "A text label (Kit `Label`). Optional style map uses GPUI-oriented keys,
+  not CSS.
+
+  `:truncate true` is GPUI `truncate()`: no wrap, clip overflow, and an
+  ellipsis at the end. That is layout clip, not a guessed character
+  count. `:whitespace :nowrap` and `:text-overflow` (`:ellipsis`,
+  `:ellipsis-start`, `:ellipsis-middle`) are the same GPUI text styles
+  separately. `:overflow :hidden` / `:overflow-hidden true` clip the
+  box. `:line-clamp n` keeps at most n lines. A StatusBar region already
+  clips; put `:truncate true` (and `:flex 1` when the text should fill
+  leftover width) on the label or shimmer.
+
+  Kit extras: `:secondary` is muted trailing text, `:masked true` paints
+  bullets, `:highlights` is the search string (`:highlights-match
+  :prefix` or `:full`, default full).
 
   (ui/label \"Hello\")
   (ui/label \"Hello\" {:font-size 20 :font-weight :bold})
   (ui/label \"todos\" {:font-family \".SystemUIFont\" :font-weight :light})
-  (ui/label title {:on-click #(enter item) :on-double-click #(start-edit item)})"
+  (ui/label title {:on-click #(enter item) :on-double-click #(start-edit item)})
+  (ui/label path {:flex 1 :truncate true})
+  (ui/label path {:width 220 :text-overflow :ellipsis-middle})
+  (ui/label \"Ada\" {:secondary \"Lovelace\"})"
   ([text]
    {:type :label :text (str text)})
   ([text style]
@@ -940,9 +957,12 @@
   `:duration` is seconds. `:spread` is a fraction of the text width;
   `:spread-px` is an absolute half-width and wins when both are set.
   `:highlight-color` is the sweep hex (layout `:color` is still text).
+  ShimmerText is `Styled`: `:truncate`, `:whitespace`, `:text-overflow`,
+  and `:overflow` are the same GPUI clip keys as `ui/label`.
 
   (ui/shimmer \"Thinking…\")
-  (ui/shimmer \"Indexing…\" {:duration 1 :spread 0.4 :reverse true})"
+  (ui/shimmer \"Indexing…\" {:duration 1 :spread 0.4 :reverse true})
+  (ui/shimmer path {:id \"scan\" :flex 1 :truncate true})"
   ([text]
    {:type :shimmer :text (str text)})
   ([text opts]
@@ -1759,11 +1779,15 @@
 
   `:left` / `:right` pin widgets to each end. Children are the center
   region (centered when both ends are set). Each slot is any clj-gpui
-  widget, or a sequence of them.
+  widget, or a sequence of them. Kit regions already `overflow_hidden`;
+  long text still wraps unless the child sets `:truncate` / `:whitespace
+  :nowrap` / `:text-overflow`.
 
   (ui/status-bar {:left (ui/label \"Ln 1, Col 1\")
                   :right [(ui/kbd \"ctrl-s\") (ui/label \"UTF-8\")]}
-    (ui/label \"Ready\"))"
+    (ui/label \"Ready\"))
+  (ui/status-bar {:left (ui/label \"Ln 1\")}
+    (ui/shimmer scan-path {:flex 1 :truncate true}))"
   [& args]
   (let [[opts children] (leading-opts args)
         left (slot-children (:left opts))
@@ -2581,7 +2605,11 @@
         (keyword? (:align m)) (update :align name)
         (keyword? (:justify m)) (update :justify name)
         (keyword? (:font-weight m)) (update :font-weight name)
-        (keyword? (:font-family m)) (update :font-family str)))))
+        (keyword? (:font-family m)) (update :font-family str)
+        (keyword? (:whitespace m)) (update :whitespace name)
+        (keyword? (:text-overflow m)) (update :text-overflow name)
+        (keyword? (:overflow m)) (update :overflow name)
+        (keyword? (:highlights-match m)) (update :highlights-match name)))))
 
 (defn- chat-opts
   [opts]
@@ -3032,7 +3060,8 @@
     :else op))
 
 (def ^:private nav-item-style-keys
-  [:bg :color :border :border-bottom :align :justify :font-weight :font-family])
+  [:bg :color :border :border-bottom :align :justify :font-weight :font-family
+   :whitespace :text-overflow :overflow])
 
 (defn- nav-item-case
   [m]

@@ -1444,13 +1444,21 @@ impl RootView {
                     .into_any_element()
             }
             "label" => {
-                let mut el = apply_style(div().id(eid(&key)), node, cx)
-                    .child(node.text.clone().unwrap_or_default());
+                let painted = apply_style(mapping::kit_label(node), node, cx);
                 let on_click = node.on_click.clone();
                 let on_double = node.on_double_click.clone();
-                if on_click.is_some() || on_double.is_some() {
+                if on_click.is_none() && on_double.is_none() {
+                    painted.into_any_element()
+                } else {
+                    let mut wrap = div().id(eid(&key)).cursor_pointer();
+                    if node.flex.unwrap_or(0.0) >= 1.0 || mapping::text_needs_min_w_0(node) {
+                        wrap = wrap.min_w_0();
+                    }
+                    if node.flex.unwrap_or(0.0) >= 1.0 {
+                        wrap = wrap.flex_1().min_h_0();
+                    }
                     let cmd_tx = self.cmd_tx.clone();
-                    el = el.cursor_pointer().on_click(move |event, _, _| {
+                    wrap = wrap.on_click(move |event, _, _| {
                         if event.click_count() >= 2 {
                             if let Some(id) = on_double.clone() {
                                 let _ = cmd_tx.send(Cmd::Callback {
@@ -1469,8 +1477,8 @@ impl RootView {
                             });
                         }
                     });
+                    wrap.child(painted).into_any_element()
                 }
-                el.into_any_element()
             }
             "button" => {
                 let label = node.text.clone().unwrap_or_default();
@@ -6424,8 +6432,8 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
         .into_any_element()
 }
 
-/// Kit `Styled` refinements: gap, padding, type, colors, alignment.
-/// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
+/// Kit `Styled` refinements: gap, padding, type, colors, alignment,
+/// wrap/clip. Not box geometry (`:width` / `:height` / `:size` / `:flex`).
 fn apply_kit_visual_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
     let mut el = mapping::apply_visual_style(el, node);
     if node_theme_pref(node).is_some() {

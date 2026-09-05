@@ -724,39 +724,19 @@ fn chart_hex(text: Option<&str>) -> Option<Hsla> {
     text.and_then(|s| Hsla::parse_hex(s.trim()).ok())
 }
 
-/// Kit `Styled` keys (gap, padding, type). Used on the real widget.
-fn chart_kit_style<E: Styled>(mut el: E, node: &Node) -> E {
-    if let Some(gap) = node.gap {
-        el = el.gap(px(gap));
-    }
-    if let Some(padding) = node.padding {
-        el = el.p(px(padding));
-    }
-    if let Some(font_size) = node.font_size {
-        el = el.text_size(px(font_size));
-    }
-    if let Some(color) = chart_hex(node.color.as_deref()) {
-        el = el.text_color(color);
-    }
-    el
+/// Kit `Styled` keys. Used on the real widget. Same vocabulary as
+/// `mapping::apply_visual_style` so overlay cells get truncate/nowrap.
+fn chart_kit_style<E: Styled>(el: E, node: &Node) -> E {
+    mapping::apply_visual_style(el, node)
 }
 
-/// Clojure box geometry (`:width` / `:height` / `:size`).
-fn chart_outer_style<E: Styled>(mut el: E, node: &Node) -> E {
-    if let Some(width) = node.width {
-        el = el.w(px(width));
-    }
-    if let Some(height) = node.height {
-        el = el.h(px(height));
-    }
-    if let Some(size) = node.size {
-        el = el.size(px(size));
-    }
-    el
+/// Clojure box geometry (`:width` / `:height` / `:size` / `:flex`).
+fn chart_outer_style<E: Styled>(el: E, node: &Node) -> E {
+    mapping::apply_box_style(el, node)
 }
 
 fn chart_layout<E: Styled>(el: E, node: &Node) -> E {
-    chart_outer_style(chart_kit_style(el, node), node)
+    mapping::apply_styled(el, node)
 }
 
 fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElement {
@@ -1060,13 +1040,7 @@ fn paint_static_tree(
                 }))
                 .into_any_element()
         }
-        "label" => chart_layout(
-            div()
-                .id(SharedString::from(path.to_string()))
-                .child(node.text.clone().unwrap_or_default()),
-            node,
-        )
-        .into_any_element(),
+        "label" => chart_layout(mapping::kit_label(node), node).into_any_element(),
         "nav-page" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
                 paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
@@ -2265,6 +2239,25 @@ mod tests {
                 "text": "Thinking…"
             })),
             "radar-label/3",
+        );
+        let _ = paint_chart_label(
+            &node(json!({
+                "type": "shimmer",
+                "text": "Indexing a/very/long/scan/path.rs",
+                "truncate": true,
+                "flex": 1
+            })),
+            "radar-label/4",
+        );
+        let _ = paint_chart_label(
+            &node(json!({
+                "type": "label",
+                "text": "Hello World",
+                "secondary": "Ada",
+                "text-overflow": "ellipsis-middle",
+                "width": 120
+            })),
+            "radar-label/5",
         );
     }
 

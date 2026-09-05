@@ -303,7 +303,11 @@
             (ui/progress-circle nil {:loading true :size :large
                                      :accessibility-label "Syncing"}))
    (example "ui/shimmer" "Animated text for an operation in progress."
-            (ui/shimmer "Indexing project…" {:id "shimmer-index"}))))
+            (ui/shimmer "Indexing project…" {:id "shimmer-index"}))
+   (example "ui/shimmer · :truncate true" "Clip overflowing sweep text with a layout ellipsis, not a guessed character count."
+            (ui/hstack {:width 220}
+                       (ui/shimmer "Indexing src/gpui/ui.clj · host/src/renderer.rs · examples/widgets/app.clj"
+                                   {:id "shimmer-truncate" :flex 1 :truncate true}))))
 
 (defn- feedback-panel [{:keys [alert?]}]
   (ui/vstack
@@ -969,7 +973,19 @@
    (example "ui/status-bar" "Compose left, center, and right status content."
             (ui/status-bar {:left (ui/label (str "Ln 1 · wrap " (pr-str wrap?)))
                             :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
-                           (ui/label (or (ui/format-option-id command-pick) "Ready"))))))
+                           (ui/label (or (ui/format-option-id command-pick) "Ready"))))
+   (example "ui/status-bar · truncated scan path" "Kit regions already clip; :truncate plus :flex 1 is wrap-off plus a layout ellipsis."
+            (ui/status-bar {:left (ui/label "Ln 1")
+                            :right [(ui/label "UTF-8")]}
+                           (ui/shimmer "Indexing /Users/ada/src/clj-gpui/host/src/renderer.rs"
+                                       {:id "scan-path" :flex 1 :truncate true})))
+   (example "ui/label · :text-overflow :ellipsis-middle" "Keep the start and end of a path when the middle has to go."
+            (ui/label "/Users/ada/projects/clj-gpui/host/src/renderer.rs"
+                      {:width 220 :text-overflow :ellipsis-middle}))
+   (example "ui/label · Kit secondary / highlights" "Secondary is muted trailing text; highlights is Kit search markup."
+            (ui/hstack {:gap 16}
+                       (ui/label "Ada" {:secondary "Lovelace"})
+                       (ui/label "Hello World" {:highlights "World"}))))))
 
 (def ^:private pages
   [{:id :controls

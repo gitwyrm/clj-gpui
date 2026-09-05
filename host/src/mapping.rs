@@ -8,6 +8,7 @@ use gpui_component::{
     Size,
     button::{Button, ButtonVariants, ToggleVariant},
     group_box::GroupBoxVariant,
+    label::{HighlightsMatch, Label},
     shimmer::ShimmerStyle,
     slider::SliderScale,
     tab::TabVariant,
@@ -62,7 +63,8 @@ pub fn parse_hsla(value: &str) -> Option<Hsla> {
     })
 }
 
-/// Kit `Styled` visual keys: gap, padding, type, colors, alignment.
+/// Kit `Styled` visual keys: gap, padding, type, colors, alignment,
+/// wrap/clip (`truncate`, `whitespace`, `text-overflow`, `overflow`).
 /// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
 pub fn apply_visual_style<E: Styled>(mut el: E, node: &Node) -> E {
     if let Some(gap) = node.gap {
@@ -119,7 +121,97 @@ pub fn apply_visual_style<E: Styled>(mut el: E, node: &Node) -> E {
         Some("between") => el = el.justify_between(),
         _ => {}
     }
+    apply_text_overflow(el, node)
+}
+
+/// True when `overflow: hidden` or `overflow-hidden: true`.
+/// NavStack uses this for a slide; any Styled node may clip with the
+/// same keys. Not AvatarGroup `:ellipsis`.
+pub fn overflow_clips(overflow: Option<&str>, overflow_hidden: bool) -> bool {
+    overflow_hidden || matches!(overflow.map(catalog::normalize).as_deref(), Some("hidden"))
+}
+
+/// GPUI wrap-off + layout ellipsis (`whitespace_nowrap`, `text_ellipsis*`,
+/// `truncate`, `line_clamp`, `overflow_hidden`). A character-count `…`
+/// suffix is not this.
+pub fn apply_text_overflow<E: Styled>(mut el: E, node: &Node) -> E {
+    let truncate = node.truncate;
+    if overflow_clips(node.overflow.as_deref(), node.overflow_hidden) || truncate {
+        el = el.overflow_hidden();
+    }
+    match node
+        .whitespace
+        .as_deref()
+        .map(catalog::normalize)
+        .as_deref()
+    {
+        Some("nowrap") => el = el.whitespace_nowrap(),
+        Some("normal") => el = el.whitespace_normal(),
+        _ if truncate => el = el.whitespace_nowrap(),
+        _ => {}
+    }
+    match node
+        .text_overflow
+        .as_deref()
+        .map(catalog::normalize)
+        .as_deref()
+    {
+        Some("ellipsis") | Some("end") => el = el.text_ellipsis(),
+        Some("ellipsis start") | Some("start") => el = el.text_ellipsis_start(),
+        Some("ellipsis middle") | Some("middle") => el = el.text_ellipsis_middle(),
+        _ if truncate => el = el.text_ellipsis(),
+        _ => {}
+    }
+    if let Some(lines) = node.line_clamp {
+        if lines.is_finite() && lines >= 1.0 {
+            el = el.line_clamp(lines as usize);
+        }
+    }
+    if text_needs_min_w_0(node) {
+        el = el.min_w_0();
+    }
     el
+}
+
+/// Flex children default to a content min-size. Nowrap / ellipsis need
+/// `min_w_0` so a StatusBar region can shrink the text instead of wrapping.
+pub fn text_needs_min_w_0(node: &Node) -> bool {
+    node.truncate
+        || matches!(
+            node.whitespace
+                .as_deref()
+                .map(catalog::normalize)
+                .as_deref(),
+            Some("nowrap")
+        )
+        || node
+            .text_overflow
+            .as_deref()
+            .is_some_and(|value| !catalog::normalize(value).is_empty())
+}
+
+/// Kit `Label`: main text plus optional secondary, mask, and highlights.
+pub fn kit_label(node: &Node) -> Label {
+    let mut label = Label::new(node.text.clone().unwrap_or_default());
+    if let Some(secondary) = node.secondary.as_deref().filter(|s| !s.is_empty()) {
+        label = label.secondary(secondary.to_string());
+    }
+    if node.masked {
+        label = label.masked(true);
+    }
+    if let Some(text) = node.highlights.as_deref().filter(|s| !s.is_empty()) {
+        let matched = match node
+            .highlights_match
+            .as_deref()
+            .map(catalog::normalize)
+            .as_deref()
+        {
+            Some("prefix") => HighlightsMatch::Prefix(text.to_string().into()),
+            _ => HighlightsMatch::Full(text.to_string().into()),
+        };
+        label = label.highlights(matched);
+    }
+    label
 }
 
 /// Clojure box geometry (`:width` / `:height` / `:size` / `:flex`).
@@ -164,6 +256,12 @@ pub fn has_styled_keys(style: &StyledKeys) -> bool {
         || style.height.is_some()
         || style.size.is_some()
         || style.flex.is_some()
+        || style.truncate.is_some()
+        || style.whitespace.is_some()
+        || style.text_overflow.is_some()
+        || style.line_clamp.is_some()
+        || style.overflow.is_some()
+        || style.overflow_hidden.is_some()
 }
 
 /// Overlay `over` onto `base` for the Styled vocabulary only.
@@ -197,6 +295,15 @@ pub fn overlay_styled(base: &StyledKeys, over: &StyledKeys) -> StyledKeys {
         height: over.height.or(base.height),
         size: over.size.or(base.size),
         flex: over.flex.or(base.flex),
+        truncate: over.truncate.or(base.truncate),
+        whitespace: over.whitespace.clone().or_else(|| base.whitespace.clone()),
+        text_overflow: over
+            .text_overflow
+            .clone()
+            .or_else(|| base.text_overflow.clone()),
+        line_clamp: over.line_clamp.or(base.line_clamp),
+        overflow: over.overflow.clone().or_else(|| base.overflow.clone()),
+        overflow_hidden: over.overflow_hidden.or(base.overflow_hidden),
     }
 }
 
@@ -849,5 +956,129 @@ mod tests {
         assert_eq!(kept.strikethrough, Some(true));
         assert!(kept.to_node().shadow);
         assert!(kept.to_node().strikethrough);
+    }
+
+    #[test]
+    fn truncate_is_gpui_overflow_nowrap_and_ellipsis() {
+        use gpui::{Overflow, TextOverflow, WhiteSpace};
+
+        let truncated = Node {
+            truncate: true,
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &truncated);
+        let style = dummy.style();
+        assert_eq!(style.overflow.x, Some(Overflow::Hidden));
+        assert_eq!(style.overflow.y, Some(Overflow::Hidden));
+        assert_eq!(style.text.white_space, Some(WhiteSpace::Nowrap));
+        assert!(matches!(
+            style.text.text_overflow,
+            Some(TextOverflow::Truncate(_))
+        ));
+        assert!(text_needs_min_w_0(&truncated));
+
+        let middle = Node {
+            text_overflow: Some("ellipsis-middle".into()),
+            ellipsis: true,
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &middle);
+        assert!(matches!(
+            dummy.style().text.text_overflow,
+            Some(TextOverflow::TruncateMiddle(_))
+        ));
+        assert!(!overflow_clips(
+            middle.overflow.as_deref(),
+            middle.overflow_hidden
+        ));
+
+        let hidden = Node {
+            overflow: Some("hidden".into()),
+            ..Node::default()
+        };
+        assert!(overflow_clips(
+            hidden.overflow.as_deref(),
+            hidden.overflow_hidden
+        ));
+        let mut dummy = apply_styled(div(), &hidden);
+        assert_eq!(dummy.style().overflow.x, Some(Overflow::Hidden));
+        assert!(dummy.style().text.white_space.is_none());
+        assert!(dummy.style().text.text_overflow.is_none());
+
+        let start = Node {
+            text_overflow: Some("ellipsis-start".into()),
+            whitespace: Some("nowrap".into()),
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &start);
+        assert_eq!(dummy.style().text.white_space, Some(WhiteSpace::Nowrap));
+        assert!(matches!(
+            dummy.style().text.text_overflow,
+            Some(TextOverflow::TruncateStart(_))
+        ));
+
+        let clamped = Node {
+            line_clamp: Some(2.0),
+            ..Node::default()
+        };
+        let mut dummy = apply_styled(div(), &clamped);
+        assert_eq!(dummy.style().text.line_clamp, Some(2));
+        assert_eq!(dummy.style().overflow.x, Some(Overflow::Hidden));
+    }
+
+    #[test]
+    fn avatar_ellipsis_is_not_text_overflow() {
+        let avatar = Node {
+            ellipsis: true,
+            ..Node::default()
+        };
+        assert!(!overflow_clips(
+            avatar.overflow.as_deref(),
+            avatar.overflow_hidden
+        ));
+        let mut dummy = apply_styled(div(), &avatar);
+        assert!(dummy.style().overflow.x.is_none());
+        assert!(dummy.style().text.text_overflow.is_none());
+        assert!(!has_styled_keys(&StyledKeys::default()));
+        assert!(has_styled_keys(&StyledKeys {
+            truncate: Some(true),
+            ..StyledKeys::default()
+        }));
+        let merged = overlay_styled(
+            &StyledKeys {
+                truncate: Some(true),
+                ..StyledKeys::default()
+            },
+            &StyledKeys {
+                truncate: Some(false),
+                text_overflow: Some("ellipsis-middle".into()),
+                ..StyledKeys::default()
+            },
+        );
+        assert_eq!(merged.truncate, Some(false));
+        assert_eq!(merged.text_overflow.as_deref(), Some("ellipsis-middle"));
+        assert!(!merged.to_node().truncate);
+        assert_eq!(
+            merged.to_node().text_overflow.as_deref(),
+            Some("ellipsis-middle")
+        );
+    }
+
+    #[test]
+    fn kit_label_accepts_secondary_mask_and_prefix_highlights() {
+        let node = Node {
+            text: Some("Hello World".into()),
+            secondary: Some("Ada".into()),
+            masked: true,
+            highlights: Some("Hel".into()),
+            highlights_match: Some("prefix".into()),
+            ..Node::default()
+        };
+        let _ = kit_label(&node);
+        let plain = kit_label(&Node {
+            text: Some("Hi".into()),
+            ..Node::default()
+        });
+        let _ = plain;
     }
 }

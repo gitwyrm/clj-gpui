@@ -49,6 +49,18 @@ pub struct StyledKeys {
     pub height: Option<f32>,
     pub size: Option<f32>,
     pub flex: Option<f32>,
+    /// GPUI `truncate()`: overflow hidden + nowrap + end ellipsis.
+    /// Not AvatarGroup `:ellipsis`.
+    pub truncate: Option<bool>,
+    /// GPUI whitespace: `nowrap` / `normal`.
+    pub whitespace: Option<String>,
+    /// GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle`.
+    pub text_overflow: Option<String>,
+    /// GPUI `line_clamp`. Also overflow-hidden.
+    pub line_clamp: Option<f32>,
+    /// CSS-like overflow. `hidden` clips. Same key NavStack already used.
+    pub overflow: Option<String>,
+    pub overflow_hidden: Option<bool>,
 }
 
 impl StyledKeys {
@@ -71,6 +83,12 @@ impl StyledKeys {
             height: self.height,
             size: self.size,
             flex: self.flex,
+            truncate: self.truncate.unwrap_or(false),
+            whitespace: self.whitespace.clone(),
+            text_overflow: self.text_overflow.clone(),
+            line_clamp: self.line_clamp,
+            overflow: self.overflow.clone(),
+            overflow_hidden: self.overflow_hidden.unwrap_or(false),
             ..Node::default()
         }
     }
@@ -979,6 +997,21 @@ pub struct Node {
     pub compact: bool,
     #[serde(default)]
     pub strikethrough: bool,
+    /// GPUI `truncate()`: `overflow_hidden` + `whitespace_nowrap` +
+    /// `text_ellipsis`. Layout clip, not a character-count suffix.
+    /// Not AvatarGroup `:ellipsis`.
+    #[serde(default)]
+    pub truncate: bool,
+    /// GPUI whitespace: `nowrap` or `normal`.
+    #[serde(default)]
+    pub whitespace: Option<String>,
+    /// GPUI text overflow: `ellipsis`, `ellipsis-start`, `ellipsis-middle`.
+    /// Not AvatarGroup `:ellipsis`.
+    #[serde(default, rename = "text-overflow")]
+    pub text_overflow: Option<String>,
+    /// GPUI `line_clamp` (max lines, then clip). Also overflow-hidden.
+    #[serde(default, rename = "line-clamp")]
+    pub line_clamp: Option<f32>,
     #[serde(default)]
     pub shadow: bool,
     #[serde(default)]
@@ -1174,9 +1207,19 @@ pub struct Node {
     /// Code editor highlighter language (`rust`, `clojure`, …).
     #[serde(default)]
     pub language: Option<String>,
-    /// OTP masked cells.
+    /// OTP masked cells. Kit `Label`: mask the label text as bullets.
     #[serde(default)]
     pub masked: bool,
+    /// Kit `Label::secondary`: muted trailing text after the main label.
+    #[serde(default)]
+    pub secondary: Option<String>,
+    /// Kit `Label::highlights` search text. Full match unless
+    /// `highlights-match` is `prefix`.
+    #[serde(default)]
+    pub highlights: Option<String>,
+    /// Kit `HighlightsMatch`: `full` (default) or `prefix`.
+    #[serde(default, rename = "highlights-match")]
+    pub highlights_match: Option<String>,
     /// Sidebar collapsed chrome.
     #[serde(default)]
     pub collapsed: bool,
@@ -1345,11 +1388,13 @@ pub struct Node {
     /// `item` (including unknown / `false`) suppresses `transition-style`.
     #[serde(default)]
     pub item: Option<NavItemWire>,
-    /// NavStack: CSS-like overflow. `hidden` clips (needed for a slide).
-    /// Omitted does not clip. Not AvatarGroup ellipsis.
+    /// CSS-like overflow. `hidden` clips. NavStack needs this for a slide.
+    /// Omitted does not clip. Not AvatarGroup ellipsis and not
+    /// `text-overflow`.
     #[serde(default)]
     pub overflow: Option<String>,
-    /// NavStack: explicit clip opt-in. Omitted / false does not clip.
+    /// Explicit clip opt-in (`overflow_hidden()`). Omitted / false does
+    /// not clip. NavStack uses this; any Styled node may too.
     #[serde(default, rename = "overflow-hidden")]
     pub overflow_hidden: bool,
     /// NavStack: when the next page id equals the nearest forward entry,
@@ -2462,6 +2507,42 @@ mod tests {
         .unwrap();
         assert_eq!(node.kind, "label");
         assert_eq!(node.text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn decodes_text_clip_and_kit_label_keys() {
+        let node: Node = serde_json::from_value(json!({
+            "type": "label",
+            "text": "Hello World",
+            "truncate": true,
+            "whitespace": "nowrap",
+            "text-overflow": "ellipsis-middle",
+            "line-clamp": 2,
+            "overflow": "hidden",
+            "overflow-hidden": true,
+            "secondary": "Lovelace",
+            "masked": true,
+            "highlights": "Hel",
+            "highlights-match": "prefix"
+        }))
+        .unwrap();
+        assert!(node.truncate);
+        assert_eq!(node.whitespace.as_deref(), Some("nowrap"));
+        assert_eq!(node.text_overflow.as_deref(), Some("ellipsis-middle"));
+        assert_eq!(node.line_clamp, Some(2.0));
+        assert_eq!(node.overflow.as_deref(), Some("hidden"));
+        assert!(node.overflow_hidden);
+        assert_eq!(node.secondary.as_deref(), Some("Lovelace"));
+        assert!(node.masked);
+        assert_eq!(node.highlights.as_deref(), Some("Hel"));
+        assert_eq!(node.highlights_match.as_deref(), Some("prefix"));
+        let omitted: Node = serde_json::from_value(json!({"type": "label", "text": "Hi"})).unwrap();
+        assert!(!omitted.truncate);
+        assert!(omitted.whitespace.is_none());
+        assert!(omitted.text_overflow.is_none());
+        assert!(omitted.secondary.is_none());
+        assert!(!omitted.masked);
+        assert!(omitted.highlights.is_none());
     }
 
     #[test]

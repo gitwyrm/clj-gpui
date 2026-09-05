@@ -266,11 +266,18 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `row-height` | number | `data-table`: Kit `Size::Size` row height in pixels (`table_row_height`). Named `control-size` still maps to Kit `Sizable`. Viewport `height` is the outer wrapper, not the row. Omitted is Kit Medium (32px) |
 | `export-generation` | number or string | `data-table`: replay token for `TableState::dump`. Same shape as nav-stack `replace-generation`. A new token with `on-export` dumps the current native headers/rows (host-owned order after a header drag; row-only and column-definition Clojure updates remap onto that order; a Clojure column id/order change replaces it) |
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |
-| `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false) |
+| `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false). Not text clipping |
+| `truncate` | bool | GPUI `truncate()`: overflow hidden + nowrap + end ellipsis. Layout clip, not a character-count suffix. Not AvatarGroup `ellipsis` |
+| `whitespace` | string | GPUI whitespace: `nowrap` / `normal` |
+| `text-overflow` | string | GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle` (path-friendly). Not AvatarGroup `ellipsis` |
+| `line-clamp` | number | GPUI `line_clamp` (max lines; also overflow-hidden) |
+| `secondary` | string | `label`: Kit `Label::secondary` muted trailing text |
+| `highlights` | string | `label`: Kit `Label::highlights` search text |
+| `highlights-match` | string | `label`: `full` (default) or `prefix` |
 | `autohide` | bool | `notification` (default true) |
 | `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; the host also registers a Clojure grammar |
 | `rows` | number | `textarea` visible height (default 3) |
-| `masked` | bool | `otp-input` |
+| `masked` | bool | `otp-input` cells. `label`: Kit `Label::masked` (bullet glyphs) |
 | `collapsed` | bool | `sidebar` |
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center`. `bubble-reactions`: Kit `BubbleReactionSide` (`top` / `bottom`, default `bottom`) |
 | `format` | string | `markdown` vs `html` (node `type` `html` is enough) |
@@ -315,8 +322,8 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `motion` | string | `nav-stack`: Kit `NavMotion`. `immediate` skips the stack transition. Omitted / `animated` runs the transition when `duration` is set and > 0 |
 | `transition-style` | string | `nav-stack`: convenience Kit `item` renderer. `slide` is the showcase slide. Omitted keeps Kit's default unchanged `NavPage` renderer. Independent of `duration`. A present `item` (including unknown / `false`) suppresses this; it does not fall back to slide |
 | `item` | string, object, array, or bool | `nav-stack`: host-evaluated Kit `NavStack::item` recipe from live `NavPage` `phase` / `operation` / `index` / eased `progress`. Always Styled-refines the same `NavPage` so the mounted `view()` stays the child. Not a callback and not Kit's arbitrary `Fn(NavPage, &mut Window, &mut App) -> AnyElement`. `slide` is the showcase recipe. An object may have `match` arms; an array is those arms. `left` / `opacity` are a number or `{from, to}` lerp by progress. Remaining keys are the ordinary Styled vocabulary (`padding`, `bg`, `color`, …). Recipe `shadow` / `strikethrough` are optional booleans so a match arm can set `false` over a base `true`. `false` as the whole `item` is a dropped Clojure fn. A present `item` suppresses `transition-style` |
-| `overflow` | string | `nav-stack`: `hidden` clips. Omitted does not clip. Not AvatarGroup ellipsis |
-| `overflow-hidden` | bool | `nav-stack`: explicit clip opt-in. Omitted / false does not clip |
+| `overflow` | string | CSS-like overflow. `hidden` clips (`overflow_hidden()`). NavStack needs this for a slide. Any Styled node may use it. Omitted does not clip. Not AvatarGroup ellipsis and not `text-overflow` |
+| `overflow-hidden` | bool | Explicit `overflow_hidden()` opt-in. Omitted / false does not clip. Same clip as `overflow: hidden` |
 | `reuse-forward` | bool | `nav-stack`: omitted / true reuses the nearest retained forward entry (`forward()`). `false` forces a fresh `push()` even when the new page id equals that nearest id, and discards the forward branch |
 | `replace-generation` | number or string | `nav-stack`: same-id Kit `replace()` token. Changing it on the current `CljNavPage` entity creates a fresh page entity and calls `replace()` (forward is kept). Unchanged across rerenders is a no-op. Bound to that entity (not the catalog id). Navigation to another history entry keeps the old binding until the first later token change, which rebinds; only the next change may `replace()` |
 | `spread` | number | `shimmer`: relative highlight half-width (Kit default 0.3; Kit clamps 0.05..=1). Forwarded unclamped |

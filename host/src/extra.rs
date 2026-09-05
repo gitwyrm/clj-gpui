@@ -626,11 +626,7 @@ pub fn nav_commit_replace_binding(
 /// Kit clipping is application-owned. Opt in with `overflow: hidden` or
 /// `overflow-hidden: true`. Omitted does not clip.
 pub fn nav_clip(overflow: Option<&str>, overflow_hidden: bool) -> bool {
-    overflow_hidden
-        || matches!(
-            overflow.map(crate::catalog::normalize).as_deref(),
-            Some("hidden")
-        )
+    mapping::overflow_clips(overflow, overflow_hidden)
 }
 
 /// Path for one stack-entry `CljNavPage`. Index keeps repeated catalog ids

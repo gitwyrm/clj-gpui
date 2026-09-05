@@ -234,6 +234,9 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 
 ```clojure
 (ui/label "Hello" {:font-size 20 :font-weight :bold :color "#c0caf5"})
+(ui/label path {:flex 1 :truncate true})
+(ui/label path {:width 220 :text-overflow :ellipsis-middle})
+(ui/label "Ada" {:secondary "Lovelace"})
 (ui/button "+" on-click)
 (ui/button "Save" save! {:primary true})
 (ui/window {:title "Todos" :chrome :app :width 640 :height 820 :theme "Tokyo Night"} ...)
@@ -261,6 +264,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 (ui/progress-circle nil {:loading true})
 (ui/shimmer "Thinking…")
 (ui/shimmer "Indexing…" {:duration 1 :spread 0.4 :reverse true})
+(ui/shimmer scan-path {:flex 1 :truncate true})
 (ui/select selected {:options [{:id :clj :label "Clojure"} "Rust"]
                      :placeholder "Language"
                      :searchable true
@@ -323,7 +327,7 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
    :menu-max-h 220
    :on-change handle! :on-query #(reset! !q %)})
 (ui/status-bar {:left (ui/label "Ln 1") :right [(ui/kbd "ctrl-s") (ui/label "UTF-8")]}
-  (ui/label "Ready"))
+  (ui/shimmer scan-path {:flex 1 :truncate true}))
 (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
 (ui/data-table {:columns [{:id :name :label "Name" :align :end}
                           {:id :lang :label "Lang"}]
