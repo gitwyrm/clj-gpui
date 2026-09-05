@@ -2330,7 +2330,7 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     } else {
         TextView::markdown(SharedString::from(key.to_string()), body)
     };
-    view = view.selectable(true);
+    view = view.selectable(node.selectable.unwrap_or(true));
     if node.height.is_some() || node.flex.unwrap_or(0.0) >= 1.0 {
         view = view.scrollable(true);
     }
@@ -2512,8 +2512,10 @@ pub fn paint_panel_body(
                 .child(paint_chart(node, path, cx))
                 .into_any_element()
         }
-        _ if !node.children.is_empty() => crate::overlay::paint_static(&node.children, emit, path),
-        _ => crate::overlay::paint_static(std::slice::from_ref(node), emit, path),
+        _ if !node.children.is_empty() => {
+            crate::overlay::paint_static(&node.children, emit, path, Some(cx))
+        }
+        _ => crate::overlay::paint_static(std::slice::from_ref(node), emit, path, Some(cx)),
     }
 }
 
@@ -2567,9 +2569,9 @@ impl CljNavPage {
 }
 
 impl Render for CljNavPage {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let node = self.live.borrow().clone();
-        crate::overlay::paint_scroller_tree(&node, &self.path, &self.cmd_tx)
+        crate::overlay::paint_scroller_tree(&node, &self.path, &self.cmd_tx, Some(cx))
     }
 }
 
@@ -2750,7 +2752,18 @@ fn infer_settings_kind(field: &Item) -> String {
 }
 
 pub fn build_settings(node: &Node, key: &str, cmd_tx: &mpsc::Sender<Cmd>) -> Settings {
-    Settings::new(SharedString::from(key.to_string())).pages(settings_pages(node, cmd_tx))
+    let mut settings =
+        Settings::new(SharedString::from(key.to_string())).pages(settings_pages(node, cmd_tx));
+    if let Some(width) = node.sidebar_width.filter(|n| n.is_finite() && *n > 0.0) {
+        settings = settings.sidebar_width(px(width));
+    }
+    if let Some(range) = mapping::sidebar_size_range(node) {
+        settings = settings.sidebar_size_range(range);
+    }
+    if let Some(name) = node.group_variant.as_deref().filter(|s| !s.is_empty()) {
+        settings = settings.with_group_variant(mapping::parse_group_variant(Some(name)));
+    }
+    settings
 }
 
 pub fn parse_sheet_placement(node: &Node) -> Placement {

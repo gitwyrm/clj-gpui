@@ -20,7 +20,7 @@ use gpui_component::{
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, DropdownButton},
     clipboard::Clipboard,
-    dialog::{AlertDialog, DialogButtonProps},
+    dialog::AlertDialog,
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     hover_card::HoverCard,
@@ -219,7 +219,7 @@ pub(crate) fn avatar_group_style_split(node: &Node) -> AvatarGroupStyleSplit {
     }
 }
 
-fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
+fn kit_hover_card(node: &Node, path: &str, cx: Option<&App>) -> HoverCard {
     let mut card = HoverCard::new(SharedString::from(node_key(node, path)));
     if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
         card = card.anchor(anchor);
@@ -234,13 +234,11 @@ fn kit_hover_card(node: &Node, path: &str) -> HoverCard {
         card = card.appearance(appearance);
     }
     if let Some(trigger) = node.trigger.as_deref() {
-        card = card.trigger(paint_chart_element(trigger, &format!("{path}-trigger")));
+        card = card.trigger(paint_chart_element(trigger, &format!("{path}-trigger"), cx));
     }
-    card.children(
-        node.children.iter().enumerate().map(|(child_ix, child)| {
-            paint_chart_element(child, &static_child_path(path, child_ix))
-        }),
-    )
+    card.children(node.children.iter().enumerate().map(|(child_ix, child)| {
+        paint_chart_element(child, &static_child_path(path, child_ix), cx)
+    }))
 }
 
 pub fn collect_open_dialogs(root: &Node) -> Vec<DialogSpec> {
@@ -694,16 +692,19 @@ pub fn fill_popup_menu(
 /// children append `/index` so sibling stacks cannot collide. Button clicks
 /// enqueue `QueuedAction::ButtonClick` with that path; ids are resolved
 /// against the installed tree, never captured at paint.
-pub fn paint_static(nodes: &[Node], emit: ActionEmitter, path: &str) -> gpui::AnyElement {
+pub fn paint_static(
+    nodes: &[Node],
+    emit: ActionEmitter,
+    path: &str,
+    cx: Option<&App>,
+) -> gpui::AnyElement {
     v_flex()
         .gap(px(8.))
         .p(px(8.))
         .min_w(px(160.))
-        .children(
-            nodes.iter().enumerate().map(|(ix, node)| {
-                paint_static_node(node, &static_child_path(path, ix), emit.clone())
-            }),
-        )
+        .children(nodes.iter().enumerate().map(|(ix, node)| {
+            paint_static_node(node, &static_child_path(path, ix), emit.clone(), cx)
+        }))
         .into_any_element()
 }
 
@@ -717,7 +718,7 @@ pub fn static_child_path(prefix: &str, index: usize) -> String {
 /// widgets as the main tree (badge, avatar, tag, …), not only the static
 /// overlay subset used by dialogs.
 pub fn paint_chart_label(node: &Node, path: &str) -> gpui::AnyElement {
-    paint_chart_element(node, path)
+    paint_chart_element(node, path, None)
 }
 
 fn chart_hex(text: Option<&str>) -> Option<Hsla> {
@@ -747,20 +748,25 @@ fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElem
 
 struct ChartPaint<'a> {
     cmd_tx: Option<&'a mpsc::Sender<Cmd>>,
+    cx: Option<&'a App>,
 }
 
 impl crate::chat::NodePainter for ChartPaint<'_> {
     fn paint_node(&mut self, node: &Node, path: &str) -> gpui::AnyElement {
-        paint_static_tree(node, path, self.cmd_tx)
+        paint_static_tree(node, path, self.cmd_tx, self.cx)
     }
 
     fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
         self.cmd_tx.cloned()
     }
+
+    fn app(&self) -> Option<&App> {
+        self.cx
+    }
 }
 
-pub(crate) fn paint_chart_element(node: &Node, path: &str) -> gpui::AnyElement {
-    paint_static_tree(node, path, None)
+pub(crate) fn paint_chart_element(node: &Node, path: &str, cx: Option<&App>) -> gpui::AnyElement {
+    paint_static_tree(node, path, None, cx)
 }
 
 /// Paint a DataTable `render_td` widget. Same RenderOnce subset as radar
@@ -770,25 +776,28 @@ pub(crate) fn paint_table_cell(
     node: &Node,
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
+    cx: Option<&App>,
 ) -> gpui::AnyElement {
-    paint_static_tree(node, path, cmd_tx)
+    paint_static_tree(node, path, cmd_tx, cx)
 }
 
 pub(crate) fn paint_scroller_tree(
     node: &Node,
     path: &str,
     cmd_tx: &mpsc::Sender<Cmd>,
+    cx: Option<&App>,
 ) -> gpui::AnyElement {
-    paint_static_tree(node, path, Some(cmd_tx))
+    paint_static_tree(node, path, Some(cmd_tx), cx)
 }
 
 fn paint_static_tree(
     node: &Node,
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
+    cx: Option<&App>,
 ) -> gpui::AnyElement {
     if chat::is_chat_kind(&node.kind) {
-        return chat::render_any(&mut ChartPaint { cmd_tx }, node, path);
+        return chat::render_any(&mut ChartPaint { cmd_tx, cx }, node, path);
     }
     match node.kind.as_str() {
         "button" => {
@@ -796,7 +805,7 @@ fn paint_static_tree(
             if let Some(label) = mapping::jump_button_visible_label(node) {
                 button = button.label(label.to_string());
             }
-            button = apply_button_chrome(button, node);
+            button = apply_button_chrome(button, node, cx);
             if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
                 let tx = tx.clone();
                 button = button.on_click(move |_, _, _| {
@@ -811,12 +820,12 @@ fn paint_static_tree(
         }
         "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
             }))
             .into_any_element(),
         "vstack" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
             }))
             .into_any_element(),
         "spacer" => {
@@ -905,7 +914,7 @@ fn paint_static_tree(
         "badge" => {
             let mut badge = mapping::apply_badge_chrome(Badge::new(), node);
             badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
             }));
             chart_host(badge, &mapping::badge_host_node(node), path)
         }
@@ -933,7 +942,7 @@ fn paint_static_tree(
             let group = chart_kit_style(kit_avatar_group(node), node);
             chart_outer_style(avatar_group_element(group, node), node).into_any_element()
         }
-        "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
+        "hover-card" => chart_layout(kit_hover_card(node, path, cx), node).into_any_element(),
         "progress" => chart_layout(
             mapping::apply_progress_chrome(
                 Progress::new(SharedString::from(path.to_string())),
@@ -960,7 +969,7 @@ fn paint_static_tree(
             }
             chart_layout(
                 circle.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
                 })),
                 node,
             )
@@ -1027,20 +1036,20 @@ fn paint_static_tree(
             }
             chart_layout(box_, node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
                 }))
                 .into_any_element()
         }
         "label" => chart_layout(mapping::kit_label(node), node).into_any_element(),
         "nav-page" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
             }))
             .into_any_element(),
         _ if !node.children.is_empty() => {
             chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
+                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
                 }))
                 .into_any_element()
         }
@@ -1125,14 +1134,19 @@ fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
     found
 }
 
-fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyElement {
+fn paint_static_node(
+    node: &Node,
+    path: &str,
+    emit: ActionEmitter,
+    cx: Option<&App>,
+) -> gpui::AnyElement {
     match node.kind.as_str() {
         "button" => {
             let mut button = Button::new(SharedString::from(path.to_string()));
             if let Some(label) = mapping::jump_button_visible_label(node) {
                 button = button.label(label.to_string());
             }
-            button = apply_button_chrome(button, node);
+            button = apply_button_chrome(button, node, cx);
             if node.on_click.is_some() {
                 let emit = emit.clone();
                 let key = path.to_string();
@@ -1145,13 +1159,13 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
         "hstack" => h_flex()
             .gap(px(node.gap.unwrap_or(8.)))
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), emit.clone())
+                paint_static_node(child, &static_child_path(path, child_ix), emit.clone(), cx)
             }))
             .into_any_element(),
         "vstack" => v_flex()
             .gap(px(node.gap.unwrap_or(8.)))
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), emit.clone())
+                paint_static_node(child, &static_child_path(path, child_ix), emit.clone(), cx)
             }))
             .into_any_element(),
         "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
@@ -1167,13 +1181,14 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
     }
 }
 
-pub(crate) fn apply_button_chrome(button: Button, node: &Node) -> Button {
-    mapping::apply_button_chrome(button, node)
+pub(crate) fn apply_button_chrome(button: Button, node: &Node, cx: Option<&App>) -> Button {
+    mapping::apply_button_chrome(button, node, cx)
 }
 
 pub(crate) fn apply_dropdown_button_chrome(
     mut dropdown: DropdownButton,
     node: &Node,
+    cx: Option<&App>,
 ) -> DropdownButton {
     let chrome = mapping::button_chrome(
         node.variant.as_deref(),
@@ -1183,6 +1198,7 @@ pub(crate) fn apply_dropdown_button_chrome(
         node.control_size.as_deref(),
     );
     dropdown = mapping::apply_named_button_variant(dropdown, chrome.variant);
+    dropdown = mapping::apply_custom_button_variant(dropdown, node, cx);
     if chrome.outline {
         dropdown = dropdown.outline();
     }
@@ -1200,12 +1216,12 @@ pub(crate) fn apply_dropdown_button_chrome(
 
 /// Build a `Button` trigger for popover / dropdown-menu. Triggers must be
 /// `Selectable + IntoElement`; `AnyElement` does not qualify.
-pub fn trigger_button(node: Option<&Node>, key: &str) -> Button {
+pub fn trigger_button(node: Option<&Node>, key: &str, cx: Option<&App>) -> Button {
     let button = Button::new(SharedString::from(format!("{key}-trigger")));
     let Some(n) = node else {
         return button.label("Open");
     };
-    let mut button = apply_button_chrome(button, n);
+    let mut button = apply_button_chrome(button, n, cx);
     if let Some(label) = n
         .text
         .as_deref()
@@ -1228,16 +1244,26 @@ pub fn configure_dialog(
     if let Some(title) = node.title.clone() {
         dialog = dialog.title(title);
     }
-    match node.variant.as_deref().map(crate::catalog::normalize) {
-        Some(name) if name == "confirm" => {
-            dialog = dialog.button_props(DialogButtonProps::default().show_cancel(true));
-            if let Some(closable) = node.overlay_closable {
-                dialog = dialog.overlay_closable(closable);
-            }
+    let confirm = matches!(
+        node.variant
+            .as_deref()
+            .map(crate::catalog::normalize)
+            .as_deref(),
+        Some("confirm")
+    );
+    dialog = dialog.button_props(mapping::dialog_button_props(node, confirm));
+    if confirm {
+        if let Some(closable) = node.overlay_closable {
+            dialog = dialog.overlay_closable(closable);
         }
-        _ => {
-            dialog = dialog.overlay_closable(overlay_closable(node));
-        }
+    } else {
+        dialog = dialog.overlay_closable(overlay_closable(node));
+    }
+    if let Some(close) = node.close_button {
+        dialog = dialog.close_button(close);
+    }
+    if let Some(keyboard) = node.keyboard {
+        dialog = dialog.keyboard(keyboard);
     }
     if let Some(width) = node.width {
         dialog = dialog.width(px(width));
@@ -1263,14 +1289,18 @@ pub fn configure_alert_dialog(
     {
         alert = alert.description(text);
     }
-    if node
+    let confirm = node
         .variant
         .as_deref()
         .map(crate::catalog::normalize)
         .as_deref()
-        == Some("confirm")
-    {
-        alert = alert.confirm();
+        == Some("confirm");
+    alert = alert.button_props(mapping::dialog_button_props(node, confirm));
+    if let Some(close) = node.close_button {
+        alert = alert.close_button(close);
+    }
+    if let Some(keyboard) = node.keyboard {
+        alert = alert.keyboard(keyboard);
     }
     if let Some(width) = node.width {
         alert = alert.width(px(width));
@@ -1391,6 +1421,8 @@ pub fn configure_sheet(
         sheet = sheet.title(title);
     }
     sheet = sheet.overlay_closable(overlay_closable(node));
+    sheet = sheet.overlay(node.overlay.unwrap_or(true));
+    sheet = sheet.resizable(node.resizable.unwrap_or(true));
     let size = node.size.or(node.width).or(node.height).unwrap_or(350.0);
     sheet = sheet.size(px(size));
     if let Some(footer) = footer {
@@ -1441,14 +1473,16 @@ pub fn collect_notifications(root: &Node) -> Vec<NotificationSpec> {
 
 pub fn notification_fingerprint(node: &Node) -> String {
     format!(
-        "{}|{}|{}|{:?}",
+        "{}|{}|{}|{:?}|{}|{}",
         node.title.as_deref().unwrap_or(""),
         node.message
             .as_deref()
             .or(node.text.as_deref())
             .unwrap_or(""),
         node.variant.as_deref().unwrap_or(""),
-        node.autohide
+        node.autohide,
+        node.icon.as_deref().unwrap_or(""),
+        node.placement.as_deref().unwrap_or("")
     )
 }
 
@@ -1617,6 +1651,19 @@ mod tests {
         assert_eq!(
             notification_fingerprint(&first),
             notification_fingerprint(&later)
+        );
+        let moved = node(json!({
+            "type": "notification",
+            "id": "saved",
+            "title": "Saved",
+            "message": "ok",
+            "autohide": false,
+            "placement": "bottom-right",
+            "icon": "bell"
+        }));
+        assert_ne!(
+            notification_fingerprint(&first),
+            notification_fingerprint(&moved)
         );
     }
 
@@ -2175,9 +2222,9 @@ mod tests {
     #[test]
     fn paint_table_cell_accepts_progress_tag_and_stack() {
         let progress = node(json!({"type": "progress", "value": 72, "width": 120}));
-        let _ = paint_table_cell(&progress, "table/td/0/1", None);
+        let _ = paint_table_cell(&progress, "table/td/0/1", None, None);
         let tag = node(json!({"type": "tag", "text": "stable", "variant": "success"}));
-        let _ = paint_table_cell(&tag, "table/td/0/2", None);
+        let _ = paint_table_cell(&tag, "table/td/0/2", None, None);
         let row = node(json!({
             "type": "hstack",
             "gap": 8,
@@ -2186,7 +2233,7 @@ mod tests {
                 {"type": "label", "text": "Ada"}
             ]
         }));
-        let _ = paint_table_cell(&row, "table/td/1/0", None);
+        let _ = paint_table_cell(&row, "table/td/1/0", None, None);
         let loading = node(json!({
             "type": "progress",
             "value": 10,
@@ -2194,7 +2241,7 @@ mod tests {
             "color": "#3366ff",
             "control-size": "small"
         }));
-        let _ = paint_table_cell(&loading, "table/td/2/0", None);
+        let _ = paint_table_cell(&loading, "table/td/2/0", None, None);
         let badge = node(json!({
             "type": "badge",
             "icon": "check",
@@ -2202,7 +2249,7 @@ mod tests {
             "color": "#22c55e",
             "children": [{"type": "label", "text": "N"}]
         }));
-        let _ = paint_table_cell(&badge, "table/td/2/1", None);
+        let _ = paint_table_cell(&badge, "table/td/2/1", None, None);
     }
 
     #[test]

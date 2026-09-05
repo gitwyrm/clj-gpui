@@ -7,7 +7,7 @@
 use crate::catalog;
 use crate::mapping;
 use crate::protocol::{Cmd, Node};
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
+use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, div};
 use gpui_component::{
     Icon, Sizable as _,
     attachment::{
@@ -35,6 +35,9 @@ use std::sync::mpsc;
 pub trait NodePainter {
     fn paint_node(&mut self, node: &Node, path: &str) -> AnyElement;
     fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>>;
+    fn app(&self) -> Option<&App> {
+        None
+    }
 }
 
 pub fn is_chat_kind(kind: &str) -> bool {
@@ -457,7 +460,7 @@ fn kit_button<P: NodePainter>(p: &P, node: &Node, path: &str) -> Button {
     if let Some(label) = mapping::jump_button_visible_label(node) {
         button = button.label(label.to_string());
     }
-    button = mapping::apply_button_chrome(button, node);
+    button = mapping::apply_button_chrome(button, node, p.app());
     if let Some(callback) = node.on_click.clone() {
         if let Some(tx) = p.cmd_tx() {
             button = button.on_click(move |_, _, _| {

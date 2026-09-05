@@ -1149,7 +1149,9 @@ pub struct Node {
     /// Command: Kit `filterable`. Omitted is Kit true.
     #[serde(default)]
     pub filterable: Option<bool>,
-    /// Select / Combobox: Kit `cleanable` (clear button when a value is selected).
+    /// Select / Combobox / DatePicker: Kit `cleanable` (clear button when
+    /// a value is selected). Omitted is Kit false. DatePicker used to
+    /// hardcode true; omit now matches Kit.
     #[serde(default)]
     pub cleanable: bool,
     /// Select: Kit `Select::title_prefix`.
@@ -1672,6 +1674,91 @@ pub struct Node {
     /// Alert: Kit `visible`. Omitted is Kit true.
     #[serde(default)]
     pub visible: Option<bool>,
+    /// Dialog / AlertDialog: Kit `DialogButtonProps::ok_text`.
+    #[serde(default, rename = "ok-text")]
+    pub ok_text: Option<String>,
+    /// Dialog / AlertDialog: Kit `DialogButtonProps::cancel_text`.
+    #[serde(default, rename = "cancel-text")]
+    pub cancel_text: Option<String>,
+    /// Dialog / AlertDialog: Kit `DialogButtonProps::ok_variant` (named
+    /// ButtonVariants). Custom colors are not used on dialog buttons.
+    #[serde(default, rename = "ok-variant")]
+    pub ok_variant: Option<String>,
+    /// Dialog / AlertDialog: Kit `DialogButtonProps::cancel_variant`.
+    #[serde(default, rename = "cancel-variant")]
+    pub cancel_variant: Option<String>,
+    /// Dialog: Kit `close_button` (omit = Kit true). AlertDialog omit =
+    /// Kit false (`AlertDialog::new` already hides it).
+    #[serde(default, rename = "close-button")]
+    pub close_button: Option<bool>,
+    /// Dialog / AlertDialog: Kit `keyboard` (Escape). Omitted is Kit true.
+    #[serde(default)]
+    pub keyboard: Option<bool>,
+    /// Sheet: Kit `Sheet::overlay` (dimmer). Omitted is Kit true.
+    /// Not `overlay-closable` (click the dimmer to dismiss).
+    #[serde(default)]
+    pub overlay: Option<bool>,
+    /// Sheet: Kit `Sheet::resizable`. Omitted is Kit true.
+    #[serde(default)]
+    pub resizable: Option<bool>,
+    /// ColorPicker: Kit `featured_colors` (hex list). Omitted (`None`)
+    /// keeps Kit default swatches. Explicit `[]` is no featured swatches.
+    /// Nested so it is not layout `:color`.
+    #[serde(default, rename = "featured-colors")]
+    pub featured_colors: Option<Vec<String>>,
+    /// DatePicker: Kit `number_of_months` (widget + calendar). Omitted is 1.
+    #[serde(default, rename = "number-of-months")]
+    pub number_of_months: Option<f32>,
+    /// DatePickerState: Kit `first_day_of_week` (`sun`…`sat` or 0–6 from
+    /// Sunday). Omitted is Kit Sunday.
+    #[serde(default, rename = "first-day-of-week")]
+    pub first_day_of_week: Option<Value>,
+    /// Tabs: Kit `TabBar::menu` (overflow menu). Omitted is Kit false.
+    #[serde(default)]
+    pub menu: Option<bool>,
+    /// Tabs: Kit `TabBar::max_width` (per-tab label truncation, pixels).
+    /// Not generic host layout; `apply_style` does not consume this.
+    #[serde(default, rename = "max-width")]
+    pub max_width: Option<f32>,
+    /// Sidebar: Kit `collapsible` (`true`/`icon`, `false`/`none`,
+    /// `offcanvas`). Omitted is Kit `Icon`.
+    #[serde(default)]
+    pub collapsible: Option<Value>,
+    /// Settings: Kit `sidebar_width` in pixels. Omitted is Kit 250.
+    /// Not the Settings host wrapper `:width`.
+    #[serde(default, rename = "sidebar-width")]
+    pub sidebar_width: Option<f32>,
+    /// Settings: Kit `sidebar_size_range`. `[min, max]` or `{min, max}`
+    /// pixels. Omitted / reversed / negative / non-finite is Kit `160..360`.
+    #[serde(default, rename = "sidebar-size-range")]
+    pub sidebar_size_range: Option<Value>,
+    /// Settings: Kit `with_group_variant` (`normal` / `fill` / `outline`).
+    /// Nested so it is not a settings-field `:variant`.
+    #[serde(default, rename = "group-variant")]
+    pub group_variant: Option<String>,
+    /// DescriptionList: Kit `label_width` in pixels. Omitted is Kit 120.
+    /// Horizontal layout only. Not the host wrapper `:width`.
+    #[serde(default, rename = "label-width")]
+    pub label_width: Option<f32>,
+    /// ToggleGroup: Kit `segmented()`. Omitted is Kit false.
+    #[serde(default)]
+    pub segmented: bool,
+    /// Button: Kit `ButtonCustomVariant`. Nested so hex fields cannot
+    /// become host `text_color` (`:color`) or layout keys.
+    #[serde(default, rename = "custom-variant")]
+    pub custom_variant: Option<ButtonCustomVariantSpec>,
+}
+
+/// Kit `ButtonCustomVariant` on the wire. All fields optional; omitted
+/// keys keep `ButtonCustomVariant::new` theme defaults.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ButtonCustomVariantSpec {
+    pub color: Option<String>,
+    pub foreground: Option<String>,
+    pub hover: Option<String>,
+    pub active: Option<String>,
+    pub shadow: Option<bool>,
 }
 
 impl Node {
@@ -1922,6 +2009,27 @@ mod tests {
         assert_eq!(button.tab_index, Some(2.0));
         assert_eq!(button.tab_stop, Some(false));
         assert_eq!(button.role.as_deref(), Some("button"));
+
+        let custom: Node = serde_json::from_value(json!({
+            "type": "button",
+            "text": "Delete",
+            "variant": "custom",
+            "custom-variant": {
+                "color": "#b91c1c",
+                "foreground": "#f8fafc",
+                "hover": "#991b1b",
+                "active": "#7f1d1d",
+                "shadow": true
+            }
+        }))
+        .unwrap();
+        let spec = custom.custom_variant.as_ref().unwrap();
+        assert_eq!(spec.color.as_deref(), Some("#b91c1c"));
+        assert_eq!(spec.foreground.as_deref(), Some("#f8fafc"));
+        assert_eq!(spec.hover.as_deref(), Some("#991b1b"));
+        assert_eq!(spec.active.as_deref(), Some("#7f1d1d"));
+        assert_eq!(spec.shadow, Some(true));
+        assert!(custom.color.is_none());
 
         let caret: Node = serde_json::from_value(json!({
             "type": "button",
@@ -2621,12 +2729,14 @@ mod tests {
             "items": [{
                 "id": "audio",
                 "label": "Audio",
+                "icon": "check",
                 "content": {"type": "label", "text": "Speakers"}
             }]
         }))
         .unwrap();
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
+        assert_eq!(node.collection()[0].icon.as_deref(), Some("check"));
         assert!(node.contains_text("Speakers"));
         assert_eq!(PROTOCOL_VERSION, 11);
     }
@@ -2668,6 +2778,7 @@ mod tests {
             "type": "description-list",
             "orientation": "horizontal",
             "columns": 2,
+            "label-width": 160,
             "items": [
                 {"label": "Host", "text": "GPUI", "span": 2},
                 {"label": "UI", "text": "clj-gpui"}
@@ -2676,6 +2787,7 @@ mod tests {
         .unwrap();
         assert_eq!(node.orientation.as_deref(), Some("horizontal"));
         assert_eq!(node.columns, Some(2));
+        assert_eq!(node.label_width, Some(160.0));
         assert_eq!(node.collection()[0].span, 2);
         assert_eq!(node.collection()[1].span, 0);
         let omitted: Node = serde_json::from_value(json!({
@@ -2836,6 +2948,138 @@ mod tests {
         assert_eq!(dialog.on_cancel.as_deref(), Some("cb-3"));
         assert_eq!(dialog.overlay_closable, None);
         assert!(dialog.contains_text("Undo?"));
+
+        let chrome: Node = serde_json::from_value(json!({
+            "type": "dialog",
+            "ok-text": "Delete",
+            "cancel-text": "Keep",
+            "ok-variant": "danger",
+            "cancel-variant": "ghost",
+            "close-button": false,
+            "keyboard": false
+        }))
+        .unwrap();
+        assert_eq!(chrome.ok_text.as_deref(), Some("Delete"));
+        assert_eq!(chrome.cancel_text.as_deref(), Some("Keep"));
+        assert_eq!(chrome.ok_variant.as_deref(), Some("danger"));
+        assert_eq!(chrome.cancel_variant.as_deref(), Some("ghost"));
+        assert_eq!(chrome.close_button, Some(false));
+        assert_eq!(chrome.keyboard, Some(false));
+
+        let sheet: Node = serde_json::from_value(json!({
+            "type": "sheet",
+            "overlay": false,
+            "resizable": false
+        }))
+        .unwrap();
+        assert_eq!(sheet.overlay, Some(false));
+        assert_eq!(sheet.resizable, Some(false));
+
+        let note: Node = serde_json::from_value(json!({
+            "type": "notification",
+            "placement": "bottom-right",
+            "icon": "bell"
+        }))
+        .unwrap();
+        assert_eq!(note.placement.as_deref(), Some("bottom-right"));
+        assert_eq!(note.icon.as_deref(), Some("bell"));
+
+        let picker: Node = serde_json::from_value(json!({
+            "type": "date-picker",
+            "number-of-months": 2,
+            "first-day-of-week": "mon",
+            "appearance": false,
+            "cleanable": true
+        }))
+        .unwrap();
+        assert_eq!(picker.number_of_months, Some(2.0));
+        assert_eq!(
+            picker.first_day_of_week.as_ref().and_then(|v| v.as_str()),
+            Some("mon")
+        );
+        assert_eq!(picker.appearance, Some(false));
+        assert!(picker.cleanable);
+
+        let colors: Node = serde_json::from_value(json!({
+            "type": "color-picker",
+            "featured-colors": ["#3366ff", "#22c55e"]
+        }))
+        .unwrap();
+        assert_eq!(
+            colors.featured_colors.as_deref(),
+            Some(&["#3366ff".to_string(), "#22c55e".to_string()][..])
+        );
+        let empty_featured: Node = serde_json::from_value(json!({
+            "type": "color-picker",
+            "featured-colors": []
+        }))
+        .unwrap();
+        assert_eq!(empty_featured.featured_colors.as_deref(), Some(&[][..]));
+        let omitted_featured: Node = serde_json::from_value(json!({
+            "type": "color-picker"
+        }))
+        .unwrap();
+        assert_eq!(omitted_featured.featured_colors, None);
+        let picker_chrome: Node = serde_json::from_value(json!({
+            "type": "color-picker",
+            "icon": "palette",
+            "accessibility-label": "Accent",
+            "placement": "bottom-right"
+        }))
+        .unwrap();
+        assert_eq!(picker_chrome.icon.as_deref(), Some("palette"));
+        assert_eq!(picker_chrome.accessibility_label.as_deref(), Some("Accent"));
+        assert_eq!(picker_chrome.placement.as_deref(), Some("bottom-right"));
+
+        let tabs: Node = serde_json::from_value(json!({
+            "type": "tabs",
+            "menu": true,
+            "max-width": 120
+        }))
+        .unwrap();
+        assert_eq!(tabs.menu, Some(true));
+        assert_eq!(tabs.max_width, Some(120.0));
+
+        let group: Node = serde_json::from_value(json!({
+            "type": "toggle-group",
+            "segmented": true,
+            "value": ["bold"],
+            "items": [
+                {"id": "bold", "label": "Bold", "checked": true},
+                {"id": "italic", "label": "Italic"}
+            ]
+        }))
+        .unwrap();
+        assert!(group.segmented);
+        assert_eq!(group.string_values(), vec!["bold".to_string()]);
+
+        let sidebar: Node = serde_json::from_value(json!({
+            "type": "sidebar",
+            "collapsible": "offcanvas"
+        }))
+        .unwrap();
+        assert_eq!(
+            sidebar.collapsible.as_ref().and_then(|v| v.as_str()),
+            Some("offcanvas")
+        );
+
+        let settings: Node = serde_json::from_value(json!({
+            "type": "settings",
+            "sidebar-width": 200,
+            "sidebar-size-range": [140, 280],
+            "group-variant": "fill"
+        }))
+        .unwrap();
+        assert_eq!(settings.sidebar_width, Some(200.0));
+        assert_eq!(settings.sidebar_size_range, Some(json!([140, 280])));
+        assert_eq!(settings.group_variant.as_deref(), Some("fill"));
+
+        let md: Node = serde_json::from_value(json!({
+            "type": "markdown",
+            "selectable": false
+        }))
+        .unwrap();
+        assert_eq!(md.selectable, Some(false));
 
         let popover: Node = serde_json::from_value(json!({
             "type": "popover",
