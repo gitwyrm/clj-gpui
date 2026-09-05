@@ -9,8 +9,8 @@ use crate::chat;
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::{
-    App, Axis, Div, Hsla, InteractiveElement, IntoElement, Keystroke, ParentElement, SharedString,
-    Styled, Window, div, px,
+    App, Axis, Div, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    Window, div, px,
 };
 use gpui_component::{
     Colorize as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
@@ -792,8 +792,10 @@ fn paint_static_tree(
     }
     match node.kind.as_str() {
         "button" => {
-            let label = node.text.clone().unwrap_or_default();
-            let mut button = Button::new(SharedString::from(path.to_string())).label(label);
+            let mut button = Button::new(SharedString::from(path.to_string()));
+            if let Some(label) = mapping::jump_button_visible_label(node) {
+                button = button.label(label.to_string());
+            }
             button = apply_button_chrome(button, node);
             if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
                 let tx = tx.clone();
@@ -840,11 +842,7 @@ fn paint_static_tree(
             chart_layout(separator, node).into_any_element()
         }
         "spinner" => {
-            let mut spinner =
-                Spinner::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
-            if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
-                spinner = spinner.icon(icon);
-            }
+            let spinner = mapping::apply_spinner_chrome(Spinner::new(), node);
             chart_host(spinner, node, path)
         }
         "tag" => {
@@ -875,18 +873,19 @@ fn paint_static_tree(
                 Some("error") | Some("danger") => Alert::error(id, message),
                 _ => Alert::new(id, message),
             };
-            if let Some(title) = node.title.clone() {
-                alert = alert.title(title);
-            }
-            alert = alert.with_size(mapping::parse_scale(node.control_size.as_deref()));
+            alert = mapping::apply_alert_chrome(alert, node);
             chart_layout(alert, node).into_any_element()
         }
-        "skeleton" => chart_layout(Skeleton::new(), node).into_any_element(),
+        "skeleton" => chart_layout(mapping::apply_skeleton_chrome(Skeleton::new(), node), node)
+            .into_any_element(),
         "kbd" => {
             let text = node.text.clone().unwrap_or_default();
-            match Keystroke::parse(&text) {
-                Ok(stroke) => chart_layout(Kbd::new(stroke), node).into_any_element(),
-                Err(_) => chart_layout(div().child(text), node).into_any_element(),
+            match mapping::parse_keystroke(&text) {
+                Some(stroke) => {
+                    chart_layout(mapping::apply_kbd_chrome(Kbd::new(stroke), node), node)
+                        .into_any_element()
+                }
+                None => chart_layout(div().child(text), node).into_any_element(),
             }
         }
         "link" => {
@@ -904,15 +903,7 @@ fn paint_static_tree(
             chart_layout(link.child(label), node).into_any_element()
         }
         "badge" => {
-            let mut badge = Badge::new();
-            if node.dot {
-                badge = badge.dot();
-            } else if let Some(count) = node.count {
-                badge = badge.count(count as usize);
-            } else if let Some(n) = node.number_value() {
-                badge = badge.count(n.max(0.0) as usize);
-            }
-            badge = badge.with_size(mapping::parse_scale(node.control_size.as_deref()));
+            let mut badge = mapping::apply_badge_chrome(Badge::new(), node);
             badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
                 paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx)
             }));
@@ -943,14 +934,14 @@ fn paint_static_tree(
             chart_outer_style(avatar_group_element(group, node), node).into_any_element()
         }
         "hover-card" => chart_layout(kit_hover_card(node, path), node).into_any_element(),
-        "progress" => {
-            let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
-            chart_layout(
-                Progress::new(SharedString::from(path.to_string())).value(value),
+        "progress" => chart_layout(
+            mapping::apply_progress_chrome(
+                Progress::new(SharedString::from(path.to_string())),
                 node,
-            )
-            .into_any_element()
-        }
+            ),
+            node,
+        )
+        .into_any_element(),
         "progress-circle" => {
             let value = node.number_value().filter(|n| n.is_finite()).unwrap_or(0.0);
             let mut circle = ProgressCircle::new(SharedString::from(node_key(node, path)))
@@ -1137,8 +1128,10 @@ fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
 fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyElement {
     match node.kind.as_str() {
         "button" => {
-            let label = node.text.clone().unwrap_or_default();
-            let mut button = Button::new(SharedString::from(path.to_string())).label(label);
+            let mut button = Button::new(SharedString::from(path.to_string()));
+            if let Some(label) = mapping::jump_button_visible_label(node) {
+                button = button.label(label.to_string());
+            }
             button = apply_button_chrome(button, node);
             if node.on_click.is_some() {
                 let emit = emit.clone();
@@ -1174,31 +1167,8 @@ fn paint_static_node(node: &Node, path: &str, emit: ActionEmitter) -> gpui::AnyE
     }
 }
 
-pub(crate) fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
-    let chrome = mapping::button_chrome(
-        node.variant.as_deref(),
-        node.primary,
-        node.outline,
-        node.selected,
-        node.control_size.as_deref(),
-    );
-    button = mapping::apply_named_button_variant(button, chrome.variant);
-    if chrome.outline {
-        button = button.outline();
-    }
-    if chrome.selected {
-        button = button.selected(true);
-    }
-    if let Some(size) = chrome.size {
-        button = button.with_size(size);
-    }
-    if node.compact {
-        button = button.compact();
-    }
-    if node.disabled {
-        button = button.disabled(true);
-    }
-    button
+pub(crate) fn apply_button_chrome(button: Button, node: &Node) -> Button {
+    mapping::apply_button_chrome(button, node)
 }
 
 pub(crate) fn apply_dropdown_button_chrome(
@@ -1235,12 +1205,18 @@ pub fn trigger_button(node: Option<&Node>, key: &str) -> Button {
     let Some(n) = node else {
         return button.label("Open");
     };
-    let label = n
+    let mut button = apply_button_chrome(button, n);
+    if let Some(label) = n
         .text
-        .clone()
-        .or_else(|| n.title.clone())
-        .unwrap_or_else(|| "Open".into());
-    apply_button_chrome(button.label(label), n)
+        .as_deref()
+        .or(n.title.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        button = button.label(label.to_string());
+    } else if n.icon.is_none() {
+        button = button.label("Open");
+    }
+    button
 }
 
 /// Apply a dialog builder to a crate `Dialog` using the latest spec.
@@ -2211,6 +2187,22 @@ mod tests {
             ]
         }));
         let _ = paint_table_cell(&row, "table/td/1/0", None);
+        let loading = node(json!({
+            "type": "progress",
+            "value": 10,
+            "loading": true,
+            "color": "#3366ff",
+            "control-size": "small"
+        }));
+        let _ = paint_table_cell(&loading, "table/td/2/0", None);
+        let badge = node(json!({
+            "type": "badge",
+            "icon": "check",
+            "max": 9,
+            "color": "#22c55e",
+            "children": [{"type": "label", "text": "N"}]
+        }));
+        let _ = paint_table_cell(&badge, "table/td/2/1", None);
     }
 
     #[test]

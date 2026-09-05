@@ -28,7 +28,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 
 | GPUI Kit 0.6 | clj-gpui API | status | class | notes |
 |----------------------|--------------|--------|-------|-------|
-| `button::Button` | `ui/button` | ✅ | A | Variants, compact, disabled, tooltip |
+| `button::Button` | `ui/button` | ✅ | A | Variants, compact, disabled, loading, icon, native tooltip, rounded, dropdown-caret, toggled, a11y (`accessibility-label` / `:id` / `:role`), tab-index / tab-stop (omit = 0 / true). Custom `ButtonCustomVariant` colors are not wrapped |
 | `checkbox::Checkbox` | `ui/checkbox` | ✅ | A | 0-arg `:on-click` (unchanged). `:shape :circle` is a clj-gpui extra |
 | `input::Input` | `ui/input` | ✅ | A | Host-held `InputState`; Clojure owns the string. Chrome: `:cleanable`, `:appearance`, `:bordered`, `:focus-ring` (`focus_bordered`; omit = Kit true), `:readonly`, `:masked` / `:mask-toggle` (`:masked` resyncs when Clojure changes or `:mask-toggle` is removed), `:content-type` (autofill hint), string `:prefix` / `:suffix`, `:icon` as prefix when `:prefix` is omitted, named `:size` (`Input::with_size`), `:accessibility-label`. Custom prefix/suffix `IntoElement` and `context_menu` builders are not wrapped |
 | `label::Label` | `ui/label` | ✅ | A | Kit `Label`. `:secondary`, `:masked`, `:highlights` / `:highlights-match`. `:masked` skips highlights and folds secondary into the bullet string (Kit 0.6 `StyledText` char-boundary). Styled clip: `:truncate`, `:whitespace`, `:text-overflow`, `:overflow`, `:line-clamp`. Clicks wrap a host `div` |
@@ -40,18 +40,18 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean |
 | `radio::Radio` / `RadioGroup` | `ui/radio-group` | ✅ | B | `:on-change` receives the original Clojure id |
 | `slider::Slider` | `ui/slider` | ✅ | B | Host-held `SliderState`; `:on-change` / `:on-release` receive a number or `[start end]` for range thumbs. `:on-release` is Kit `SliderEvent::Release` after a real click/drag. Clojure is source of truth: a controlled value is applied even when it is off-step and emits neither callback. Entity is kept across unmounts (crate bounds are private; dropping remounts at 100% fill). A layout canvas re-renders when the track size changes so fill and thumb stay aligned. Dynamic unique ids retain slots until the window closes; bounded cleanup is a follow-up |
-| `progress::Progress` | `ui/progress` | ✅ | B | 0–100 |
+| `progress::Progress` | `ui/progress` | ✅ | B | 0–100. `:loading true` is Kit indeterminate (value ignored). Optional `:color` hex, `:accessibility-label`. Named `:size` is `control-size` |
 | `progress::ProgressCircle` | `ui/progress-circle` | ✅ | C | 0–100. `:loading true` is Kit indeterminate (value ignored). Optional `:color` hex, `:accessibility-label`, children inside the ring. Named `:size` is `control-size` |
 | `separator::Separator` | `ui/separator` | ✅ | B | Horizontal default; `:orientation :vertical` |
-| `spinner::Spinner` | `ui/spinner` | ✅ | B | Needs bundled icons. Host wrapper owns `:width` / `:height` / `:size` / `:flex` (crate type is not `Styled`) |
+| `spinner::Spinner` | `ui/spinner` | ✅ | B | Needs bundled icons. Optional kebab `:icon` and `:color` hex. Host wrapper owns `:width` / `:height` / `:size` / `:flex` (crate type is not `Styled`) |
 | `tag::Tag` | `ui/tag` | ✅ | B | `:variant` keywords |
-| `alert::Alert` | `ui/alert` | ✅ | B | `:on-close` is 0-arg |
-| `skeleton::Skeleton` | `ui/skeleton` | ✅ | B | |
+| `alert::Alert` | `ui/alert` | ✅ | B | `:on-close` is 0-arg. `:banner`, kebab `:icon`, `:visible` (omit = Kit true) |
+| `skeleton::Skeleton` | `ui/skeleton` | ✅ | B | `:secondary true` (or `:variant :secondary`) is Kit `secondary()` |
 | `shimmer::ShimmerText` | `ui/shimmer` | ✅ | C | Loading text. Omitted `:duration` / `:spread` / `:highlight-color` keep Kit defaults (2s, relative 0.3). `:spread-px` is absolute and wins over `:spread`. `:reverse` / `:once`. Styled clip (`:truncate` / `:whitespace` / `:text-overflow`) is `apply_styled`, same as `ui/label`. Kit's inner `min_w_0` lets a StatusBar region shrink the sweep. `:flex 1` plus truncate does **not** apply `min_h_0` (that plus overflow-hidden collapses auto-height text to an empty box) |
-| `kbd::Kbd` | `ui/kbd` | ✅ | B | GPUI keystroke strings (`"ctrl-s"`) |
+| `kbd::Kbd` | `ui/kbd` | ✅ | B | GPUI keystroke strings (`"ctrl-s"`). `:appearance` (omit = Kit true), `:outline` |
 | `link::Link` | `ui/link` | ✅ | B | Opens `href`; optional 0-arg `:on-click` |
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |
-| `badge::Badge` | `ui/badge` | ✅ | B | Count or `:dot`; wraps a child. Host wrapper owns layout keys |
+| `badge::Badge` | `ui/badge` | ✅ | B | Count, `:dot`, or kebab `:icon`; wraps a child. `:max` overflow cap (Kit default 99). `:color` hex. Host wrapper owns layout keys |
 | `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel; keyword ids round-trip |
 | `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`IndexPath` section+row). `:searchable true` filters by label (and group title, matching Kit). `nil` clears. Controlled id changes use `set_selected_value` (not a full-list `IndexPath` into a filtered delegate). Collection fingerprint changes rebuild the slot so query text and `matched_items` agree; native Confirm caches the id so a Clojure echo is a no-op. Option `:display` is the string form of `SelectItem::display_title`; `:disabled` greys a row. Chrome: `:cleanable`, `:title-prefix`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string), `:icon`, `:appearance`, `:focus-ring` (omit = Kit true), `:accessibility-label`. Custom empty/`display_title` `IntoElement`/`AnyElement` and custom row/section `render` are not wrapped |
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Kebab names (`:circle-check`); bundled assets |
@@ -61,7 +61,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `avatar::AvatarGroup` | `ui/avatar-group` | ✅ | C | Child avatars; omitted `:limit` keeps Kit's 3; `:ellipsis` overflow |
 | `accordion::Accordion` | `ui/accordion` | ✅ | B | Controlled open id; `:multiple` uses a JSON array of ids in original item order. Outer wrapper owns `:width` / `:height` / `:size` / `:flex` (default flex-none + full width) so crate `size_full()` does not eat leftover column height |
 | `description_list::DescriptionList` | `ui/description-list` | ✅ | B | `{:label :value}` maps; vertical + 1 column by default (crate is horizontal / 3-col). Same outer-owns-layout wrap as accordion |
-| `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged |
+| `tooltip::Tooltip` | `:tooltip` style | ✅ | B | String tooltip on any node; wrapper copies width/height/size/flex so layout is unchanged. `ui/button` uses Kit `Button::tooltip` instead of that wrapper |
 | `slider::Slider` range / log / reverse | `ui/slider` | ✅ | C | Two-number vector or `:range true`. `:scale :logarithmic` (`:log`) needs `min > 0` (otherwise linear, with a host warning). `:reverse` fill is single-value only |
 | `input::Textarea` | `ui/textarea` | ✅ | C | Host-held `TextareaState`. Same string callbacks as `ui/input`. `:rows` default 3. `:on-submit` enables Kit `submit_on_enter` (Enter submits, Shift+Enter newline). Chrome: `:appearance`, `:bordered` (omit = Kit true), `:readonly`, `:accessibility-label`. Custom `context_menu` is not wrapped |
 | `input::NumberInput` | `ui/number-input` | ✅ | C | Host-held `InputState` + `NumberInput` wrapper. Step buttons parse, add/sub `:step`, clamp `:min`/`:max`, emit a number. Typed values emit when they parse. Chrome: `:appearance`, string `:prefix` / `:suffix`, `:icon` as prefix, `:focus-ring` (omit = Kit true) |

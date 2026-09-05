@@ -2,23 +2,33 @@
 
 use crate::catalog;
 use crate::protocol::{Node, StyledKeys};
-use gpui::{AnyElement, Axis, FontWeight, Hsla, IntoElement, StyleRefinement, Styled, div, px};
+use gpui::{
+    AnyElement, Axis, FontWeight, Hsla, IntoElement, Keystroke, Role, StyleRefinement, Styled, div,
+    px,
+};
 use gpui_component::{
-    Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, Selectable as _,
-    Side, Sizable, Size,
-    button::{Button, ButtonVariants, ToggleVariant},
+    Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, RoleOverride,
+    Selectable as _, Side, Sizable, Size,
+    alert::Alert,
+    badge::Badge,
+    button::{Button, ButtonRounded, ButtonVariants, ToggleVariant},
     group_box::GroupBoxVariant,
     input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
+    kbd::Kbd,
     label::{HighlightsMatch, Label},
     list::{List, ListDelegate},
+    progress::Progress,
     shimmer::ShimmerStyle,
+    skeleton::Skeleton,
     slider::SliderScale,
+    spinner::Spinner,
     tab::TabVariant,
     table::{DataTable, TableDelegate},
     tag::TagVariant,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
+use serde_json::Value;
 use std::time::Duration;
 
 pub fn parse_scale(value: Option<&str>) -> Size {
@@ -482,8 +492,60 @@ pub fn jump_button_visible_label(node: &Node) -> Option<&str> {
     node.text.as_deref().filter(|s| !s.is_empty())
 }
 
-/// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, label, tooltip).
-pub fn apply_jump_button_renderer(mut button: Button, node: &Node) -> Button {
+/// Kit `ButtonRounded` from a named keyword or a pixel number.
+pub fn parse_button_rounded(value: Option<&Value>) -> Option<ButtonRounded> {
+    let value = value?;
+    if let Some(n) = value.as_f64() {
+        if n.is_finite() && n >= 0.0 {
+            return Some(ButtonRounded::Size(px(n as f32)));
+        }
+        return None;
+    }
+    match value.as_str().map(catalog::normalize)?.as_str() {
+        "none" => Some(ButtonRounded::None),
+        "sm" | "small" => Some(ButtonRounded::Small),
+        "md" | "medium" => Some(ButtonRounded::Medium),
+        "lg" | "large" => Some(ButtonRounded::Large),
+        _ => None,
+    }
+}
+
+/// Kit `RoleOverride` for `Button::role`. Omitted / unknown is `None`
+/// (leave Kit implicit).
+pub fn parse_button_role(value: Option<&str>) -> Option<RoleOverride> {
+    match value.map(catalog::normalize) {
+        Some(name) if matches!(name.as_str(), "none" | "presentation" | "presentational") => {
+            Some(RoleOverride::Presentational)
+        }
+        Some(name) if name == "button" => Some(RoleOverride::Role(Role::Button)),
+        Some(name) if name == "link" => Some(RoleOverride::Role(Role::Link)),
+        Some(name) if matches!(name.as_str(), "menuitem" | "menu item") => {
+            Some(RoleOverride::Role(Role::MenuItem))
+        }
+        Some(name) if matches!(name.as_str(), "checkbox" | "check box") => {
+            Some(RoleOverride::Role(Role::CheckBox))
+        }
+        Some(name) if matches!(name.as_str(), "radio" | "radio button") => {
+            Some(RoleOverride::Role(Role::RadioButton))
+        }
+        Some(name) if name == "switch" => Some(RoleOverride::Role(Role::Switch)),
+        Some(name) if name == "tab" => Some(RoleOverride::Role(Role::Tab)),
+        Some(name) if name == "status" => Some(RoleOverride::Role(Role::Status)),
+        Some(name) if name == "alert" => Some(RoleOverride::Role(Role::Alert)),
+        Some(name) if name == "log" => Some(RoleOverride::Role(Role::Log)),
+        _ => None,
+    }
+}
+
+fn parse_hex(text: Option<&str>) -> Option<Hsla> {
+    text.and_then(|s| Hsla::parse_hex(s.trim()).ok())
+}
+
+/// Kit `Button` chrome (variant, size, icon, loading, tooltip, a11y, …).
+///
+/// Does not set `label` — empty text is icon-button mode. Callers that need
+/// a default label (`Open`) apply it themselves.
+pub fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
     let chrome = button_chrome(
         node.variant.as_deref(),
         node.primary,
@@ -510,13 +572,153 @@ pub fn apply_jump_button_renderer(mut button: Button, node: &Node) -> Button {
     if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
         button = button.icon(icon);
     }
-    if let Some(label) = jump_button_visible_label(node) {
-        button = button.label(label.to_string());
+    if node.loading {
+        button = button.loading(true);
     }
-    if let Some(tooltip) = node.tooltip.clone().filter(|s| !s.is_empty()) {
-        button = button.tooltip(tooltip);
+    if let Some(icon) = node.loading_icon.as_deref().and_then(parse_icon) {
+        button = button.loading_icon(icon);
+    }
+    if let Some(tooltip) = node.tooltip.as_deref().filter(|s| !s.is_empty()) {
+        button = button.tooltip(tooltip.to_string());
+    }
+    if let Some(rounded) = parse_button_rounded(node.rounded.as_ref()) {
+        button = button.rounded(rounded);
+    }
+    if node.dropdown_caret {
+        button = button.dropdown_caret(true);
+    }
+    if let Some(toggled) = node.toggled {
+        button = button.toggled(toggled);
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        button = button.accessibility_label(label.to_string());
+    }
+    if let Some(id) = node.id.as_deref().filter(|s| !s.is_empty()) {
+        button = button.accessibility_id(id.to_string());
+    }
+    if let Some(role) = parse_button_role(node.role.as_deref()) {
+        button = button.role(role);
+    }
+    if let Some(index) = node.tab_index.filter(|n| n.is_finite()) {
+        button = button.tab_index(index as isize);
+    }
+    if let Some(stop) = node.tab_stop {
+        button = button.tab_stop(stop);
     }
     button
+}
+
+/// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, label, tooltip).
+pub fn apply_jump_button_renderer(button: Button, node: &Node) -> Button {
+    let button = apply_button_chrome(button, node);
+    match jump_button_visible_label(node) {
+        Some(label) => button.label(label.to_string()),
+        None => button,
+    }
+}
+
+/// Kit `Alert` chrome (title, size, icon, banner, visible). `on_close` stays
+/// at the call site (needs a host callback).
+pub fn apply_alert_chrome(mut alert: Alert, node: &Node) -> Alert {
+    if let Some(title) = node.title.clone() {
+        alert = alert.title(title);
+    }
+    alert = alert.with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+        alert = alert.icon(icon);
+    }
+    if node.banner {
+        alert = alert.banner();
+    }
+    if let Some(visible) = node.visible {
+        alert = alert.visible(visible);
+    }
+    alert
+}
+
+/// Kit `Progress` bar chrome (value, loading, size, color, a11y).
+pub fn apply_progress_chrome(mut progress: Progress, node: &Node) -> Progress {
+    let value = node.number_value().unwrap_or(0.0).clamp(0.0, 100.0);
+    progress = progress
+        .value(value)
+        .loading(node.loading)
+        .with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(color) = parse_hex(node.color.as_deref()) {
+        progress = progress.color(color);
+    }
+    if let Some(label) = node
+        .accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        progress = progress.accessibility_label(label.to_string());
+    }
+    progress
+}
+
+/// Kit `Badge` chrome (icon / dot / count, max, color, size).
+pub fn apply_badge_chrome(mut badge: Badge, node: &Node) -> Badge {
+    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+        badge = badge.icon(icon);
+    } else if node.dot {
+        badge = badge.dot();
+    } else if let Some(count) = node.count {
+        badge = badge.count(count as usize);
+    } else if let Some(n) = node.number_value() {
+        badge = badge.count(n.max(0.0) as usize);
+    }
+    if let Some(max) = node.max.filter(|n| n.is_finite() && *n >= 0.0) {
+        badge = badge.max(max as usize);
+    }
+    if let Some(color) = parse_hex(node.color.as_deref()) {
+        badge = badge.color(color);
+    }
+    badge.with_size(parse_scale(node.control_size.as_deref()))
+}
+
+/// Kit `Skeleton` chrome (`secondary()`).
+pub fn apply_skeleton_chrome(mut skeleton: Skeleton, node: &Node) -> Skeleton {
+    let secondary = node.secondary
+        || matches!(
+            node.variant.as_deref().map(catalog::normalize).as_deref(),
+            Some("secondary")
+        );
+    if secondary {
+        skeleton = skeleton.secondary();
+    }
+    skeleton
+}
+
+/// Kit `Spinner` chrome (size, icon, color).
+pub fn apply_spinner_chrome(mut spinner: Spinner, node: &Node) -> Spinner {
+    spinner = spinner.with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+        spinner = spinner.icon(icon);
+    }
+    if let Some(color) = parse_hex(node.color.as_deref()) {
+        spinner = spinner.color(color);
+    }
+    spinner
+}
+
+/// Kit `Kbd` chrome (`appearance`, `outline`).
+pub fn apply_kbd_chrome(mut kbd: Kbd, node: &Node) -> Kbd {
+    if let Some(appearance) = node.appearance {
+        kbd = kbd.appearance(appearance);
+    }
+    if node.outline {
+        kbd = kbd.outline();
+    }
+    kbd
+}
+
+/// Parse a GPUI keystroke; `None` when the string is not a keystroke.
+pub fn parse_keystroke(text: &str) -> Option<Keystroke> {
+    Keystroke::parse(text).ok()
 }
 
 pub fn parse_axis(value: Option<&str>) -> Axis {
@@ -1058,6 +1260,7 @@ pub fn apply_otp_chrome(mut input: OtpInput, node: &Node) -> OtpInput {
 mod tests {
     use super::*;
     use gpui_component::Sizable;
+    use serde_json::json;
 
     #[test]
     fn scale_keywords() {
@@ -1805,5 +2008,41 @@ mod tests {
         );
         let mut dummy = apply_styled(div(), &nested);
         assert!(dummy.style().min_size.height.is_some());
+    }
+
+    #[test]
+    fn button_rounded_from_name_or_pixels() {
+        assert!(matches!(
+            parse_button_rounded(Some(&json!("none"))),
+            Some(ButtonRounded::None)
+        ));
+        assert!(matches!(
+            parse_button_rounded(Some(&json!("small"))),
+            Some(ButtonRounded::Small)
+        ));
+        assert!(matches!(
+            parse_button_rounded(Some(&json!(8))),
+            Some(ButtonRounded::Size(_))
+        ));
+        assert!(parse_button_rounded(Some(&json!("nope"))).is_none());
+        assert!(parse_button_rounded(None).is_none());
+    }
+
+    #[test]
+    fn button_role_from_kebab() {
+        assert_eq!(
+            parse_button_role(Some("presentation")),
+            Some(RoleOverride::Presentational)
+        );
+        assert_eq!(
+            parse_button_role(Some("button")),
+            Some(RoleOverride::Role(Role::Button))
+        );
+        assert_eq!(
+            parse_button_role(Some("menu-item")),
+            Some(RoleOverride::Role(Role::MenuItem))
+        );
+        assert_eq!(parse_button_role(Some("not-a-role")), None);
+        assert_eq!(parse_button_role(None), None);
     }
 }

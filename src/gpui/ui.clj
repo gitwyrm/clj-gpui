@@ -593,6 +593,14 @@
   ([text style]
    (merge {:type :label :text (str text)} style)))
 
+(defn- button-style
+  "Named `:size` becomes `:control-size`. `:caret` is Kit `dropdown_caret`."
+  [style]
+  (let [style (apply-control-size (or style {}))]
+    (cond-> style
+      (and (contains? style :caret) (not (contains? style :dropdown-caret)))
+      (-> (dissoc :caret) (assoc :dropdown-caret (:caret style))))))
+
 (defn button
   "A clickable button. `on-click` is a real Clojure function (often `#()`).
   Named `:size` becomes `:control-size`. `:selected` is Kit Selectable
@@ -600,18 +608,29 @@
   `:primary`, `:secondary`, `:danger`, `:warning`, `:success`, `:info`,
   `:ghost`, `:link`, `:text`. `:outline` is a separate look.
 
+  `:loading` is Kit `Button::loading` (inert, keeps its look). `:icon`
+  is a kebab icon name (empty `:text` is icon-button mode). `:tooltip`
+  is Kit `Button::tooltip` (not the generic wrapper). `:rounded` is
+  `:none` / `:small` / `:medium` / `:large` or a pixel number.
+  `:dropdown-caret` (`:caret`) shows a caret. `:toggled` is assistive
+  pressed state. `:tab-index` (omit = 0) and `:tab-stop` (omit = true)
+  are Kit tab order. `:accessibility-label` / `:id` / `:role` forward
+  to Kit a11y. `:loading-icon` is a kebab name (omit = Kit spinner).
+  Custom `ButtonCustomVariant` colors are not wrapped.
+
   (ui/button \"+\" #(swap! count inc))
   (ui/button \"Save\" save! {:primary true})
-  (ui/button \"Warn\" {:variant :warning :size :small})"
+  (ui/button \"Warn\" {:variant :warning :size :small})
+  (ui/button \"More\" {:icon :chevron-down :dropdown-caret true})"
   ([text]
    {:type :button :text (str text)})
   ([text on-click]
    (if (map? on-click)
-     (merge {:type :button :text (str text)} (apply-control-size on-click))
+     (merge {:type :button :text (str text)} (button-style on-click))
      {:type :button :text (str text) :on-click on-click}))
   ([text on-click style]
    (merge {:type :button :text (str text) :on-click on-click}
-          (apply-control-size (or style {})))))
+          (button-style (or style {})))))
 
 (defn window
   "Native window. Return this from `app`. Only one makes sense.
@@ -901,14 +920,17 @@
           (slider-opts opts))))
 
 (defn progress
-  "Determinate progress bar. `value` is 0–100.
+  "Determinate progress bar. `value` is 0–100. `:loading true` is Kit's
+  indeterminate animation (value is ignored). Optional `:color` hex,
+  `:accessibility-label`, and named `:size` (`control-size`).
 
   (ui/progress 45)
-  (ui/progress 45 {:width 240})"
+  (ui/progress 45 {:width 240})
+  (ui/progress nil {:loading true :size :small :color \"#3366ff\"})"
   ([value]
    {:type :progress :value (or value 0)})
   ([value opts]
-   (merge {:type :progress :value (or value 0)} opts)))
+   (merge-widget {:type :progress :value (or value 0)} opts)))
 
 (defn progress-circle
   "Circular progress. `value` is 0–100. `:loading true` is Kit's
@@ -961,10 +983,11 @@
    (merge {:type :separator :text (str label)} opts)))
 
 (defn spinner
-  "Loading spinner.
+  "Loading spinner. Optional kebab `:icon` (Kit default Loader) and
+  `:color` hex. Named `:size` becomes `:control-size`.
 
   (ui/spinner)
-  (ui/spinner {:size :small})"
+  (ui/spinner {:size :small :color \"#3366ff\"})"
   ([]
    {:type :spinner})
   ([opts]
@@ -983,19 +1006,23 @@
 
 (defn alert
   "Inline alert. `:variant` is `:info`, `:success`, `:warning`, `:error`,
-  or omitted for secondary. `:on-close` is a 0-arg callback.
+  or omitted for secondary. `:on-close` is a 0-arg callback. `:banner`
+  is Kit's full-width look (no title). `:visible false` hides it in-tree
+  (omit = Kit true). `:icon` is a kebab icon name.
 
-  (ui/alert \"Saved\" {:variant :success :title \"Done\"})"
+  (ui/alert \"Saved\" {:variant :success :title \"Done\"})
+  (ui/alert \"Maintenance\" {:banner true})"
   ([message]
    {:type :alert :text (str message)})
   ([message opts]
    (merge-widget {:type :alert :text (str message)} opts)))
 
 (defn skeleton
-  "Loading placeholder bar.
+  "Loading placeholder bar. `:secondary true` (or `:variant :secondary`)
+  is Kit `secondary()`.
 
   (ui/skeleton)
-  (ui/skeleton {:width 200 :height 16})"
+  (ui/skeleton {:width 200 :height 16 :secondary true})"
   ([]
    {:type :skeleton})
   ([opts]
@@ -1022,8 +1049,11 @@
 
 (defn kbd
   "Keyboard shortcut chip. `stroke` is a GPUI keystroke such as `\"ctrl-s\"`.
+  `:appearance false` is plain formatted text (Kit default true).
+  `:outline` is Kit `outline()`.
 
-  (ui/kbd \"ctrl-s\")"
+  (ui/kbd \"ctrl-s\")
+  (ui/kbd \"ctrl-s\" {:outline true})"
   ([stroke]
    {:type :kbd :text (str stroke)})
   ([stroke opts]
@@ -1056,10 +1086,13 @@
            :children (flatten-children children))))
 
 (defn badge
-  "Count or dot overlay around a child.
+  "Count, dot, or icon overlay around a child. `:max` is Kit's overflow
+  cap (default 99). `:color` is a hex background. `:icon` is a kebab
+  icon name (Kit `Badge::icon`, not a count).
 
   (ui/badge 3 (ui/icon :bell))
-  (ui/badge {:dot true} (ui/button \"Alerts\" …))"
+  (ui/badge {:dot true} (ui/button \"Alerts\" …))
+  (ui/badge {:icon :check :color \"#22c55e\"} (ui/icon :user))"
   ([count-or-opts child]
    (if (map? count-or-opts)
      (merge-widget {:type :badge :children (flatten-children [child])}

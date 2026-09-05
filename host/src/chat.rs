@@ -9,7 +9,7 @@ use crate::mapping;
 use crate::protocol::{Cmd, Node};
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
 use gpui_component::{
-    Disableable as _, Icon, Selectable as _, Sizable as _,
+    Icon, Sizable as _,
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
         AttachmentMedia, AttachmentStatus, AttachmentTitle,
@@ -453,31 +453,11 @@ fn paint_child<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> AnyElement
 }
 
 fn kit_button<P: NodePainter>(p: &P, node: &Node, path: &str) -> Button {
-    let label = node.text.clone().unwrap_or_default();
-    let mut button = Button::new(SharedString::from(path.to_string())).label(label);
-    let chrome = mapping::button_chrome(
-        node.variant.as_deref(),
-        node.primary,
-        node.outline,
-        node.selected,
-        node.control_size.as_deref(),
-    );
-    button = mapping::apply_named_button_variant(button, chrome.variant);
-    if chrome.outline {
-        button = button.outline();
+    let mut button = Button::new(SharedString::from(path.to_string()));
+    if let Some(label) = mapping::jump_button_visible_label(node) {
+        button = button.label(label.to_string());
     }
-    if chrome.selected {
-        button = button.selected(true);
-    }
-    if let Some(size) = chrome.size {
-        button = button.with_size(size);
-    }
-    if node.compact {
-        button = button.compact();
-    }
-    if node.disabled {
-        button = button.disabled(true);
-    }
+    button = mapping::apply_button_chrome(button, node);
     if let Some(callback) = node.on_click.clone() {
         if let Some(tx) = p.cmd_tx() {
             button = button.on_click(move |_, _, _| {

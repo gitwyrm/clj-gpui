@@ -133,7 +133,15 @@
   (ui/vstack
    {:gap 24}
    (example "ui/button" "Actions can use a primary, secondary, or disabled appearance."
-            (ui/hstack {:gap 12 :align :center} (ui/button "Save changes" #(swap! !state update :tick inc) {:primary true}) (ui/button "Cancel" #(swap! !state update :tick inc)) (ui/button "Unavailable" {:disabled true})))
+            (ui/hstack {:gap 12 :align :center}
+                       (ui/button "Save changes" #(swap! !state update :tick inc) {:primary true})
+                       (ui/button "Cancel" #(swap! !state update :tick inc))
+                       (ui/button "Unavailable" {:disabled true})))
+   (example "ui/button · loading icon caret" "Kit loading, icon-only, rounded, and dropdown caret."
+            (ui/hstack {:gap 12 :align :center}
+                       (ui/button "Saving" {:loading true :primary true})
+                       (ui/button "" {:icon :inbox :tooltip "Inbox" :accessibility-label "Inbox"})
+                       (ui/button "More" {:icon :chevron-down :dropdown-caret true :rounded :none})))
    (example "ui/switch" "A boolean value and an on-change callback."
             (ui/switch notify? (set-key :notify?) "Notifications"))
    (example "ui/toggle" "A button that stays pressed while its value is true."
@@ -307,6 +315,9 @@
    {:gap 24}
    (example "ui/progress" "A linear indicator. Adjust Volume on the Sliders page to change it."
             (ui/progress volume {:tooltip "Mirrors the slider"}))
+   (example "ui/progress · :loading :color" "Indeterminate bar, hex fill, and a named size."
+            (ui/progress nil {:loading true :size :small :color "#3366ff"
+                              :accessibility-label "Syncing" :width 240}))
    (example "ui/progress-circle" "A determinate indicator with optional content in the center."
             (ui/progress-circle volume {:size :large :color "#3366ff"
                                         :accessibility-label "Volume"}
@@ -331,14 +342,23 @@
                         {:variant :success
                          :title "Done"
                          :on-close #(swap! !state assoc :alert? false)})))
-   (example "ui/badge · ui/icon" "Add a count or an unread dot to an icon."
+   (example "ui/alert · :banner" "Banner style is full-width and does not show a title."
+            (ui/alert "Scheduled maintenance tonight."
+                      {:variant :warning :banner true :icon :triangle-alert}))
+   (example "ui/badge · ui/icon" "Add a count, an unread dot, or an icon to a child."
             (ui/hstack {:gap 20 :align :center}
                        (ui/badge 3 (ui/icon :bell))
-                       (ui/badge {:dot true} (ui/icon :inbox))))
+                       (ui/badge {:dot true} (ui/icon :inbox))
+                       (ui/badge {:count 120 :max 99 :color "#3366ff"} (ui/icon :bell))
+                       (ui/badge {:icon :check :color "#22c55e"} (ui/icon :user))))
    (example "ui/spinner" "A compact loading indicator."
-            (ui/spinner {:size :small}))
+            (ui/hstack {:gap 16 :align :center}
+                       (ui/spinner {:size :small})
+                       (ui/spinner {:size :large :color "#3366ff"})))
    (example "ui/skeleton" "A placeholder while content is loading."
-            (ui/skeleton {:width 220 :height 12}))))
+            (ui/vstack {:gap 8}
+                       (ui/skeleton {:width 220 :height 12})
+                       (ui/skeleton {:width 180 :height 12 :secondary true})))))
 
 (defn- avatars-panel [_]
   (ui/vstack
@@ -353,7 +373,11 @@
                              (ui/avatar "Barbara Liskov")
                              (ui/avatar "Rich Hickey")))
    (example "ui/tag · ui/kbd · ui/link" "Small labels, keyboard hints, and an external link."
-            (ui/hstack {:gap 16 :align :center} (ui/tag "Clojure" {:variant :info}) (ui/kbd "ctrl-s") (ui/link "https://clojure.org" "clojure.org")))))
+            (ui/hstack {:gap 16 :align :center}
+                       (ui/tag "Clojure" {:variant :info})
+                       (ui/kbd "ctrl-s")
+                       (ui/kbd "ctrl-k" {:outline true})
+                       (ui/link "https://clojure.org" "clojure.org")))))
 
 (defn- navigation-panel [{:keys [page]}]
   (ui/vstack
