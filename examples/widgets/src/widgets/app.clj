@@ -798,7 +798,9 @@
                              {:id :range :label "Range" :values [40 90]}
                              {:id :rel :label "Reliability" :values [70 60]}]
                             {:series [{:id :a :label "A"} {:id :b :label "B"}]
-                             :height 200
+                             ;; Leave room for the custom label and its overlaid badge.
+                             :height 240
+                             :outer-radius 80
                              :dot true
                              :grid-levels 5}))
    (example "ui/candlestick-chart" "Display open, high, low, and close values."
