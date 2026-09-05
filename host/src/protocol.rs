@@ -1603,7 +1603,8 @@ pub struct Node {
     /// DataTable: Kit `DataTable::stripe`. Omitted is Kit false.
     #[serde(default)]
     pub stripe: Option<bool>,
-    /// DataTable: Kit `TableState::sortable`. Omitted is Kit true.
+    /// DataTable: Kit `TableState::sortable`. Omitted is Kit true on
+    /// every tree (not "leave the last retained value").
     /// Column `:sort` still has to opt a header into sorting.
     #[serde(default)]
     pub sortable: Option<bool>,

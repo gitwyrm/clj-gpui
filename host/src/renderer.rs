@@ -6196,29 +6196,16 @@ fn list_load_more_threshold(node: &Node) -> usize {
 }
 
 fn apply_table_state_flags(table: &mut TableState<RowTableDelegate>, node: &Node) {
-    table.cell_selectable = node.cell_selectable.unwrap_or(false);
-    table.row_header = node.row_header.unwrap_or(true);
-    if let Some(value) = node.sortable {
-        table.sortable = value;
-    }
-    if let Some(value) = node.col_movable {
-        table.col_movable = value;
-    }
-    if let Some(value) = node.col_resizable {
-        table.col_resizable = value;
-    }
-    if let Some(value) = node.col_fixed {
-        table.col_fixed = value;
-    }
-    if let Some(value) = node.loop_selection {
-        table.loop_selection = value;
-    }
-    if let Some(value) = node.row_selectable {
-        table.row_selectable = value;
-    }
-    if let Some(value) = node.col_selectable {
-        table.col_selectable = value;
-    }
+    let flags = mapping::table_state_flags(node);
+    table.cell_selectable = flags.cell_selectable;
+    table.row_header = flags.row_header;
+    table.sortable = flags.sortable;
+    table.col_movable = flags.col_movable;
+    table.col_resizable = flags.col_resizable;
+    table.col_fixed = flags.col_fixed;
+    table.loop_selection = flags.loop_selection;
+    table.row_selectable = flags.row_selectable;
+    table.col_selectable = flags.col_selectable;
 }
 
 fn viewport_sized(el: impl IntoElement, node: &Node, default_h: f32, cx: &App) -> AnyElement {

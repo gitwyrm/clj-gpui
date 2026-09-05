@@ -435,6 +435,50 @@ pub fn apply_active_column_sort(columns: &[Column], rows: &mut Vec<Row>, source_
     }
 }
 
+/// Kit stores `selected_row` / `selected_cell` as indices. Native sort
+/// reorders displayed rows; remap those indices by stable row id so the
+/// same Clojure row (and cell) stays selected.
+pub fn remap_table_selection_after_sort(
+    old_ids: &[String],
+    new_ids: &[String],
+    selected_row: Option<usize>,
+    selected_cell: Option<(usize, usize)>,
+) -> (Option<usize>, Option<(usize, usize)>) {
+    let map_row = |ix: usize| -> Option<usize> {
+        old_ids
+            .get(ix)
+            .and_then(|id| new_ids.iter().position(|next| next == id))
+    };
+    (
+        selected_row.and_then(map_row),
+        selected_cell.and_then(|(row, col)| map_row(row).map(|row| (row, col))),
+    )
+}
+
+fn send_load_more_if_ready(
+    has_more: bool,
+    loading: bool,
+    load_more_sent: &mut bool,
+    cmd_tx: &Option<mpsc::Sender<Cmd>>,
+    on_load_more: &Option<String>,
+) {
+    if !has_more || loading || *load_more_sent {
+        return;
+    }
+    let Some(tx) = cmd_tx else {
+        return;
+    };
+    let Some(id) = on_load_more.clone() else {
+        return;
+    };
+    *load_more_sent = true;
+    let _ = tx.send(Cmd::Callback {
+        id,
+        value: None,
+        seq: None,
+    });
+}
+
 fn column_sort_name(sort: ColumnSort) -> &'static str {
     match sort {
         ColumnSort::Ascending => "asc",
@@ -630,12 +674,13 @@ impl RowListDelegate {
         on_load_more: Option<String>,
         collection_changed: bool,
     ) {
+        let callback_changed = self.on_load_more != on_load_more;
         self.loading = loading;
         self.has_more = has_more;
         self.load_more_threshold = load_more_threshold;
         self.empty = empty;
         self.on_load_more = on_load_more;
-        if collection_changed || !has_more || loading {
+        if collection_changed || !has_more || loading || callback_changed {
             self.load_more_sent = false;
         }
     }
@@ -648,6 +693,17 @@ impl RowListDelegate {
     #[cfg(test)]
     pub fn mark_load_more_sent(&mut self) {
         self.load_more_sent = true;
+    }
+
+    #[cfg(test)]
+    pub fn fire_load_more(&mut self) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
     }
 
     pub fn set_items(&mut self, items: Vec<Row>) {
@@ -763,17 +819,13 @@ impl ListDelegate for RowListDelegate {
     }
 
     fn load_more(&mut self, _: &mut Window, _: &mut Context<ListState<Self>>) {
-        if !self.has_more || self.loading || self.load_more_sent {
-            return;
-        }
-        self.load_more_sent = true;
-        if let (Some(tx), Some(id)) = (&self.cmd_tx, self.on_load_more.clone()) {
-            let _ = tx.send(Cmd::Callback {
-                id,
-                value: None,
-                seq: None,
-            });
-        }
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
     }
 }
 
@@ -797,8 +849,8 @@ pub struct RowTableDelegate {
 
 impl RowTableDelegate {
     pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
-        let source_order = rows.iter().map(|row| row.id.clone()).collect();
-        Self {
+        let source_order: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let mut this = Self {
             columns,
             rows,
             header_groups: Vec::new(),
@@ -812,7 +864,9 @@ impl RowTableDelegate {
             on_load_more: None,
             on_sort: None,
             load_more_sent: false,
-        }
+        };
+        apply_active_column_sort(&this.columns, &mut this.rows, &this.source_order);
+        this
     }
 
     pub fn with_header_groups(mut self, groups: Vec<Vec<ColumnGroup>>) -> Self {
@@ -836,15 +890,37 @@ impl RowTableDelegate {
         on_sort: Option<String>,
         collection_changed: bool,
     ) {
+        let callback_changed = self.on_load_more != on_load_more;
         self.loading = loading;
         self.has_more = has_more;
         self.load_more_threshold = load_more_threshold;
         self.empty = empty;
         self.on_load_more = on_load_more;
         self.on_sort = on_sort;
-        if collection_changed || !has_more || loading {
+        if collection_changed || !has_more || loading || callback_changed {
             self.load_more_sent = false;
         }
+    }
+
+    #[cfg(test)]
+    pub fn load_more_sent(&self) -> bool {
+        self.load_more_sent
+    }
+
+    #[cfg(test)]
+    pub fn fire_load_more(&mut self) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
+    }
+
+    #[cfg(test)]
+    pub fn source_ids(&self) -> &[String] {
+        &self.source_order
     }
 
     pub fn set_rows(&mut self, rows: Vec<Row>) {
@@ -1046,8 +1122,8 @@ impl TableDelegate for RowTableDelegate {
         &mut self,
         col_ix: usize,
         sort: ColumnSort,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
     ) {
         for (ix, col) in self.columns.iter_mut().enumerate() {
             if col.sort.is_some() {
@@ -1058,7 +1134,32 @@ impl TableDelegate for RowTableDelegate {
                 });
             }
         }
+        let old_ids: Vec<String> = self.rows.iter().map(|row| row.id.clone()).collect();
         sort_table_rows(&mut self.rows, col_ix, sort, &self.source_order);
+        let new_ids: Vec<String> = self.rows.iter().map(|row| row.id.clone()).collect();
+        if old_ids != new_ids {
+            cx.defer_in(window, move |table, _, cx| {
+                let (next_row, next_cell) = remap_table_selection_after_sort(
+                    &old_ids,
+                    &new_ids,
+                    table.selected_row(),
+                    table.selected_cell(),
+                );
+                if table.selected_cell().is_some() {
+                    if table.selected_cell() != next_cell {
+                        match next_cell {
+                            Some((row, col)) => table.set_selected_cell(row, col, cx),
+                            None => table.clear_selection(cx),
+                        }
+                    }
+                } else if table.selected_row() != next_row {
+                    match next_row {
+                        Some(row) => table.set_selected_row(row, cx),
+                        None => table.clear_selection(cx),
+                    }
+                }
+            });
+        }
         if let (Some(tx), Some(callback), Some(col)) =
             (&self.cmd_tx, self.on_sort.clone(), self.columns.get(col_ix))
         {
@@ -1103,17 +1204,13 @@ impl TableDelegate for RowTableDelegate {
     }
 
     fn load_more(&mut self, _: &mut Window, _: &mut Context<TableState<Self>>) {
-        if !self.has_more || self.loading || self.load_more_sent {
-            return;
-        }
-        self.load_more_sent = true;
-        if let (Some(tx), Some(id)) = (&self.cmd_tx, self.on_load_more.clone()) {
-            let _ = tx.send(Cmd::Callback {
-                id,
-                value: None,
-                seq: None,
-            });
-        }
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
     }
 }
 
@@ -1468,6 +1565,97 @@ mod tests {
     }
 
     #[test]
+    fn table_delegate_new_applies_initial_column_sort() {
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "asc"}
+        ])));
+        let rows = rows_from_items(&items(json!([
+            {"id": "z", "cells": ["Z"]},
+            {"id": "a", "cells": ["A"]}
+        ])));
+        let delegate = RowTableDelegate::new(columns, rows);
+        assert_eq!(delegate.id_at(0).as_deref(), Some("a"));
+        assert_eq!(delegate.id_at(1).as_deref(), Some("z"));
+        assert_eq!(delegate.source_ids(), &["z".to_string(), "a".to_string()]);
+
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "desc"}
+        ])));
+        let rows = rows_from_items(&items(json!([
+            {"id": "a", "cells": ["A"]},
+            {"id": "z", "cells": ["Z"]}
+        ])));
+        let delegate = RowTableDelegate::new(columns, rows);
+        assert_eq!(delegate.id_at(0).as_deref(), Some("z"));
+        assert_eq!(delegate.id_at(1).as_deref(), Some("a"));
+        assert_eq!(delegate.source_ids(), &["a".to_string(), "z".to_string()]);
+    }
+
+    fn sort_and_remap(
+        rows: &mut Vec<Row>,
+        col_ix: usize,
+        sort: ColumnSort,
+        source: &[String],
+        selected_row: Option<usize>,
+        selected_cell: Option<(usize, usize)>,
+    ) -> (Option<usize>, Option<(usize, usize)>) {
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(rows, col_ix, sort, source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        remap_table_selection_after_sort(&old_ids, &new_ids, selected_row, selected_cell)
+    }
+
+    #[test]
+    fn native_sort_remaps_selected_row_and_cell_by_id() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+
+        // Row b at index 0 stays b after Asc (now index 1).
+        let (row, cell) = sort_and_remap(
+            &mut rows,
+            0,
+            ColumnSort::Ascending,
+            &source,
+            Some(0),
+            Some((0, 1)),
+        );
+        assert_eq!(rows[0].id, "a");
+        assert_eq!(rows[1].id, "b");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, Some((1, 1)));
+
+        // Desc: a, b → b, a. Selected b (1) → 0; cell column stays 1.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Descending, &source, row, cell);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
+        assert_eq!(row, Some(0));
+        assert_eq!(cell, Some((0, 1)));
+
+        // Default restores Clojure order b, a. Selection already matches.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, row, cell);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
+        assert_eq!(row, Some(0));
+        assert_eq!(cell, Some((0, 1)));
+
+        // Asc from source order with only a row selected (no cell).
+        let (row, cell) =
+            sort_and_remap(&mut rows, 0, ColumnSort::Ascending, &source, Some(0), None);
+        assert_eq!(rows[0].id, "a");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, None);
+
+        // Default from sorted order remaps a at 0 back to 1.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, row, cell);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, None);
+    }
+
+    #[test]
     fn load_more_latch_resets_on_collection_or_flags() {
         let mut delegate = RowListDelegate::new(rows_from_items(&items(json!([
             {"id": "alpha", "label": "Alpha"}
@@ -1484,6 +1672,65 @@ mod tests {
         delegate.mark_load_more_sent();
         delegate.sync_chrome(true, true, 20, None, Some("cb-more".into()), false);
         assert!(!delegate.load_more_sent());
+    }
+
+    #[test]
+    fn load_more_latch_waits_for_callback() {
+        let (tx, rx) = mpsc::channel();
+        let mut list = RowListDelegate::new(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"}
+        ]))))
+        .with_host(tx);
+        list.sync_chrome(false, true, 20, None, None, true);
+        list.fire_load_more();
+        assert!(!list.load_more_sent());
+        assert!(rx.try_recv().is_err());
+
+        list.sync_chrome(false, true, 20, None, Some("cb-more".into()), false);
+        assert!(!list.load_more_sent());
+        list.fire_load_more();
+        assert!(list.load_more_sent());
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, value, seq }) => {
+                assert_eq!(id, "cb-more");
+                assert_eq!(value, None);
+                assert_eq!(seq, None);
+            }
+            other => panic!("expected load-more callback, got {other:?}"),
+        }
+        list.sync_chrome(false, true, 20, None, Some("cb-other".into()), false);
+        assert!(!list.load_more_sent());
+        list.fire_load_more();
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-other"),
+            other => panic!("expected retargeted load-more callback, got {other:?}"),
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let cols = columns_from_items(&items(json!([{"id": "name", "label": "Name"}])));
+        let rows = rows_from_items(&items(json!([{"id": "alpha", "cells": ["Alpha"]}])));
+        let mut table = RowTableDelegate::new(cols, rows).with_cell_host("tbl", tx);
+        table.sync_chrome(false, true, 20, None, None, None, true);
+        table.fire_load_more();
+        assert!(!table.load_more_sent());
+        assert!(rx.try_recv().is_err());
+
+        table.sync_chrome(
+            false,
+            true,
+            20,
+            None,
+            Some("cb-table-more".into()),
+            None,
+            false,
+        );
+        assert!(!table.load_more_sent());
+        table.fire_load_more();
+        assert!(table.load_more_sent());
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-table-more"),
+            other => panic!("expected table load-more callback, got {other:?}"),
+        }
     }
 
     #[test]
