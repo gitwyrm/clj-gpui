@@ -593,18 +593,33 @@
   ([text style]
    (merge {:type :label :text (str text)} style)))
 
+(defn- custom-variant-map
+  "Kit `ButtonCustomVariant` fields only. Nested so hex `:color` cannot
+  become host text color."
+  [m]
+  (when (map? m)
+    (cond-> {}
+      (contains? m :color) (assoc :color (some-> (:color m) str))
+      (contains? m :foreground) (assoc :foreground (some-> (:foreground m) str))
+      (contains? m :hover) (assoc :hover (some-> (:hover m) str))
+      (contains? m :active) (assoc :active (some-> (:active m) str))
+      (contains? m :shadow) (assoc :shadow (boolean (:shadow m))))))
+
 (defn- button-style
   "Named `:size` becomes `:control-size`. `:caret` is Kit `dropdown_caret`.
   Explicit `:dropdown-caret` wins; `:caret` is always dropped so Serde
-  does not see two names for the same field."
+  does not see two names for the same field. Nested `:custom-variant`
+  is kept off the host `:color` key."
   [style]
   (let [style (apply-control-size (or style {}))
         has-caret? (contains? style :caret)
         caret (:caret style)
-        style (dissoc style :caret)]
+        custom (:custom-variant style)
+        style (dissoc style :caret :custom-variant)]
     (cond-> style
       (and has-caret? (not (contains? style :dropdown-caret)))
-      (assoc :dropdown-caret caret))))
+      (assoc :dropdown-caret caret)
+      (map? custom) (assoc :custom-variant (custom-variant-map custom)))))
 
 (defn button
   "A clickable button. `on-click` is a real Clojure function (often `#()`).
@@ -622,12 +637,20 @@
   pressed state. `:tab-index` (omit = 0) and `:tab-stop` (omit = true)
   are Kit tab order. `:accessibility-label` / `:id` / `:role` forward
   to Kit a11y. `:loading-icon` is a kebab name (omit = Kit spinner).
-  Custom `ButtonCustomVariant` colors are not wrapped.
+  `:variant :custom` plus nested `:custom-variant` is Kit
+  `ButtonCustomVariant` (`:color` / `:foreground` / `:hover` / `:active`
+  / `:shadow`). Nested hex `:color` is not host text color.
 
   (ui/button \"+\" #(swap! count inc))
   (ui/button \"Save\" save! {:primary true})
   (ui/button \"Warn\" {:variant :warning :size :small})
-  (ui/button \"More\" {:icon :chevron-down :dropdown-caret true})"
+  (ui/button \"More\" {:icon :chevron-down :dropdown-caret true})
+  (ui/button \"Delete\" delete! {:variant :custom
+                                 :custom-variant {:color \"#b91c1c\"
+                                                  :foreground \"#f8fafc\"
+                                                  :hover \"#991b1b\"
+                                                  :active \"#7f1d1d\"
+                                                  :shadow true}})"
   ([text]
    {:type :button :text (str text)})
   ([text on-click]
@@ -712,6 +735,9 @@
   "A checkbox. `on-click` is a 0-arg Clojure function; toggle the atom yourself.
 
   `:shape :circle` paints a round toggle instead of Kit's square.
+  Kit chrome (square only): `:tooltip` is native `Checkbox::tooltip`
+  (not the generic wrapper), `:accessibility-label`, `:role`,
+  `:tab-index` (omit = 0), `:tab-stop` (omit = true).
 
   (ui/checkbox (:done item) #(swap! state update-in [:items i :done] not) \"Done\")
   (ui/checkbox done toggle {:shape :circle})"
@@ -825,6 +851,11 @@
 (defn switch
   "Toggle switch. `on-change` receives the new boolean.
 
+  `:tooltip` is Kit `Switch::tooltip` (not the generic wrapper).
+  `:accessibility-label` is Kit a11y (replaces the announced name
+  without changing the visible label). Checked-track `.color()` is
+  not wrapped (it would collide with host text `:color`).
+
   (ui/switch on? {:on-change #(swap! !state assoc :on %)})
   (ui/switch on? on-change \"Notifications\")"
   ([checked]
@@ -853,7 +884,9 @@
 (defn toggle
   "Button-style toggle (Kit Toggle), distinct from `switch`.
 
-  `on-change` receives the new boolean.
+  `on-change` receives the new boolean. `:tooltip` is Kit
+  `Toggle::tooltip` (not the generic wrapper). `:variant` is
+  `:ghost` (default) or `:outline`.
 
   (ui/toggle bold? {:on-change #(swap! !state assoc :bold %) :text \"Bold\"})"
   ([checked]
@@ -867,6 +900,34 @@
                   :checked (boolean checked)
                   :on-change on-change}
                  opts)))
+
+(defn toggle-group
+  "Grouped Kit Toggle. `value` is a vector of currently-checked item
+  ids; `on-change` receives that vector (original ids). Independent
+  multi-toggle, not exclusive radio.
+
+  `:items` are `{id, label, icon?, disabled?}`. `:segmented true`
+  joins adjacent borders. `:variant` is `:ghost` (default) or
+  `:outline`. Keyword ids round-trip as keywords.
+
+  (ui/toggle-group selected-ids
+    {:items [{:id :bold :label \"Bold\"} {:id :italic :label \"Italic\"}]
+     :on-change set-ids!
+     :segmented true
+     :variant :outline})"
+  ([value]
+   {:type :toggle-group
+    :value (mapv wire-id (or value []))
+    :items []})
+  ([value opts]
+   (let [opts (if (map? opts) opts {:on-change opts})
+         raw (or (:items opts) (:options opts))
+         opts (with-option-callback (dissoc opts :items :options) raw)
+         ids (if (sequential? value) value (when (some? value) [value]))]
+     (merge-widget {:type :toggle-group
+                    :value (mapv wire-id (or ids []))
+                    :items (option-items raw)}
+                   opts))))
 
 (defn radio-group
   "Radio group. `value` is the selected option id; `on-change` receives that id.
@@ -1123,13 +1184,18 @@
   "Tab bar. `value` is the selected tab id; `on-change` receives that id.
 
   Content is not included — render the selected panel in Clojure.
-  Keyword ids round-trip as keywords.
+  Keyword ids round-trip as keywords. `:menu true` is Kit `TabBar::menu`
+  (overflow menu; omit = false). `:max-width` is per-tab label
+  truncation in pixels (Kit `TabBar::max_width`), not the bar's layout
+  `:width`.
 
   (ui/tabs selected
     {:items [{:id :general :label \"General\"}
              {:id :advanced :label \"Advanced\"}]
      :on-change #(swap! !state assoc :tab %)
-     :variant :underline})"
+     :variant :underline
+     :menu true
+     :max-width 120})"
   ([value]
    {:type :tabs :value (wire-id value) :items []})
   ([value opts]
@@ -1356,7 +1422,8 @@
   `on-change` receives that id, or a vector of ids when `:multiple true`.
 
   Keyword ids round-trip as keywords. Multiple open ids are a JSON
-  array on the wire, not a comma-joined string.
+  array on the wire, not a comma-joined string. `:bordered` is Kit
+  `Accordion::bordered` (omit = Kit true).
 
   (ui/accordion open-id
     {:on-change set-open!
@@ -1398,6 +1465,8 @@
 
 (defn description-list
   "Key/value description list. Defaults to a vertical stack (one pair per row).
+
+  `:bordered` is Kit `DescriptionList::bordered` (omit = Kit true).
 
   (ui/description-list [{:label \"Name\" :value \"Ada\"}
                         {:label \"Lang\" :value \"Clojure\"}])
@@ -1547,9 +1616,13 @@
   must not dismiss on backdrop use `ui/alert-dialog`. Clicking the dimmed
   overlay dismisses a generic dialog unless `:overlay-closable false`.
   Confirm dialogs follow Kit (not overlay-closable unless you set it).
+  `:ok-text` / `:cancel-text` and named `:ok-variant` / `:cancel-variant`
+  are Kit `DialogButtonProps`. `:close-button` (omit = Kit true) and
+  `:keyboard` (Escape; omit = Kit true) are Kit Dialog chrome.
 
   (ui/dialog open?
-    {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
+    {:title \"Delete?\" :variant :confirm :ok-text \"Delete\"
+     :ok-variant :danger :on-ok delete! :on-close hide!}
     (ui/label \"This cannot be undone.\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
@@ -1570,10 +1643,13 @@
 
   Same controlled `open?` / `:on-ok` / `:on-cancel` / `:on-close`
   contract as `ui/dialog`. Confirm still closes unless
-  `:overlay-closable` is true.
+  `:overlay-closable` is true. Same `:ok-text` / `:cancel-text` /
+  `:ok-variant` / `:cancel-variant` / `:close-button` / `:keyboard`
+  keys as `ui/dialog`. AlertDialog omit `:close-button` is Kit false.
 
   (ui/alert-dialog open?
-    {:title \"Delete?\" :variant :confirm :on-ok delete! :on-close hide!}
+    {:title \"Delete?\" :variant :confirm :ok-text \"Delete\"
+     :on-ok delete! :on-close hide!}
     (ui/label \"This cannot be undone.\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
@@ -2305,11 +2381,14 @@
   Kit holds one active sheet. The last open sheet in
   tree order wins. `:placement` is `:left` / `:right` / `:top` /
   `:bottom` (default `:right`). `:footer` is a child node. Overlay
-  click dismisses unless `:overlay-closable false`. `:on-close` is
-  0-arg; `:on-open-change` receives `false` on dismiss.
+  click dismisses unless `:overlay-closable false`. `:overlay` is the
+  dimmer (Kit `Sheet::overlay`; omit = true), distinct from
+  `:overlay-closable`. `:resizable` is Kit `Sheet::resizable` (omit =
+  true). `:on-close` is 0-arg; `:on-open-change` receives `false` on
+  dismiss.
 
   (ui/sheet open?
-    {:title \"Inspect\" :placement :right :on-close hide!}
+    {:title \"Inspect\" :placement :right :overlay false :on-close hide!}
     (ui/label \"Details\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
@@ -2336,19 +2415,21 @@
   "Toast on the overlay stack. Presence in the tree shows it unless
   `:open? false`. `:variant` is `:info` (default), `:success`,
   `:warning`, or `:error`. `:autohide` defaults true. Unchanged
-  title/message/variant/autohide is not re-pushed (that would reset
-  the hide timer). Dismiss fires 0-arg `:on-close`. Click fires
-  0-arg `:on-click`.
+  title/message/variant/autohide/placement/icon is not re-pushed (that
+  would reset the hide timer). `:placement` is a Kit Anchor
+  (`:top-right`, `:bottom-right`, …). `:icon` is a kebab icon name.
+  Dismiss fires 0-arg `:on-close`. Click fires 0-arg `:on-click`.
 
-  (ui/notification {:variant :success :title \"Saved\" :message \"ok\"})"
+  (ui/notification {:variant :success :title \"Saved\" :message \"ok\"
+                    :placement :bottom-right :icon :check})"
   ([message-or-opts]
    (if (map? message-or-opts)
-     (let [opts (rewrite-open (apply-control-size message-or-opts))]
+     (let [opts (rewrite-open (rewrite-anchor (apply-control-size message-or-opts)))]
        (merge {:type :notification} opts))
      {:type :notification :message (str message-or-opts)}))
   ([message opts]
    (merge {:type :notification :message (str message)}
-          (rewrite-open (apply-control-size (or opts {}))))))
+          (rewrite-open (rewrite-anchor (apply-control-size (or opts {})))))))
 
 (defn number-input
   "Numeric field with step buttons. `on-change` receives a number.
@@ -2462,27 +2543,46 @@
                   :on-change on-change}
                  opts)))
 
+(defn- featured-color-opts
+  "Keep `:featured-colors` as a hex list. Do not copy onto host `:color`."
+  [opts]
+  (let [opts (or opts {})
+        colors (:featured-colors opts)]
+    (cond-> opts
+      (sequential? colors)
+      (assoc :featured-colors (mapv str colors)))))
+
 (defn color-picker
   "Hex color (`\"#3366ff\"`). `on-change` receives a hex string or `nil`.
 
-  (ui/color-picker \"#3366ff\" {:on-change set!})"
+  `:featured-colors` is a hex list for Kit `featured_colors` (omit keeps
+  Kit's default swatches). Nested so it is not layout/host `:color`.
+
+  (ui/color-picker \"#3366ff\" {:on-change set!
+                                :featured-colors [\"#3366ff\" \"#22c55e\"]})"
   ([value]
    {:type :color-picker :value value})
   ([value on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge-widget {:type :color-picker :value value} on-change-or-opts)
+     (merge-widget {:type :color-picker :value value}
+                   (featured-color-opts on-change-or-opts))
      {:type :color-picker :value value :on-change on-change-or-opts}))
   ([value on-change opts]
    (merge-widget {:type :color-picker :value value :on-change on-change}
-                 opts)))
+                 (featured-color-opts opts))))
 
 (defn date-picker
   "ISO date `\"YYYY-MM-DD\"`. `:range true` (or `:multiple`) uses
   `[start end]` (missing bounds are JSON `null`). `on-change` receives
   that same JSON shape. Display format is `%Y-%m-%d`.
+  `:number-of-months` is Kit calendar months (omit = 1).
+  `:first-day-of-week` is `sun`…`sat` or 0–6 from Sunday (omit = Sunday;
+  changing it recreates the picker). `:appearance` is Kit field chrome
+  (omit = true).
 
   (ui/date-picker \"2026-09-02\" {:on-change set!})
-  (ui/date-picker [\"2026-01-01\" \"2026-01-31\"] {:range true})"
+  (ui/date-picker [\"2026-01-01\" \"2026-01-31\"] {:range true})
+  (ui/date-picker date {:number-of-months 2 :first-day-of-week :mon})"
   ([value]
    {:type :date-picker :value value})
   ([value on-change-or-opts]
@@ -2650,16 +2750,18 @@
   ([points opts] (chart :sankey points opts)))
 
 (defn markdown
-  "Selectable markdown `TextView`. `:height` or `:flex 1` makes it scroll.
+  "Markdown `TextView`. `:selectable` is Kit text selection (omit = true).
+  `:height` or `:flex 1` makes it scroll.
 
-  (ui/markdown \"# Hello\")"
+  (ui/markdown \"# Hello\")
+  (ui/markdown body {:selectable false})"
   ([text]
    {:type :markdown :text (str (or text ""))})
   ([text opts]
    (merge {:type :markdown :text (str (or text ""))} (or opts {}))))
 
 (defn html
-  "Selectable HTML `TextView`. Same layout notes as `markdown`.
+  "HTML `TextView`. Same `:selectable` / layout notes as `markdown`.
 
   (ui/html \"<p>Hi</p>\")"
   ([text]
@@ -2669,12 +2771,15 @@
 
 (defn sidebar
   "App sidebar of `{id, label, icon?}` rows. `:side` is `:left` (default)
-  or `:right`. `:collapsed` shrinks chrome. `:selected` / `on-change`
-  restore original ids. `:title` is a header string.
+  or `:right`. `:collapsed` shrinks chrome. `:collapsible` is Kit
+  `SidebarCollapsible`: `true` / `:icon` (default), `false` / `:none`,
+  or `:offcanvas`. `:selected` / `on-change` restore original ids.
+  `:title` is a header string.
   The sidebar owns its scrolling; use `:flex 1` to fill remaining height
   or `:height` for a fixed viewport. Do not wrap it in `ui/scroll`.
 
-  (ui/sidebar items {:selected id :side :left :on-change set!})"
+  (ui/sidebar items {:selected id :side :left :collapsible :offcanvas
+                     :on-change set!})"
   ([items]
    (sidebar items nil))
   ([items opts]
@@ -2698,9 +2803,11 @@
   it a group — set `:variant :dropdown` (or `:select`). Groups are
   wrappers without a field variant. `:on-change` receives
   `{:id field-id :value …}` with original field ids and dropdown
-  option ids.
+  option ids. `:sidebar-width` is Kit `Settings::sidebar_width` in
+  pixels (omit = Kit 250), not the host wrapper `:width`.
 
-  (ui/settings pages {:on-change (fn [{:keys [id value]}])})"
+  (ui/settings pages {:on-change (fn [{:keys [id value]}])
+                      :sidebar-width 200})"
   ([pages]
    (settings pages nil))
   ([pages opts]

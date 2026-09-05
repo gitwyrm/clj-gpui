@@ -9,6 +9,7 @@
 (defonce !state
   (r/atom {:notify? true
            :bold? false
+           :formats [:bold]
            :theme-mode :dark
            :volume 36
            :span [20 70]
@@ -129,7 +130,7 @@
                        (assoc :chat-scroll target)
                        (update :chat-scroll-gen (fnil inc 0))))))
 
-(defn- controls-panel [{:keys [notify? bold?]}]
+(defn- controls-panel [{:keys [notify? bold? formats]}]
   (ui/vstack
    {:gap 24}
    (example "ui/button" "Actions can use a primary, secondary, or disabled appearance."
@@ -137,6 +138,14 @@
                        (ui/button "Save changes" #(swap! !state update :tick inc) {:primary true})
                        (ui/button "Cancel" #(swap! !state update :tick inc))
                        (ui/button "Unavailable" {:disabled true})))
+   (example "ui/button · custom-variant" "Nested Kit ButtonCustomVariant colors, not host text :color."
+            (ui/button "Delete" #(swap! !state update :tick inc)
+                       {:variant :custom
+                        :custom-variant {:color "#b91c1c"
+                                         :foreground "#f8fafc"
+                                         :hover "#991b1b"
+                                         :active "#7f1d1d"
+                                         :shadow true}}))
    (example "ui/button · loading icon caret" "Kit loading, icon-only, rounded, and dropdown caret."
             (ui/hstack {:gap 12 :align :center}
                        (ui/button "Saving" {:loading true :primary true})
@@ -145,9 +154,19 @@
    (example "ui/switch" "A boolean value and an on-change callback."
             (ui/switch notify? (set-key :notify?) "Notifications"))
    (example "ui/toggle" "A button that stays pressed while its value is true."
-            (ui/toggle bold? {:on-change (set-key :bold?) :text "Bold" :width 120}))
+            (ui/toggle bold? {:on-change (set-key :bold?) :text "Bold" :width 120
+                              :tooltip "Toggle bold"}))
+   (example "ui/toggle-group" "Independent multi-toggle with real grouped selection state."
+            (ui/toggle-group (or formats [])
+                             {:items [{:id :bold :label "Bold"}
+                                      {:id :italic :label "Italic"}
+                                      {:id :underline :label "Underline"}]
+                              :segmented true
+                              :variant :outline
+                              :on-change (set-key :formats)}))
    (example "ui/checkbox" "Use a zero-argument callback to toggle your atom."
-            (ui/checkbox notify? #(swap! !state update :notify? not) "Receive updates"))))
+            (ui/checkbox notify? #(swap! !state update :notify? not) "Receive updates"
+                         {:tooltip "Native Kit tooltip"}))))
 
 (defn- selection-panel [{:keys [theme-mode lang dialect]}]
   (ui/vstack
@@ -302,11 +321,14 @@
    (example "ui/color-picker" "Choose a color, set one programmatically, or clear it."
             (ui/hstack
              {:gap 8 :align :center}
-             (ui/color-picker color {:on-change (set-key :color)})
+             (ui/color-picker color {:on-change (set-key :color)
+                                     :featured-colors ["#3366ff" "#22c55e" "#f59e0b"]})
              (ui/button "Clear color" #(swap! !state assoc :color nil))
              (ui/button "Pink" #(swap! !state assoc :color "#ff00aa"))))
    (example "ui/date-picker" "The selected date is an ISO date string."
-            (ui/date-picker date {:on-change (set-key :date)}))
+            (ui/date-picker date {:on-change (set-key :date)
+                                  :number-of-months 2
+                                  :first-day-of-week :mon}))
    (example "ui/rating" "An interactive five-star rating."
             (ui/rating stars {:id "stars" :max 5 :on-change (set-key :stars)}))))
 
@@ -383,7 +405,12 @@
   (ui/vstack
    {:gap 24}
    (example "ui/tabs" "Tabs are useful for a small set of sibling views."
-            (ui/tabs (:demo-tab @!state :overview) {:items [{:id :overview :label "Overview"} {:id :activity :label "Activity"}] :on-change (set-key :demo-tab)}))
+            (ui/tabs (:demo-tab @!state :overview)
+                     {:items [{:id :overview :label "Overview"}
+                              {:id :activity :label "Activity with a long label"}]
+                      :menu true
+                      :max-width 140
+                      :on-change (set-key :demo-tab)}))
    (example "ui/pagination" "Navigate a fixed number of pages."
             (ui/label (str "Page " page))
             (ui/pagination page {:id "pages" :total 12 :on-change (set-key :page)}))
@@ -495,6 +522,9 @@
             (ui/dialog dialog?
                        {:title (str "Confirm · tick " tick)
                         :variant :confirm
+                        :ok-text "Delete"
+                        :ok-variant :danger
+                        :cancel-text "Keep"
                         :overlay-closable (not overlay-lock?)
                         :on-ok #(swap! !state assoc :dialog? false :menu :ok :batch-shift? true)
                         :on-cancel #(swap! !state assoc :dialog? false :menu :cancel)
@@ -556,6 +586,8 @@
             (ui/sheet sheet?
                       {:title "Inspector"
                        :placement :right
+                       :overlay true
+                       :resizable true
                        :on-close #(swap! !state assoc :sheet? false)
                        :footer (ui/button "Close" #(swap! !state assoc :sheet? false) {:primary true})}
                       (ui/label (str "Sheet body · tick " tick)))
@@ -565,6 +597,8 @@
                                      :title title
                                      :message message
                                      :autohide true
+                                     :placement :bottom-right
+                                     :icon :check
                                      :on-close #(swap! !state update :toasts
                                                        (fn [xs] (vec (remove (fn [t] (= id (:id t))) xs))))}))
                  toasts)
@@ -793,7 +827,7 @@
    {:gap 24}
    (example "ui/markdown" "Render formatted, selectable text."
             (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"
-                         {:height 140}))))
+                         {:height 140 :selectable true}))))
 
 (defn- structure-panel [{:keys [section alert?]}]
   (ui/vstack
@@ -801,6 +835,7 @@
    (example "ui/accordion" "Expand one section at a time."
             (ui/accordion section
                           {:on-change (set-key :section)
+                           :bordered true
                            :items [{:id :audio
                                     :title "Audio"
                                     :content (ui/label "Speakers, mic, and volume.")}
@@ -809,7 +844,8 @@
                                     :content (ui/label "Theme, density, and motion.")}]}))
    (example "ui/description-list" "Present a small set of labeled values."
             (ui/description-list [{:label "Host" :value "GPUI"}
-                                  {:label "UI" :value "clj-gpui"}]))
+                                  {:label "UI" :value "clj-gpui"}]
+                                 {:bordered true}))
    (example "ui/separator" "Divide content horizontally or vertically."
             (ui/hstack {:gap 12 :align :center :height 36}
                        (ui/label "v")
@@ -963,6 +999,7 @@
                          {:id :gear :label "Settings" :icon :settings}]
                         {:selected nav
                          :collapsed sidebar-collapsed
+                         :collapsible :icon
                          :title "Demo"
                          :height 180
                          :on-change (set-key :nav)})
@@ -999,6 +1036,7 @@
                                              :items [{:id :blue :label "Blue"}
                                                      {:id :pink :label "Pink"}]}]}]}]
                          {:height 360
+                          :sidebar-width 180
                           :on-change (fn [{:keys [id value]}]
                                        (case id
                                          :notify (swap! !state assoc :setting-notify value)

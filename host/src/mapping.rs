@@ -1,17 +1,23 @@
 //! Mapping from clj-gpui JSON node fields onto GPUI Kit 0.6 types.
 
 use crate::catalog;
-use crate::protocol::{Node, StyledKeys};
+use crate::protocol::{ButtonCustomVariantSpec, Node, StyledKeys};
+use chrono::Weekday;
 use gpui::{
-    AnyElement, Axis, FontWeight, Hsla, IntoElement, Keystroke, Role, StyleRefinement, Styled, div,
-    px,
+    AnyElement, App, Axis, FontWeight, Hsla, IntoElement, Keystroke, Role, StyleRefinement, Styled,
+    div, px,
 };
 use gpui_component::{
     Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, RoleOverride,
     Selectable as _, Side, Sizable, Size,
     alert::Alert,
     badge::Badge,
-    button::{Button, ButtonRounded, ButtonVariants, ToggleVariant},
+    button::{
+        Button, ButtonCustomVariant, ButtonRounded, ButtonVariants, Toggle, ToggleVariant,
+        ToggleVariants as _,
+    },
+    checkbox::Checkbox,
+    dialog::DialogButtonProps,
     group_box::GroupBoxVariant,
     input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
     kbd::Kbd,
@@ -22,6 +28,7 @@ use gpui_component::{
     skeleton::Skeleton,
     slider::SliderScale,
     spinner::Spinner,
+    switch::Switch,
     tab::TabVariant,
     table::{DataTable, TableDelegate},
     tag::TagVariant,
@@ -541,11 +548,143 @@ fn parse_hex(text: Option<&str>) -> Option<Hsla> {
     text.and_then(|s| Hsla::parse_hex(s.trim()).ok())
 }
 
+/// Kit `ButtonCustomVariant` from a nested `:custom-variant` map.
+/// Omitted keys keep `ButtonCustomVariant::new` theme defaults. Nested
+/// so hex `color` cannot become host `text_color`.
+pub fn button_custom_variant(spec: &ButtonCustomVariantSpec, cx: &App) -> ButtonCustomVariant {
+    let mut style = ButtonCustomVariant::new(cx);
+    if let Some(color) = parse_hex(spec.color.as_deref()) {
+        style = style.color(color);
+    }
+    if let Some(color) = parse_hex(spec.foreground.as_deref()) {
+        style = style.foreground(color);
+    }
+    if let Some(color) = parse_hex(spec.hover.as_deref()) {
+        style = style.hover(color);
+    }
+    if let Some(color) = parse_hex(spec.active.as_deref()) {
+        style = style.active(color);
+    }
+    if let Some(shadow) = spec.shadow {
+        style = style.shadow(shadow);
+    }
+    style
+}
+
+pub fn apply_custom_button_variant<B: ButtonVariants>(el: B, node: &Node, cx: Option<&App>) -> B {
+    match (node.custom_variant.as_ref(), cx) {
+        (Some(spec), Some(cx)) => el.custom(button_custom_variant(spec, cx)),
+        _ => el,
+    }
+}
+
+/// ColorPicker `featured_colors`. Invalid hex entries are skipped.
+pub fn featured_colors(node: &Node) -> Vec<Hsla> {
+    node.featured_colors
+        .as_ref()
+        .map(|colors| {
+            colors
+                .iter()
+                .filter_map(|s| parse_hex(Some(s.as_str())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Kit `DialogButtonProps` (ok/cancel text and named variants).
+pub fn dialog_button_props(node: &Node, show_cancel: bool) -> DialogButtonProps {
+    let mut props = DialogButtonProps::default().show_cancel(show_cancel);
+    if let Some(text) = node.ok_text.as_deref().filter(|s| !s.is_empty()) {
+        props = props.ok_text(text.to_string());
+    }
+    if let Some(text) = node.cancel_text.as_deref().filter(|s| !s.is_empty()) {
+        props = props.cancel_text(text.to_string());
+    }
+    if let Some(variant) = parse_dialog_button_variant(node.ok_variant.as_deref()) {
+        props = props.ok_variant(variant);
+    }
+    if let Some(variant) = parse_dialog_button_variant(node.cancel_variant.as_deref()) {
+        props = props.cancel_variant(variant);
+    }
+    props
+}
+
+fn parse_dialog_button_variant(
+    value: Option<&str>,
+) -> Option<gpui_component::button::ButtonVariant> {
+    use gpui_component::button::ButtonVariant;
+    match parse_named_button_variant(value) {
+        Some(NamedButtonVariant::Primary) => Some(ButtonVariant::Primary),
+        Some(NamedButtonVariant::Secondary) => Some(ButtonVariant::Secondary),
+        Some(NamedButtonVariant::Danger) => Some(ButtonVariant::Danger),
+        Some(NamedButtonVariant::Warning) => Some(ButtonVariant::Warning),
+        Some(NamedButtonVariant::Success) => Some(ButtonVariant::Success),
+        Some(NamedButtonVariant::Info) => Some(ButtonVariant::Info),
+        Some(NamedButtonVariant::Ghost) => Some(ButtonVariant::Ghost),
+        Some(NamedButtonVariant::Link) => Some(ButtonVariant::Link),
+        Some(NamedButtonVariant::Text) => Some(ButtonVariant::Text),
+        None => None,
+    }
+}
+
+/// DatePicker `first_day_of_week`. `sun`…`sat` or 0–6 from Sunday.
+/// Omitted / unknown is Kit Sunday.
+pub fn parse_first_day_of_week(value: Option<&serde_json::Value>) -> Weekday {
+    match value {
+        Some(serde_json::Value::Number(n)) => match n.as_i64().unwrap_or(0).rem_euclid(7) {
+            0 => Weekday::Sun,
+            1 => Weekday::Mon,
+            2 => Weekday::Tue,
+            3 => Weekday::Wed,
+            4 => Weekday::Thu,
+            5 => Weekday::Fri,
+            _ => Weekday::Sat,
+        },
+        Some(serde_json::Value::String(s)) => match catalog::normalize(s).as_str() {
+            "mon" | "monday" | "1" => Weekday::Mon,
+            "tue" | "tues" | "tuesday" | "2" => Weekday::Tue,
+            "wed" | "wednesday" | "3" => Weekday::Wed,
+            "thu" | "thur" | "thurs" | "thursday" | "4" => Weekday::Thu,
+            "fri" | "friday" | "5" => Weekday::Fri,
+            "sat" | "saturday" | "6" => Weekday::Sat,
+            _ => Weekday::Sun,
+        },
+        _ => Weekday::Sun,
+    }
+}
+
+/// DatePicker `number_of_months`. Omitted is Kit 1. `0` becomes 1.
+pub fn date_number_of_months(node: &Node) -> usize {
+    node.number_of_months
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .map(|n| n as usize)
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// Sidebar `collapsible`. Omitted is Kit `Icon`.
+pub fn parse_sidebar_collapsible(
+    value: Option<&serde_json::Value>,
+) -> gpui_component::sidebar::SidebarCollapsible {
+    use gpui_component::sidebar::SidebarCollapsible;
+    match value {
+        Some(serde_json::Value::Bool(false)) => SidebarCollapsible::None,
+        Some(serde_json::Value::Bool(true)) => SidebarCollapsible::Icon,
+        Some(serde_json::Value::String(s)) => match catalog::normalize(s).as_str() {
+            "none" | "false" => SidebarCollapsible::None,
+            "offcanvas" | "off-canvas" => SidebarCollapsible::Offcanvas,
+            _ => SidebarCollapsible::Icon,
+        },
+        _ => SidebarCollapsible::Icon,
+    }
+}
+
 /// Kit `Button` chrome (variant, size, icon, loading, tooltip, a11y, …).
 ///
 /// Does not set `label` — empty text is icon-button mode. Callers that need
-/// a default label (`Open`) apply it themselves.
-pub fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
+/// a default label (`Open`) apply it themselves. `cx` is required for
+/// `:custom-variant` theme defaults.
+pub fn apply_button_chrome(mut button: Button, node: &Node, cx: Option<&App>) -> Button {
     let chrome = button_chrome(
         node.variant.as_deref(),
         node.primary,
@@ -554,6 +693,7 @@ pub fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
         node.control_size.as_deref(),
     );
     button = apply_named_button_variant(button, chrome.variant);
+    button = apply_custom_button_variant(button, node, cx);
     if chrome.outline {
         button = button.outline();
     }
@@ -613,12 +753,80 @@ pub fn apply_button_chrome(mut button: Button, node: &Node) -> Button {
 }
 
 /// Kit `MessageScroller::with_jump_button_renderer` chrome (variant, size, icon, label, tooltip).
-pub fn apply_jump_button_renderer(button: Button, node: &Node) -> Button {
-    let button = apply_button_chrome(button, node);
+pub fn apply_jump_button_renderer(button: Button, node: &Node, cx: Option<&App>) -> Button {
+    let button = apply_button_chrome(button, node, cx);
     match jump_button_visible_label(node) {
         Some(label) => button.label(label.to_string()),
         None => button,
     }
+}
+
+fn kit_tooltip(node: &Node) -> Option<String> {
+    node.tooltip
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn kit_accessibility_label(node: &Node) -> Option<String> {
+    node.accessibility_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Kit `Switch` chrome (size, disabled, native tooltip, a11y). Not `.color()`
+/// (checked-track fill would collide with host text `:color`).
+pub fn apply_switch_chrome(mut el: Switch, node: &Node) -> Switch {
+    if node.disabled {
+        el = el.disabled(true);
+    }
+    el = el.with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(tooltip) = kit_tooltip(node) {
+        el = el.tooltip(tooltip);
+    }
+    if let Some(label) = kit_accessibility_label(node) {
+        el = el.accessibility_label(label);
+    }
+    el
+}
+
+/// Kit `Checkbox` chrome (size, disabled, native tooltip, a11y, role, tab).
+/// Not the clj-gpui `:shape :circle` extra.
+pub fn apply_checkbox_kit_chrome(mut checkbox: Checkbox, node: &Node) -> Checkbox {
+    if node.disabled {
+        checkbox = checkbox.disabled(true);
+    }
+    checkbox = checkbox.with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(tooltip) = kit_tooltip(node) {
+        checkbox = checkbox.tooltip(tooltip);
+    }
+    if let Some(label) = kit_accessibility_label(node) {
+        checkbox = checkbox.accessibility_label(label);
+    }
+    if let Some(role) = parse_button_role(node.role.as_deref()) {
+        checkbox = checkbox.role(role);
+    }
+    if let Some(index) = node.tab_index.filter(|n| n.is_finite()) {
+        checkbox = checkbox.tab_index(index as isize);
+    }
+    if let Some(stop) = node.tab_stop {
+        checkbox = checkbox.tab_stop(stop);
+    }
+    checkbox
+}
+
+/// Kit `Toggle` chrome (size, disabled, variant, native tooltip).
+pub fn apply_toggle_chrome(mut el: Toggle, node: &Node) -> Toggle {
+    el = el.with_variant(parse_toggle_variant(node.variant.as_deref()));
+    if node.disabled {
+        el = el.disabled(true);
+    }
+    el = el.with_size(parse_scale(node.control_size.as_deref()));
+    if let Some(tooltip) = kit_tooltip(node) {
+        el = el.tooltip(tooltip);
+    }
+    el
 }
 
 /// Kit `Alert` chrome (title, size, icon, banner, visible). `on_close` stays
@@ -1634,6 +1842,7 @@ mod tests {
         let button = apply_jump_button_renderer(
             Button::new("jump"),
             tooltip.jump_button_renderer.as_ref().unwrap(),
+            None,
         );
         let _ = button;
     }
@@ -2108,6 +2317,131 @@ mod tests {
         assert!(
             without.style().text.color.is_none(),
             "host wrapper must not pass Badge overlay color to wrapped children"
+        );
+    }
+
+    #[test]
+    fn first_day_of_week_parses_names_and_sunday_origin_numbers() {
+        assert_eq!(parse_first_day_of_week(Some(&json!("mon"))), Weekday::Mon);
+        assert_eq!(
+            parse_first_day_of_week(Some(&json!("monday"))),
+            Weekday::Mon
+        );
+        assert_eq!(parse_first_day_of_week(Some(&json!(1))), Weekday::Mon);
+        assert_eq!(parse_first_day_of_week(Some(&json!(0))), Weekday::Sun);
+        assert_eq!(parse_first_day_of_week(None), Weekday::Sun);
+        assert_eq!(parse_first_day_of_week(Some(&json!("nope"))), Weekday::Sun);
+    }
+
+    #[test]
+    fn sidebar_collapsible_parses_bool_and_named() {
+        use gpui_component::sidebar::SidebarCollapsible;
+        assert!(matches!(
+            parse_sidebar_collapsible(Some(&json!(true))),
+            SidebarCollapsible::Icon
+        ));
+        assert!(matches!(
+            parse_sidebar_collapsible(Some(&json!(false))),
+            SidebarCollapsible::None
+        ));
+        assert!(matches!(
+            parse_sidebar_collapsible(Some(&json!("offcanvas"))),
+            SidebarCollapsible::Offcanvas
+        ));
+        assert!(matches!(
+            parse_sidebar_collapsible(Some(&json!("none"))),
+            SidebarCollapsible::None
+        ));
+        assert!(matches!(
+            parse_sidebar_collapsible(None),
+            SidebarCollapsible::Icon
+        ));
+    }
+
+    #[test]
+    fn dialog_button_props_forward_named_variants_only() {
+        let node = Node {
+            ok_text: Some("Delete".into()),
+            cancel_text: Some("Keep".into()),
+            ok_variant: Some("danger".into()),
+            cancel_variant: Some("ghost".into()),
+            ..Node::default()
+        };
+        let _ = dialog_button_props(&node, true);
+
+        let custom = Node {
+            ok_variant: Some("custom".into()),
+            ..Node::default()
+        };
+        let _ = dialog_button_props(&custom, false);
+    }
+
+    #[test]
+    fn custom_variant_color_does_not_become_host_text_color() {
+        let node = Node {
+            custom_variant: Some(crate::protocol::ButtonCustomVariantSpec {
+                color: Some("#b91c1c".into()),
+                foreground: Some("#f8fafc".into()),
+                hover: None,
+                active: None,
+                shadow: Some(true),
+            }),
+            ..Node::default()
+        };
+        assert!(node.color.is_none());
+        let mut styled = apply_visual_style(div(), &node);
+        assert!(
+            styled.style().text.color.is_none(),
+            "nested ButtonCustomVariant :color must not become host text_color"
+        );
+    }
+
+    #[test]
+    fn tabs_max_width_is_not_host_layout_width() {
+        let node = Node {
+            kind: "tabs".into(),
+            max_width: Some(120.0),
+            ..Node::default()
+        };
+        assert!(node.width.is_none());
+        let mut styled = apply_styled(div(), &node);
+        assert!(
+            styled.style().size.width.is_none(),
+            "TabBar :max-width is per-tab label truncation, not apply_styled width"
+        );
+    }
+
+    #[test]
+    fn settings_sidebar_width_is_not_host_layout_width() {
+        let node = Node {
+            kind: "settings".into(),
+            sidebar_width: Some(200.0),
+            ..Node::default()
+        };
+        assert!(node.width.is_none());
+        let mut styled = apply_styled(div(), &node);
+        assert!(
+            styled.style().size.width.is_none(),
+            "Settings :sidebar-width is not the host wrapper :width"
+        );
+    }
+
+    #[test]
+    fn date_number_of_months_omitted_is_one() {
+        assert_eq!(date_number_of_months(&Node::default()), 1);
+        assert_eq!(
+            date_number_of_months(&Node {
+                number_of_months: Some(2.0),
+                ..Node::default()
+            }),
+            2
+        );
+        assert_eq!(
+            date_number_of_months(&Node {
+                number_of_months: Some(0.0),
+                ..Node::default()
+            }),
+            1
         );
     }
 }

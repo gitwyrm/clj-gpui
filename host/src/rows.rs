@@ -1207,7 +1207,7 @@ impl TableDelegate for RowTableDelegate {
         row_ix: usize,
         col_ix: usize,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let path = self.td_element_id(row_ix, col_ix);
         match self.rows.get(row_ix).and_then(|row| row.cells.get(col_ix)) {
@@ -1215,6 +1215,7 @@ impl TableDelegate for RowTableDelegate {
                 node,
                 &path,
                 self.cmd_tx.as_ref(),
+                Some(cx),
             )),
             Some(TableCell::Text(text)) => paint_td(div().child(SharedString::from(text.clone()))),
             None => div().into_any_element(),

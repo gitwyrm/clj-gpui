@@ -7,6 +7,7 @@ use crate::overlay;
 use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
 use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync, TableSelectionSync};
+use chrono::Weekday;
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
     EntityId, Focusable, GlobalElementId, InspectorElementId, LayoutId, PathPromptOptions, Pixels,
@@ -19,7 +20,7 @@ use gpui_component::{
     alert::Alert,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, DropdownButton, Toggle, ToggleVariants as _},
+    button::{Button, DropdownButton, Toggle, ToggleGroup, ToggleVariants as _},
     checkbox::Checkbox,
     clipboard::Clipboard,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
@@ -327,6 +328,7 @@ struct ColorSlot {
 struct DateSlot {
     state: Entity<DatePickerState>,
     range: bool,
+    first_day: Weekday,
     on_change: Option<String>,
 }
 
@@ -530,6 +532,10 @@ impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
 
     fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
         Some(self.view.cmd_tx.clone())
+    }
+
+    fn app(&self) -> Option<&App> {
+        Some(self.cx)
     }
 }
 
@@ -1509,7 +1515,7 @@ impl RootView {
                 if let Some(label) = mapping::jump_button_visible_label(node) {
                     button = button.label(label.to_string());
                 }
-                let mut button = overlay::apply_button_chrome(button, node);
+                let mut button = overlay::apply_button_chrome(button, node, Some(cx));
                 if node.on_click.is_some() {
                     let emit = Self::action_emitter(cx);
                     let key = key.clone();
@@ -1552,6 +1558,7 @@ impl RootView {
                     if let Some(text) = node.text.clone() {
                         checkbox = checkbox.label(text);
                     }
+                    checkbox = mapping::apply_checkbox_kit_chrome(checkbox, node);
                     if let Some(callback_id) = node.on_click.clone() {
                         let cmd_tx = self.cmd_tx.clone();
                         checkbox = checkbox.on_click(move |_, _, _| {
@@ -1586,6 +1593,7 @@ impl RootView {
             }
             "switch" => self.render_switch(node, &key, cx),
             "toggle" => self.render_toggle(node, &key, cx),
+            "toggle-group" => self.render_toggle_group(node, &key, cx),
             "radio-group" => self.render_radio_group(node, &key, cx),
             "slider" => self.render_slider(node, &key, window, cx),
             "rating" => self.render_rating(node, &key, cx),
@@ -1671,7 +1679,7 @@ impl RootView {
             ),
             "dock" => self.render_dock(node, &key, window, cx),
             "nav-stack" => self.render_nav_stack(node, &key, window, cx),
-            "nav-page" => overlay::paint_scroller_tree(node, path, &self.cmd_tx),
+            "nav-page" => overlay::paint_scroller_tree(node, path, &self.cmd_tx, Some(cx)),
             "resizable" => self.render_resizable(node, path, &key, window, cx),
             "message-scroller" => self.render_message_scroller(node, path, &key, window, cx),
             "message"
@@ -1727,10 +1735,7 @@ impl RootView {
         if let Some(text) = node.text.clone() {
             el = el.label(text);
         }
-        if node.disabled {
-            el = el.disabled(true);
-        }
-        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        el = mapping::apply_switch_chrome(el, node);
         if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
             let cmd_tx = self.cmd_tx.clone();
             el = el.on_click(move |value, _, _| {
@@ -1746,16 +1751,11 @@ impl RootView {
 
     fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
-        let mut el = Toggle::new(eid(key))
-            .checked(checked)
-            .with_variant(mapping::parse_toggle_variant(node.variant.as_deref()));
+        let mut el = Toggle::new(eid(key)).checked(checked);
         if let Some(text) = node.text.clone() {
             el = el.label(text);
         }
-        if node.disabled {
-            el = el.disabled(true);
-        }
-        el = el.with_size(mapping::parse_scale(node.control_size.as_deref()));
+        el = mapping::apply_toggle_chrome(el, node);
         if let Some(callback_id) = node.on_change.clone().or(node.on_click.clone()) {
             let cmd_tx = self.cmd_tx.clone();
             el = el.on_click(move |value, _, _| {
@@ -1767,6 +1767,63 @@ impl RootView {
             });
         }
         apply_style(el, node, cx).into_any_element()
+    }
+
+    fn render_toggle_group(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        let items = node.collection();
+        let selected: Vec<String> = if node.value.is_some() {
+            node.string_values()
+        } else {
+            items
+                .iter()
+                .filter(|item| item.checked.unwrap_or(false))
+                .map(Item::id_or_label)
+                .collect()
+        };
+        let mut group = ToggleGroup::new(eid(key))
+            .with_variant(mapping::parse_toggle_variant(node.variant.as_deref()))
+            .with_size(mapping::parse_scale(node.control_size.as_deref()))
+            .disabled(node.disabled)
+            .children(items.iter().map(|item| {
+                let id = item.id_or_label();
+                let mut toggle = Toggle::new(SharedString::from(id.clone()))
+                    .checked(selected.iter().any(|sel| sel == &id));
+                if let Some(label) = item
+                    .label
+                    .clone()
+                    .or_else(|| item.text.clone())
+                    .filter(|s| !s.is_empty())
+                {
+                    toggle = toggle.label(label);
+                }
+                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                    toggle = toggle.icon(icon);
+                }
+                if item.disabled {
+                    toggle = toggle.disabled(true);
+                }
+                toggle
+            }));
+        if node.segmented {
+            group = group.segmented();
+        }
+        if let Some(callback_id) = node.on_change.clone() {
+            let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
+            let cmd_tx = self.cmd_tx.clone();
+            group = group.on_click(move |checks, _, _| {
+                let selected: Vec<String> = ids
+                    .iter()
+                    .zip(checks.iter())
+                    .filter_map(|(id, on)| on.then(|| id.clone()))
+                    .collect();
+                let _ = cmd_tx.send(Cmd::Callback {
+                    id: callback_id.clone(),
+                    value: Some(json!(selected)),
+                    seq: None,
+                });
+            });
+        }
+        apply_style(group, node, cx).into_any_element()
     }
 
     fn render_radio_group(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
@@ -2113,6 +2170,12 @@ impl RootView {
             .with_size(mapping::parse_scale(node.control_size.as_deref()))
             .selected_index(selected_index)
             .children(items.iter().map(|item| Tab::from(item.label_or_id())));
+        if node.menu.unwrap_or(false) {
+            bar = bar.menu(true);
+        }
+        if let Some(width) = node.max_width.filter(|n| n.is_finite() && *n > 0.0) {
+            bar = bar.max_width(px(width));
+        }
         if let Some(callback_id) = node.on_change.clone() {
             let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
             let cmd_tx = self.cmd_tx.clone();
@@ -2299,7 +2362,7 @@ impl RootView {
         if table_has_primitive_children(node) {
             table = self.paint_table_sections(table, node, path, window, cx);
         } else {
-            table = paint_table_from_items(table, node, path);
+            table = paint_table_from_items(table, node, path, cx);
         }
         apply_style(table, node, cx).into_any_element()
     }
@@ -2645,6 +2708,9 @@ impl RootView {
         if node.disabled {
             accordion = accordion.disabled(true);
         }
+        if let Some(bordered) = node.bordered {
+            accordion = accordion.bordered(bordered);
+        }
         accordion = accordion.with_size(mapping::parse_scale(node.control_size.as_deref()));
         for (ix, item) in items.iter().enumerate() {
             let id = item.id_or_label();
@@ -2684,6 +2750,9 @@ impl RootView {
             };
         list = list.with_size(mapping::parse_scale(node.control_size.as_deref()));
         list = list.columns(mapping::parse_columns(node.columns));
+        if let Some(bordered) = node.bordered {
+            list = list.bordered(bordered);
+        }
         for item in node.collection() {
             let label = item
                 .label
@@ -2703,10 +2772,16 @@ impl RootView {
         let content_path = format!("{key}/content");
         let mut popover = Popover::new(eid(key))
             .open(open)
-            .trigger(overlay::trigger_button(node.trigger.as_deref(), key))
+            .trigger(overlay::trigger_button(
+                node.trigger.as_deref(),
+                key,
+                Some(cx),
+            ))
             .content({
                 let emit = emit.clone();
-                move |_, _, _| overlay::paint_static(&content, emit.clone(), &content_path)
+                move |_, _, cx| {
+                    overlay::paint_static(&content, emit.clone(), &content_path, Some(cx))
+                }
             });
         if node.on_open_change.is_some() {
             let key = key.to_string();
@@ -2736,7 +2811,7 @@ impl RootView {
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
         let button = apply_style(
-            overlay::trigger_button(node.trigger.as_deref(), &key),
+            overlay::trigger_button(node.trigger.as_deref(), &key, Some(cx)),
             node,
             cx,
         );
@@ -2759,9 +2834,9 @@ impl RootView {
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
         let mut dropdown =
-            overlay::apply_dropdown_button_chrome(DropdownButton::new(eid(&key)), node);
+            overlay::apply_dropdown_button_chrome(DropdownButton::new(eid(&key)), node, Some(cx));
         if let Some(trigger) = node.trigger.as_deref() {
-            let mut button = overlay::trigger_button(Some(trigger), &key);
+            let mut button = overlay::trigger_button(Some(trigger), &key, Some(cx));
             if trigger.compact || node.compact {
                 button = button.compact();
             }
@@ -3740,7 +3815,7 @@ impl RootView {
                     .iter()
                     .any(|spec| spec.key == key && spec.node.kind == "alert-dialog");
                 if is_alert {
-                    window.open_alert_dialog(cx, move |alert, _, _cx| {
+                    window.open_alert_dialog(cx, move |alert, _, cx| {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return alert;
                         };
@@ -3748,6 +3823,7 @@ impl RootView {
                             &spec.node.children,
                             emit.clone(),
                             &format!("{}/content", spec.key),
+                            Some(cx),
                         )];
                         let alert = overlay::configure_alert_dialog(alert, &spec.node, children);
                         overlay::bind_alert_dialog_callbacks(
@@ -3758,7 +3834,7 @@ impl RootView {
                         )
                     });
                 } else {
-                    window.open_dialog(cx, move |dialog, _, _cx| {
+                    window.open_dialog(cx, move |dialog, _, cx| {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return dialog;
                         };
@@ -3766,6 +3842,7 @@ impl RootView {
                             &spec.node.children,
                             emit.clone(),
                             &format!("{}/content", spec.key),
+                            Some(cx),
                         )];
                         let dialog = overlay::configure_dialog(dialog, &spec.node, children);
                         overlay::bind_dialog_callbacks(
@@ -3818,7 +3895,7 @@ impl RootView {
             let Some(key) = key else {
                 return;
             };
-            window.open_sheet_at(placement, cx, move |sheet, _, _| {
+            window.open_sheet_at(placement, cx, move |sheet, _, cx| {
                 let Some(spec) = overlay::latest_sheet_spec(&live, &key) else {
                     return sheet;
                 };
@@ -3826,12 +3903,14 @@ impl RootView {
                     &spec.node.children,
                     emit.clone(),
                     &format!("{}/content", spec.key),
+                    Some(cx),
                 )];
                 let footer = spec.node.footer.as_ref().map(|node| {
                     overlay::paint_static(
                         std::slice::from_ref(node.as_ref()),
                         emit.clone(),
                         &format!("{}/footer", spec.key),
+                        Some(cx),
                     )
                 });
                 let sheet = overlay::configure_sheet(sheet, &spec.node, children, footer);
@@ -3930,6 +4009,12 @@ impl RootView {
         };
         if let Some(title) = spec.node.title.clone() {
             note = note.title(title);
+        }
+        if let Some(icon) = spec.node.icon.as_deref().and_then(mapping::parse_icon) {
+            note = note.icon(icon);
+        }
+        if let Some(placement) = mapping::parse_anchor(spec.node.placement.as_deref()) {
+            note = note.placement(placement);
         }
         note = note
             .id1::<CljNotification>(SharedString::from(key.clone()))
@@ -4166,6 +4251,10 @@ impl RootView {
         if let Some(label) = node.text.clone().or(node.title.clone()) {
             picker = picker.label(label);
         }
+        let featured = mapping::featured_colors(node);
+        if !featured.is_empty() {
+            picker = picker.featured_colors(featured);
+        }
         apply_style(
             picker.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
@@ -4244,6 +4333,8 @@ impl RootView {
         if node.disabled {
             picker = picker.disabled(true);
         }
+        picker = picker.number_of_months(mapping::date_number_of_months(node));
+        picker = picker.appearance(node.appearance.unwrap_or(true));
         apply_style(
             picker.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
@@ -4261,11 +4352,12 @@ impl RootView {
     ) -> Entity<DatePickerState> {
         self.used_dates.insert(key.to_string());
         let range = node.range || node.multiple;
+        let first_day = mapping::parse_first_day_of_week(node.first_day_of_week.as_ref());
         let wanted = extra::date_from_value(&node.value, range);
         if let Some(slot) = self.dates.get_mut(key) {
             slot.on_change = node.on_change.clone();
             let state = slot.state.clone();
-            if slot.range == range {
+            if slot.range == range && slot.first_day == first_day {
                 let current = state.read(cx).date();
                 if current != wanted {
                     state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
@@ -4279,7 +4371,7 @@ impl RootView {
             } else {
                 DatePickerState::new(window, cx)
             };
-            picker = picker.date_format("%Y-%m-%d");
+            picker = picker.date_format("%Y-%m-%d").first_day_of_week(first_day);
             picker
         });
         state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
@@ -4296,6 +4388,7 @@ impl RootView {
             DateSlot {
                 state: state.clone(),
                 range,
+                first_day,
                 on_change: node.on_change.clone(),
             },
         );
@@ -4668,12 +4761,15 @@ impl RootView {
         let mut scroller = MessageScroller::new(
             SharedString::from(key.to_string()),
             slot.state.clone(),
-            move |index, _, _| {
+            move |index, _, cx| {
                 let tree = items.borrow();
                 match tree.get(index) {
-                    Some(row) => {
-                        overlay::paint_scroller_tree(row, &format!("{row_path}.{index}"), &cmd_tx)
-                    }
+                    Some(row) => overlay::paint_scroller_tree(
+                        row,
+                        &format!("{row_path}.{index}"),
+                        &cmd_tx,
+                        Some(cx),
+                    ),
                     None => div().into_any_element(),
                 }
             },
@@ -4710,7 +4806,7 @@ impl RootView {
         }
         if let Some(chrome) = node.jump_button_renderer.clone() {
             scroller = scroller.with_jump_button_renderer(move |button| {
-                mapping::apply_jump_button_renderer(button, &chrome)
+                mapping::apply_jump_button_renderer(button, &chrome, None)
             });
         }
         // Kit's root Styled (padding, gap, font/color, bg, border, shadow,
@@ -5842,14 +5938,20 @@ fn style_table_cell(el: TableCell, col: &Item) -> TableCell {
     }
 }
 
-fn paint_item_table_cell(cell: &protocol::TableCell, path: &str) -> AnyElement {
+fn paint_item_table_cell(cell: &protocol::TableCell, path: &str, cx: Option<&App>) -> AnyElement {
     match cell {
         protocol::TableCell::Text(text) => div().child(text.clone()).into_any_element(),
-        protocol::TableCell::Node(node) => overlay::paint_table_cell(node, path, None),
+        protocol::TableCell::Node(node) => overlay::paint_table_cell(node, path, None, cx),
     }
 }
 
-fn paint_table_row(table_key: &str, row: &Item, row_ix: usize, columns: &[Item]) -> TableRow {
+fn paint_table_row(
+    table_key: &str,
+    row: &Item,
+    row_ix: usize,
+    columns: &[Item],
+    cx: Option<&App>,
+) -> TableRow {
     let mut table_row = TableRow::new();
     let cells = if row.cells.is_empty() {
         vec![protocol::TableCell::text(row.label_or_id())]
@@ -5859,7 +5961,8 @@ fn paint_table_row(table_key: &str, row: &Item, row_ix: usize, columns: &[Item])
     if columns.is_empty() {
         for (ix, cell) in cells.iter().enumerate() {
             let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
-            table_row = table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path)));
+            table_row =
+                table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path, cx)));
         }
         return table_row;
     }
@@ -5867,18 +5970,18 @@ fn paint_table_row(table_key: &str, row: &Item, row_ix: usize, columns: &[Item])
         let cell = cells.get(ix).cloned().unwrap_or_default();
         let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
         table_row = table_row.child(style_table_cell(
-            TableCell::new().child(paint_item_table_cell(&cell, &path)),
+            TableCell::new().child(paint_item_table_cell(&cell, &path, cx)),
             col,
         ));
     }
     for (ix, cell) in cells.iter().enumerate().skip(columns.len()) {
         let path = rows::table_row_cell_path(table_key, row, row_ix, columns, ix);
-        table_row = table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path)));
+        table_row = table_row.child(TableCell::new().child(paint_item_table_cell(cell, &path, cx)));
     }
     table_row
 }
 
-fn paint_table_from_items(mut table: Table, node: &Node, path: &str) -> Table {
+fn paint_table_from_items(mut table: Table, node: &Node, path: &str, cx: &App) -> Table {
     let columns = node.options.as_slice();
     let (body, footer) = extra::split_table_footer(&node.items);
     if !columns.is_empty() {
@@ -5893,12 +5996,17 @@ fn paint_table_from_items(mut table: Table, node: &Node, path: &str) -> Table {
     }
     let mut body_el = TableBody::new();
     for (row_ix, row) in body.iter().enumerate() {
-        body_el = body_el.child(paint_table_row(path, row, row_ix, columns));
+        body_el = body_el.child(paint_table_row(path, row, row_ix, columns, Some(cx)));
     }
     table = table.child(body_el);
     if let Some(foot) = footer {
-        table =
-            table.child(TableFooter::new().child(paint_table_row(path, foot, body.len(), columns)));
+        table = table.child(TableFooter::new().child(paint_table_row(
+            path,
+            foot,
+            body.len(),
+            columns,
+            Some(cx),
+        )));
     }
     if let Some(caption) = node.text.clone().filter(|s| !s.is_empty()) {
         table = table.child(TableCaption::new().child(caption));
@@ -5926,7 +6034,10 @@ fn sidebar_root(node: &Node, key: &str) -> Sidebar<SidebarMenu> {
         // wrapper is narrower. Keep the native scroll region at that edge.
         .w_full()
         .side(extra::parse_sidebar_side(node))
-        .collapsed(node.collapsed);
+        .collapsed(node.collapsed)
+        .collapsible(mapping::parse_sidebar_collapsible(
+            node.collapsible.as_ref(),
+        ));
     if let Some(title) = sidebar_header_title(node) {
         sidebar = sidebar.header(div().px_2().py_1().child(title));
     }
@@ -6575,8 +6686,11 @@ fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
     let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
         return el;
     };
-    // Button uses Kit `Button::tooltip`. Wrapping again would nest two tips.
-    if node.kind == "button" {
+    // Button / Switch / Kit Checkbox / Toggle use native Kit `.tooltip()`.
+    // Circle checkbox is a clj-gpui extra and still uses the generic wrapper.
+    if matches!(node.kind.as_str(), "button" | "switch" | "toggle")
+        || (node.kind == "checkbox" && node.shape.as_deref() != Some("circle"))
+    {
         return el;
     }
     copy_outer_layout(div().id(eid(&format!("{key}-tip"))), node)
