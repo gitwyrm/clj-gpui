@@ -1809,9 +1809,12 @@
 (defn data-table
   "Virtualized data table (Kit DataTable). `:columns` are `{id, label, width}`
   maps (not the description-list `:columns` count). `:rows` are
-  `{id, cells [...]}`. A cell is a string or any clj-gpui node (progress,
-  tag, badge, avatar, stack, …). Kit `render_td` paints that node; the
-  host does not stringify widget cells. `on-change` receives the selected row's original
+  `{id, cells [...]}`. A cell is a string or a supported RenderOnce
+  cell node (progress, tag, badge, avatar, stacks, …). Kit `render_td`
+  paints that node via the overlay static painter; stateful widgets
+  such as input, editor, list, and data-table are not their real
+  implementations there. The host does not stringify widget cells.
+  `on-change` receives the selected row's original
   id, or `{:row … :col …}` when `:cell-selectable` is on. `:on-confirm`
   (or `:on-double-click`) fires on double-click with that same payload.
   Kit `on_row_left_click` always emits `SelectRow`; when `click_count`

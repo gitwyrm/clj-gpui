@@ -690,7 +690,7 @@
                                               (ui/button (str "tbl-canary-" i "-b") (fn []))])
                                            (range table-shift))
                                    (ui/label "tbl-canary slot")))))
-     (example "ui/data-table · cell widgets" "Kit render_td paints nested nodes — progress, tag, stacks — not stringified cells."
+     (example "ui/data-table · cell widgets" "Kit render_td paints supported RenderOnce nodes — progress, tag, stacks — not stringified cells."
               (ui/data-table {:columns [{:id :name :label "Name" :width 100}
                                         {:id :status :label "Status" :width 90}
                                         {:id :done :label "Done"}]

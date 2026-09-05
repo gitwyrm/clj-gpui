@@ -1,13 +1,14 @@
 //! Row-delegate protocol: Clojure sends `{id, label}` / `{id, cells}` rows;
-//! a table cell is a string or a nested widget node. Rust owns
+//! a table cell is a string or a supported RenderOnce node. Rust owns
 //! virtualization, search, and selection. Callbacks send wire ids.
 
 use crate::protocol::{Cmd, Item, TableCell};
 use gpui::{
-    App, Context, IntoElement, ParentElement, SharedString, Task, TextAlign, Window, div, px,
+    App, Context, IntoElement, ParentElement, SharedString, Styled, Task, TextAlign, Window, div,
+    px,
 };
 use gpui_component::{
-    IndexPath,
+    IndexPath, h_flex,
     list::{ListDelegate, ListItem, ListState},
     table::{Column, ColumnGroup, TableDelegate, TableState},
     tree::TreeItem,
@@ -646,6 +647,83 @@ impl RowTableDelegate {
     pub fn contains_id(&self, id: &str) -> bool {
         self.index_of(id).is_some()
     }
+
+    /// Logical cell path: `table-key/td/{len}:{row-id}/{len}:{col-id}`.
+    pub(crate) fn td_element_id(&self, row_ix: usize, col_ix: usize) -> String {
+        let row_id = self
+            .rows
+            .get(row_ix)
+            .map(|row| row.id.as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("#{row_ix}"));
+        let col_id = self
+            .columns
+            .get(col_ix)
+            .map(|col| col.key.to_string())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| format!("#{col_ix}"));
+        table_cell_element_id(&self.path, &row_id, &col_id)
+    }
+}
+
+/// Length-prefixed wire id so `/` in namespaced keywords (`user/ada`)
+/// cannot split a cell path. `user/ada` encodes as `8:user/ada`.
+pub(crate) fn encode_wire_id(id: &str) -> String {
+    format!("{}:{id}", id.len())
+}
+
+/// GPUI element id for a table cell widget. Logical row/column ids, not
+/// visible indices, so header-drag reorder keeps retained widget state
+/// (Progress `transition`, HoverCard, …).
+pub(crate) fn table_cell_element_id(table_key: &str, row_id: &str, col_id: &str) -> String {
+    format!(
+        "{table_key}/td/{}/{}",
+        encode_wire_id(row_id),
+        encode_wire_id(col_id)
+    )
+}
+
+pub(crate) fn table_cell_row_id(row: &Item, row_ix: usize) -> String {
+    let id = row.id_or_label();
+    if id.is_empty() {
+        format!("#{row_ix}")
+    } else {
+        id
+    }
+}
+
+pub(crate) fn table_cell_col_id(columns: &[Item], col_ix: usize) -> String {
+    columns
+        .get(col_ix)
+        .map(Item::id_or_label)
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| format!("#{col_ix}"))
+}
+
+/// Fallback/declarative `options`/`items` table cell path. Same encoding
+/// as DataTable `render_td`.
+pub(crate) fn table_row_cell_path(
+    table_key: &str,
+    row: &Item,
+    row_ix: usize,
+    columns: &[Item],
+    col_ix: usize,
+) -> String {
+    table_cell_element_id(
+        table_key,
+        &table_cell_row_id(row, row_ix),
+        &table_cell_col_id(columns, col_ix),
+    )
+}
+
+fn paint_td(inner: impl IntoElement) -> gpui::AnyElement {
+    h_flex()
+        .h_full()
+        .w_full()
+        .items_center()
+        .child(inner)
+        .into_any_element()
 }
 
 impl TableDelegate for RowTableDelegate {
@@ -676,14 +754,14 @@ impl TableDelegate for RowTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let path = format!("{}/td/{row_ix}/{col_ix}", self.path);
+        let path = self.td_element_id(row_ix, col_ix);
         match self.rows.get(row_ix).and_then(|row| row.cells.get(col_ix)) {
-            Some(TableCell::Node(node)) => {
-                crate::overlay::paint_table_cell(node, &path, self.cmd_tx.as_ref())
-            }
-            Some(TableCell::Text(text)) => div()
-                .child(SharedString::from(text.clone()))
-                .into_any_element(),
+            Some(TableCell::Node(node)) => paint_td(crate::overlay::paint_table_cell(
+                node,
+                &path,
+                self.cmd_tx.as_ref(),
+            )),
+            Some(TableCell::Text(text)) => paint_td(div().child(SharedString::from(text.clone()))),
             None => div().into_any_element(),
         }
     }
@@ -775,6 +853,72 @@ mod tests {
         assert_ne!(rows_fingerprint(&a), rows_fingerprint(&b));
         let same = items(json!([{"id": "ada", "cells": [{"type": "progress", "value": 40}]}]));
         assert_eq!(rows_fingerprint(&a), rows_fingerprint(&same));
+    }
+
+    #[test]
+    fn table_cell_element_id_is_logical_and_unambiguous() {
+        assert_eq!(
+            table_cell_element_id("tbl", "ada", "done"),
+            "tbl/td/3:ada/4:done"
+        );
+        // Namespaced keywords keep `/` on the wire; length-prefixing
+        // keeps (row, col) pairs distinct under naïve `/` splits.
+        assert_eq!(
+            table_cell_element_id("tbl", "user/ada", "col/done"),
+            "tbl/td/8:user/ada/8:col/done"
+        );
+        assert_ne!(
+            table_cell_element_id("tbl", "user/ada", "done"),
+            table_cell_element_id("tbl", "user", "ada/done")
+        );
+        assert_ne!(
+            table_cell_element_id("tbl", "user/ada", "x"),
+            table_cell_element_id("tbl", "user", "ada/x")
+        );
+    }
+
+    #[test]
+    fn render_td_id_follows_column_key_after_header_drag() {
+        let (tx, _) = mpsc::channel();
+        let cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name"},
+            {"id": "done", "label": "Done"},
+            {"id": "status", "label": "Status"}
+        ])));
+        let rows = rows_from_items(&items(json!([{
+            "id": "ada",
+            "cells": [
+                "Ada",
+                {"type": "progress", "value": 80},
+                {"type": "tag", "text": "stable"}
+            ]
+        }])));
+        let mut delegate = RowTableDelegate::new(cols, rows).with_cell_host("tbl", tx);
+        let progress = delegate.td_element_id(0, 1);
+        assert_eq!(progress, "tbl/td/3:ada/4:done");
+        move_table_column(&mut delegate.columns, &mut delegate.rows, 1, 2);
+        assert_eq!(delegate.td_element_id(0, 2), progress);
+        assert_eq!(delegate.td_element_id(0, 1), "tbl/td/3:ada/6:status");
+        assert_ne!(delegate.td_element_id(0, 1), progress);
+    }
+
+    #[test]
+    fn fallback_table_cell_paths_include_row_and_column_identity() {
+        let rows = items(json!([
+            {"id": "ada", "cells": [{"type": "progress", "value": 80}]},
+            {"id": "grace", "cells": [{"type": "progress", "value": 45}]}
+        ]));
+        let cols = items(json!([{"id": "done", "label": "Done"}]));
+        let ada = table_row_cell_path("table", &rows[0], 0, &cols, 0);
+        let grace = table_row_cell_path("table", &rows[1], 1, &cols, 0);
+        assert_eq!(ada, "table/td/3:ada/4:done");
+        assert_eq!(grace, "table/td/5:grace/4:done");
+        assert_ne!(ada, grace);
+        let namespaced = items(json!([{"id": "user/ada", "cells": ["x"]}]));
+        assert_eq!(
+            table_row_cell_path("t", &namespaced[0], 0, &[], 0),
+            "t/td/8:user/ada/2:#0"
+        );
     }
 
     #[test]

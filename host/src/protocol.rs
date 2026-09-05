@@ -637,9 +637,11 @@ pub fn dialog_action_calls(
     calls
 }
 
-/// One DataTable cell. A JSON string is text; a JSON object is a nested
-/// widget forwarded to Kit `TableDelegate::render_td`. Numbers / bools /
-/// null stringify so a skipped Clojure helper still deserializes.
+/// One DataTable cell. A JSON string is text; a JSON object is a
+/// supported RenderOnce node forwarded to Kit `TableDelegate::render_td`
+/// (progress, tag, badge, avatar, stacks, … — not input / editor /
+/// list / data-table). Numbers / bools / null stringify so a skipped
+/// Clojure helper still deserializes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableCell {
     Text(String),
@@ -777,7 +779,7 @@ pub struct Item {
     /// Nested items for menus, trees, and Select `SelectGroup` sections.
     #[serde(default)]
     pub items: Vec<Item>,
-    /// Table row cells (string or nested widget node per column).
+    /// Table row cells (string or a supported RenderOnce node per column).
     /// Empty falls back to `label`.
     #[serde(default)]
     pub cells: Vec<TableCell>,
