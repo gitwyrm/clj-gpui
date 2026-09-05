@@ -1729,9 +1729,13 @@ pub struct Node {
     #[serde(default, rename = "sidebar-width")]
     pub sidebar_width: Option<f32>,
     /// Settings: Kit `sidebar_size_range`. `[min, max]` or `{min, max}`
-    /// pixels. Omitted is Kit `160..360`.
+    /// pixels. Omitted / reversed / negative / non-finite is Kit `160..360`.
     #[serde(default, rename = "sidebar-size-range")]
     pub sidebar_size_range: Option<Value>,
+    /// Settings: Kit `with_group_variant` (`normal` / `fill` / `outline`).
+    /// Nested so it is not a settings-field `:variant`.
+    #[serde(default, rename = "group-variant")]
+    pub group_variant: Option<String>,
     /// DescriptionList: Kit `label_width` in pixels. Omitted is Kit 120.
     /// Horizontal layout only. Not the host wrapper `:width`.
     #[serde(default, rename = "label-width")]
@@ -2726,7 +2730,6 @@ mod tests {
                 "id": "audio",
                 "label": "Audio",
                 "icon": "check",
-                "disabled": true,
                 "content": {"type": "label", "text": "Speakers"}
             }]
         }))
@@ -2734,7 +2737,6 @@ mod tests {
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
         assert_eq!(node.collection()[0].icon.as_deref(), Some("check"));
-        assert!(node.collection()[0].disabled);
         assert!(node.contains_text("Speakers"));
         assert_eq!(PROTOCOL_VERSION, 11);
     }
@@ -3064,11 +3066,13 @@ mod tests {
         let settings: Node = serde_json::from_value(json!({
             "type": "settings",
             "sidebar-width": 200,
-            "sidebar-size-range": [140, 280]
+            "sidebar-size-range": [140, 280],
+            "group-variant": "fill"
         }))
         .unwrap();
         assert_eq!(settings.sidebar_width, Some(200.0));
         assert_eq!(settings.sidebar_size_range, Some(json!([140, 280])));
+        assert_eq!(settings.group_variant.as_deref(), Some("fill"));
 
         let md: Node = serde_json::from_value(json!({
             "type": "markdown",

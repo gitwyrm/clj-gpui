@@ -1044,6 +1044,7 @@
                          {:height 360
                           :sidebar-width 180
                           :sidebar-size-range [140 280]
+                          :group-variant :fill
                           :on-change (fn [{:keys [id value]}]
                                        (case id
                                          :notify (swap! !state assoc :setting-notify value)

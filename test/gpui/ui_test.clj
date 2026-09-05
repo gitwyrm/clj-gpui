@@ -451,11 +451,10 @@
                           [:trigger :type]))))
   (testing "accordion content stays a node"
     (let [n (ui/accordion :a {:items [{:id :a :title "One" :icon :check :content (ui/label "hi")}
-                                      {:id :b :title "Two" :disabled true :content (ui/label "there")}]})]
+                                      {:id :b :title "Two" :content (ui/label "there")}]})]
       (is (= "a" (:value n)))
       (is (= "One" (get-in n [:items 0 :label])))
       (is (= "check" (get-in n [:items 0 :icon])))
-      (is (true? (get-in n [:items 1 :disabled])))
       (is (= :label (get-in n [:items 0 :content :type])))
       (is (false? (:bordered (ui/accordion :a {:bordered false
                                                :items [{:id :a :title "One"
@@ -1474,10 +1473,13 @@
     (let [n (ui/settings [{:id :general :label "General"
                            :items [{:id :notify :label "N" :checked true :variant :switch}]}]
                          {:on-change (fn [_]) :sidebar-width 200
-                          :sidebar-size-range [140 280]})]
+                          :sidebar-size-range [140 280]
+                          :group-variant :fill})]
       (is (= :settings (:type n)))
       (is (= 200 (:sidebar-width n)))
       (is (= [140 280] (:sidebar-size-range n)))
+      (is (= "fill" (:group-variant n)))
+      (is (nil? (:variant n)) "settings :group-variant is not field :variant")
       (is (nil? (:width n)) "settings :sidebar-width is not layout :width")
       (is (true? (get-in n [:items 0 :items 0 :checked])))
       (is (= "switch" (get-in n [:items 0 :items 0 :variant]))))

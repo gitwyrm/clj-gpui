@@ -2760,6 +2760,9 @@ pub fn build_settings(node: &Node, key: &str, cmd_tx: &mpsc::Sender<Cmd>) -> Set
     if let Some(range) = mapping::sidebar_size_range(node) {
         settings = settings.sidebar_size_range(range);
     }
+    if let Some(name) = node.group_variant.as_deref().filter(|s| !s.is_empty()) {
+        settings = settings.with_group_variant(mapping::parse_group_variant(Some(name)));
+    }
     settings
 }
 

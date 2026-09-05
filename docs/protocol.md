@@ -315,7 +315,8 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `collapsed` | bool | `sidebar` |
 | `collapsible` | bool or string | `sidebar`: Kit `SidebarCollapsible`. `true` / `icon` (default), `false` / `none`, `offcanvas`. Host header title is hidden only for effective icon-collapse |
 | `sidebar-width` | number | `settings`: Kit `sidebar_width` in pixels (omit = Kit 250). Not the host wrapper `width` |
-| `sidebar-size-range` | array of two numbers, or `{min, max}` | `settings`: Kit `sidebar_size_range` in pixels (omit = Kit `160..360`) |
+| `sidebar-size-range` | array of two numbers, or `{min, max}` | `settings`: Kit `sidebar_size_range` in pixels. Omitted, reversed (`max < min`), negative, or non-finite keeps Kit `160..360` |
+| `group-variant` | string | `settings`: Kit `with_group_variant` (`normal` / `fill` / `outline`). Omitted is Kit normal. Nested so it is not a settings-field `variant` |
 | `label-width` | number | `description-list`: Kit `label_width` in pixels (omit = Kit 120). Horizontal layout only. Not the host wrapper `width` |
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center`. `bubble-reactions`: Kit `BubbleReactionSide` (`top` / `bottom`, default `bottom`) |
 | `format` | string | `markdown` vs `html` (node `type` `html` is enough) |

@@ -694,7 +694,7 @@ pub fn sidebar_icon_collapsed(node: &Node) -> bool {
 }
 
 /// Settings `sidebar_size_range`. `[min, max]` or `{min, max}` pixels.
-/// Omitted / unparsable leaves Kit `160px..360px`.
+/// Omitted, reversed, negative, or non-finite leaves Kit `160px..360px`.
 pub fn sidebar_size_range(node: &Node) -> Option<Range<gpui::Pixels>> {
     parse_pixel_range(node.sidebar_size_range.as_ref())
 }
@@ -710,7 +710,7 @@ fn parse_pixel_range(value: Option<&Value>) -> Option<Range<gpui::Pixels>> {
         ),
         _ => return None,
     };
-    if min.is_finite() && max.is_finite() {
+    if min.is_finite() && max.is_finite() && min >= 0.0 && max >= min {
         Some(px(min)..px(max))
     } else {
         None
@@ -2470,6 +2470,38 @@ mod tests {
         assert_eq!(range.end, px(280.0));
 
         assert_eq!(sidebar_size_range(&Node::default()), None);
+
+        let equal = Node {
+            sidebar_size_range: Some(json!([200, 200])),
+            ..Node::default()
+        };
+        let range = sidebar_size_range(&equal).expect("equal bounds");
+        assert_eq!(range.start, px(200.0));
+        assert_eq!(range.end, px(200.0));
+
+        let reversed_arr = Node {
+            sidebar_size_range: Some(json!([360, 160])),
+            ..Node::default()
+        };
+        assert_eq!(sidebar_size_range(&reversed_arr), None);
+
+        let reversed_obj = Node {
+            sidebar_size_range: Some(json!({"min": 360, "max": 160})),
+            ..Node::default()
+        };
+        assert_eq!(sidebar_size_range(&reversed_obj), None);
+
+        let negative = Node {
+            sidebar_size_range: Some(json!([-10, 100])),
+            ..Node::default()
+        };
+        assert_eq!(sidebar_size_range(&negative), None);
+
+        let non_finite = Node {
+            sidebar_size_range: Some(json!(["nan", 100])),
+            ..Node::default()
+        };
+        assert_eq!(sidebar_size_range(&non_finite), None);
     }
 
     #[test]

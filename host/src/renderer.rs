@@ -2720,7 +2720,6 @@ impl RootView {
             let title = item.label_or_id();
             let is_open = open_ids.iter().any(|open| open == &id);
             let icon = item.icon.as_deref().and_then(mapping::parse_icon);
-            let disabled = item.disabled;
             let content = if let Some(child) = item.content.as_ref() {
                 self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
             } else {
@@ -2730,9 +2729,6 @@ impl RootView {
                 let mut acc = acc.title(title).open(is_open).child(content);
                 if let Some(icon) = icon {
                     acc = acc.icon(icon);
-                }
-                if disabled {
-                    acc = acc.disabled(true);
                 }
                 acc
             });

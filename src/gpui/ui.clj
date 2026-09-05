@@ -1423,13 +1423,15 @@
 
   Keyword ids round-trip as keywords. Multiple open ids are a JSON
   array on the wire, not a comma-joined string. `:bordered` is Kit
-  `Accordion::bordered` (omit = Kit true). Item `:icon` and `:disabled`
-  are Kit `AccordionItem` chrome.
+  `Accordion::bordered` (omit = Kit true). Item `:icon` is Kit
+  `AccordionItem::icon`. Item `:disabled` is not forwarded: Kit 0.6
+  `Accordion::render` overwrites it with the parent accordion's
+  disabled flag.
 
   (ui/accordion open-id
     {:on-change set-open!
      :items [{:id :a :title \"One\" :icon :check :content (ui/label \"…\")}
-             {:id :b :title \"Two\" :disabled true :content (ui/label \"…\")}]})"
+             {:id :b :title \"Two\" :content (ui/label \"…\")}]})"
   ([value]
    {:type :accordion :value (wire-id value) :items []})
   ([value opts]
@@ -2818,16 +2820,21 @@
   option ids. `:sidebar-width` is Kit `Settings::sidebar_width` in
   pixels (omit = Kit 250), not the host wrapper `:width`.
   `:sidebar-size-range` is Kit `sidebar_size_range` as `[min max]` or
-  `{:min :max}` pixels (omit = Kit `160..360`).
+  `{:min :max}` pixels (omit / reversed / negative = Kit `160..360`).
+  `:group-variant` is Kit `with_group_variant` (`:normal` / `:fill` /
+  `:outline`; omit = Kit normal). Nested so it is not a field `:variant`.
 
   (ui/settings pages {:on-change (fn [{:keys [id value]}])
                       :sidebar-width 200
-                      :sidebar-size-range [140 280]})"
+                      :sidebar-size-range [140 280]
+                      :group-variant :fill})"
   ([pages]
    (settings pages nil))
   ([pages opts]
    (let [raw (or pages [])
          opts (or opts {})
+         opts (cond-> opts
+                (keyword? (:group-variant opts)) (update :group-variant name))
          opts (assoc opts :on-change (wrap-settings-callback (:on-change opts) raw))]
      (merge-widget {:type :settings :items (option-items raw)}
                    (dissoc opts :items :pages)))))
