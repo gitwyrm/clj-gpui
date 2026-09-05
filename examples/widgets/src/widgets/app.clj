@@ -155,7 +155,7 @@
             (ui/switch notify? (set-key :notify?) "Notifications"))
    (example "ui/toggle" "A button that stays pressed while its value is true."
             (ui/toggle bold? {:on-change (set-key :bold?) :text "Bold" :width 120
-                              :tooltip "Toggle bold"}))
+                              :icon :check :tooltip "Toggle bold"}))
    (example "ui/toggle-group" "Independent multi-toggle with real grouped selection state."
             (ui/toggle-group (or formats [])
                              {:items [{:id :bold :label "Bold"}
@@ -322,13 +322,17 @@
             (ui/hstack
              {:gap 8 :align :center}
              (ui/color-picker color {:on-change (set-key :color)
-                                     :featured-colors ["#3366ff" "#22c55e" "#f59e0b"]})
+                                     :featured-colors ["#3366ff" "#22c55e" "#f59e0b"]
+                                     :icon :palette
+                                     :accessibility-label "Accent color"
+                                     :placement :bottom-left})
              (ui/button "Clear color" #(swap! !state assoc :color nil))
              (ui/button "Pink" #(swap! !state assoc :color "#ff00aa"))))
    (example "ui/date-picker" "The selected date is an ISO date string."
             (ui/date-picker date {:on-change (set-key :date)
                                   :number-of-months 2
-                                  :first-day-of-week :mon}))
+                                  :first-day-of-week :mon
+                                  :cleanable true}))
    (example "ui/rating" "An interactive five-star rating."
             (ui/rating stars {:id "stars" :max 5 :on-change (set-key :stars)}))))
 
@@ -838,6 +842,7 @@
                            :bordered true
                            :items [{:id :audio
                                     :title "Audio"
+                                    :icon :check
                                     :content (ui/label "Speakers, mic, and volume.")}
                                    {:id :display
                                     :title "Display"
@@ -845,7 +850,8 @@
    (example "ui/description-list" "Present a small set of labeled values."
             (ui/description-list [{:label "Host" :value "GPUI"}
                                   {:label "UI" :value "clj-gpui"}]
-                                 {:bordered true}))
+                                 {:orientation :horizontal :columns 2
+                                  :label-width 80 :bordered true}))
    (example "ui/separator" "Divide content horizontally or vertically."
             (ui/hstack {:gap 12 :align :center :height 36}
                        (ui/label "v")
@@ -1037,6 +1043,7 @@
                                                      {:id :pink :label "Pink"}]}]}]}]
                          {:height 360
                           :sidebar-width 180
+                          :sidebar-size-range [140 280]
                           :on-change (fn [{:keys [id value]}]
                                        (case id
                                          :notify (swap! !state assoc :setting-notify value)

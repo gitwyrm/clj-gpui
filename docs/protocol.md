@@ -213,7 +213,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `disabled` | bool | buttons and most controls |
 | `tooltip` | string | any node: GPUI Kit tooltip. `button` uses Kit `Button::tooltip` (not the generic wrapper). `switch` / Kit `checkbox` / `toggle` use native Kit `.tooltip()` the same way |
 | `interactive` | bool | `chart` `:line` / `:bar` / `:area` / `:radar`: Kit hover tooltip via `.id(...)`. Default false (Kit `id: None`). Not the string `tooltip` field |
-| `accessibility-label` | string | declarative `table`: Kit `Table::accessibility_label` (screen-reader name). A visible `table-caption` is not used as that name. `button` / `progress` / `progress-circle` / `switch` / Kit `checkbox`: Kit `accessibility_label`. `input` / `textarea` / `editor`: Kit `aria_label`. Input also maps a present `id` to Kit `accessibility_id` |
+| `accessibility-label` | string | declarative `table`: Kit `Table::accessibility_label` (screen-reader name). A visible `table-caption` is not used as that name. `button` / `progress` / `progress-circle` / `switch` / Kit `checkbox` / `color-picker`: Kit `accessibility_label`. `input` / `textarea` / `editor`: Kit `aria_label`. Input also maps a present `id` to Kit `accessibility_id` |
 | `href` | string | `link` |
 | `src` | string | `avatar`: Kit `ImageSource` (http URL or file path). Empty/omitted is initials or the placeholder icon. Remote http URLs need the host HTTP client (installed at startup) |
 | `icon` | string | `icon`, `spinner` (kebab `circle-check`); `button` / `alert` / `badge` / `notification`; `avatar` placeholder icon (Kit default User); `select` / `combobox` trigger chevron; `input` / `number-input`: prefix glyph when `prefix` is omitted |
@@ -224,7 +224,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `outline` | bool | `tag`, `button`, `dropdown-button`. Also accepted as `variant: outline` on buttons. `kbd`: Kit `outline()` |
 | `searchable` | bool | `select` / `combobox`: show a filter field; host uses `SearchableVec` so typing actually filters. Nested `options[].items` are Kit `SelectGroup` sections (`IndexPath` section+row). Group titles are not selectable callback ids. Combobox defaults true in `ui/combobox`. `list`: filter rows by label. `command`: show the query field (Clojure `ui/command` defaults true) |
 | `filterable` | bool | `command`: Kit `filterable` (local text filter). Omitted is Kit true. `false` keeps the query field but skips local filtering (`on-query` still fires) |
-| `cleanable` | bool | `select` / `combobox`: Kit `cleanable` (clear button when a value is selected). `input`: Kit `Input::cleanable` |
+| `cleanable` | bool | `select` / `combobox`: Kit `cleanable` (clear button when a value is selected). `input`: Kit `Input::cleanable`. `date-picker`: Kit `DatePicker::cleanable` (omit = Kit false) |
 | `title-prefix` | string | `select`: Kit `Select::title_prefix` |
 | `menu-width` | number | `select` / `combobox`: Kit `menu_width` in pixels. Omitted is Kit `Auto` |
 | `menu-max-h` | number | `select` / `combobox`: Kit `menu_max_h` in pixels. Omitted is Kit's 20rem default. `command`: Kit `Command::max_h` in pixels. Omitted is Kit's 18.75rem (300px) default. Not widget layout `height` |
@@ -241,12 +241,12 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `empty` | string | `select` / `combobox` / `command` / `list` / `data-table`: string form of Kit `empty` / `render_empty` when there are no rows. Kit accepts arbitrary `IntoElement`; custom empty widgets are not wrapped |
 | `menu` | bool | `tabs`: Kit `TabBar::menu` (overflow menu). Omitted is Kit false |
 | `max-width` | number | `tabs`: Kit `TabBar::max_width` (per-tab label truncation, pixels). Not host layout `width`; `apply_style` does not consume it. Data-table **column** `max-width` lives on `options` items |
-| `featured-colors` | array of hex strings | `color-picker`: Kit `featured_colors`. Omitted keeps Kit default swatches. Nested so it is not layout `color` |
+| `featured-colors` | array of hex strings | `color-picker`: Kit `featured_colors`. Omitted keeps Kit default swatches. Explicit `[]` is no featured swatches. Nested so it is not layout `color` |
 | `number-of-months` | number | `date-picker`: Kit `number_of_months` (omit = 1) |
 | `first-day-of-week` | string or number | `date-picker`: Kit `DatePickerState::first_day_of_week`. `sun`…`sat` or 0–6 from Sunday. Omitted is Sunday. Changing it recreates the slot |
 | `segmented` | bool | `toggle-group`: Kit `ToggleGroup::segmented()`. Omitted is Kit false |
 | `custom-variant` | object | `button`: Kit `ButtonCustomVariant` (`color`, `foreground`, `hover`, `active`, `shadow`). Nested so hex `color` cannot become host `text_color`. Requires `App` (RootView, dialog/sheet/popover/dock children, DataTable cells, scroller/nav rows). Kit `'static` closures without `App` (jump-button renderer, radar labels) skip it |
-| `focus-ring` | bool | `select` / `combobox`: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true. `input`: Kit `focus_bordered`. `number-input` / `otp-input`: Kit `focus_ring` |
+| `focus-ring` | bool | `select` / `combobox` / `date-picker`: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true. `input`: Kit `focus_bordered`. `number-input` / `otp-input`: Kit `focus_ring` |
 | `open` | bool | `dialog`, `alert-dialog`, `popover`, `sheet`: controlled open (`:open?` in Clojure). Omitted/false dialogs/sheets are not shown. `notification`: omitted/true shows; `false` hides. `native-menu`: show request; the host materializes a snapshot on the false→true edge and then sends `on-open-change` false |
 | `position` | array of numbers | `native-menu`: `[x, y]` window logical pixels. Omitted uses the current mouse position |
 | `left` / `right` | array of nodes | `status-bar`: pinned end regions. Children are the center |
@@ -259,7 +259,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `cancel-variant` | string | `dialog` / `alert-dialog`: named Kit `ButtonVariants` on Cancel |
 | `close-button` | bool | `dialog`: Kit `close_button` (omit = Kit true). `alert-dialog` omit = Kit false |
 | `keyboard` | bool | `dialog` / `alert-dialog`: Kit `keyboard` (Escape). Omitted is Kit true |
-| `placement` | string | `sheet`: `left` / `right` / `top` / `bottom` (default `right`). `hover-card` / `dropdown-button` / `notification`: Kit `Anchor` (`top-center` default on hover-card; `top-right` default on dropdown-button; also `top-left` / `top-right` / `bottom-*` / `left` / `right`) |
+| `placement` | string | `sheet`: `left` / `right` / `top` / `bottom` (default `right`). `hover-card` / `dropdown-button` / `notification` / `color-picker`: Kit `Anchor` (`top-center` default on hover-card; `top-right` default on dropdown-button; `top-left` default on color-picker; also `top-left` / `top-right` / `bottom-*` / `left` / `right`) |
 | `open-delay` | number | `hover-card`: seconds before show (Kit default 0.6). Omitted leaves Kit's default |
 | `close-delay` | number | `hover-card`: seconds before hide (Kit default 0.3). Omitted leaves Kit's default |
 | `appearance` | bool | `hover-card`: Kit default popover chrome (Kit default true). Omitted leaves Kit's default. `select` / `combobox`: Kit `appearance` (Kit default true). `input` / `textarea` / `number-input` / `editor` / `date-picker`: Kit field chrome (omit = Kit true). `kbd`: Kit `Kbd::appearance` (Kit default true) |
@@ -313,8 +313,10 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `rows` | number | `textarea` visible height (default 3) |
 | `masked` | bool | `otp-input`: Kit `OtpState::masked`. `input`: Kit `InputState::masked` (applied when the Clojure value changes, or when `:mask-toggle` is removed, so a native mask-toggle is not overwritten every frame). `label`: Kit `Label::masked` (bullet glyphs). See `highlights` / `secondary` |
 | `collapsed` | bool | `sidebar` |
-| `collapsible` | bool or string | `sidebar`: Kit `SidebarCollapsible`. `true` / `icon` (default), `false` / `none`, `offcanvas` |
+| `collapsible` | bool or string | `sidebar`: Kit `SidebarCollapsible`. `true` / `icon` (default), `false` / `none`, `offcanvas`. Host header title is hidden only for effective icon-collapse |
 | `sidebar-width` | number | `settings`: Kit `sidebar_width` in pixels (omit = Kit 250). Not the host wrapper `width` |
+| `sidebar-size-range` | array of two numbers, or `{min, max}` | `settings`: Kit `sidebar_size_range` in pixels (omit = Kit `160..360`) |
+| `label-width` | number | `description-list`: Kit `label_width` in pixels (omit = Kit 120). Horizontal layout only. Not the host wrapper `width` |
 | `side` | string | `sidebar` (`left`/`right`); dock item `left`/`right`/`bottom`/`center`. `bubble-reactions`: Kit `BubbleReactionSide` (`top` / `bottom`, default `bottom`) |
 | `format` | string | `markdown` vs `html` (node `type` `html` is enough) |
 | `range` | bool | `date-picker` range mode. `slider`: two thumbs (`true`, or a 2-number `value`) |

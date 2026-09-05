@@ -36,6 +36,7 @@ use gpui_component::{
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
 use serde_json::Value;
+use std::ops::Range;
 use std::time::Duration;
 
 pub fn parse_scale(value: Option<&str>) -> Size {
@@ -578,17 +579,18 @@ pub fn apply_custom_button_variant<B: ButtonVariants>(el: B, node: &Node, cx: Op
     }
 }
 
-/// ColorPicker `featured_colors`. Invalid hex entries are skipped.
-pub fn featured_colors(node: &Node) -> Vec<Hsla> {
-    node.featured_colors
-        .as_ref()
-        .map(|colors| {
-            colors
-                .iter()
-                .filter_map(|s| parse_hex(Some(s.as_str())))
-                .collect()
-        })
-        .unwrap_or_default()
+/// ColorPicker `featured_colors`.
+///
+/// Kit distinguishes omitted (`None` → default swatches) from an
+/// explicit empty vector (`Some(vec![])` → no featured swatches).
+/// Invalid hex entries are skipped; presence still wins.
+pub fn featured_colors(node: &Node) -> Option<Vec<Hsla>> {
+    node.featured_colors.as_ref().map(|colors| {
+        colors
+            .iter()
+            .filter_map(|s| parse_hex(Some(s.as_str())))
+            .collect()
+    })
 }
 
 /// Kit `DialogButtonProps` (ok/cancel text and named variants).
@@ -677,6 +679,46 @@ pub fn parse_sidebar_collapsible(
         },
         _ => SidebarCollapsible::Icon,
     }
+}
+
+/// Host header chrome is hidden only for Kit icon-collapse
+/// (`collapsed && collapsible == Icon`). Offcanvas keeps the title
+/// while the panel animates out. `None` ignores `:collapsed`.
+pub fn sidebar_icon_collapsed(node: &Node) -> bool {
+    use gpui_component::sidebar::SidebarCollapsible;
+    node.collapsed
+        && matches!(
+            parse_sidebar_collapsible(node.collapsible.as_ref()),
+            SidebarCollapsible::Icon
+        )
+}
+
+/// Settings `sidebar_size_range`. `[min, max]` or `{min, max}` pixels.
+/// Omitted / unparsable leaves Kit `160px..360px`.
+pub fn sidebar_size_range(node: &Node) -> Option<Range<gpui::Pixels>> {
+    parse_pixel_range(node.sidebar_size_range.as_ref())
+}
+
+fn parse_pixel_range(value: Option<&Value>) -> Option<Range<gpui::Pixels>> {
+    let (min, max) = match value {
+        Some(Value::Array(xs)) if xs.len() >= 2 => {
+            (json_number_f32(&xs[0])?, json_number_f32(&xs[1])?)
+        }
+        Some(Value::Object(map)) => (
+            map.get("min").and_then(json_number_f32)?,
+            map.get("max").and_then(json_number_f32)?,
+        ),
+        _ => return None,
+    };
+    if min.is_finite() && max.is_finite() {
+        Some(px(min)..px(max))
+    } else {
+        None
+    }
+}
+
+fn json_number_f32(value: &Value) -> Option<f32> {
+    value.as_f64().map(|n| n as f32)
 }
 
 /// Kit `Button` chrome (variant, size, icon, loading, tooltip, a11y, …).
@@ -2359,6 +2401,78 @@ mod tests {
     }
 
     #[test]
+    fn featured_colors_distinguishes_omitted_and_explicit_empty() {
+        assert_eq!(featured_colors(&Node::default()), None);
+
+        let empty = Node {
+            featured_colors: Some(vec![]),
+            ..Node::default()
+        };
+        assert_eq!(featured_colors(&empty), Some(vec![]));
+
+        let colors = Node {
+            featured_colors: Some(vec!["#3366ff".into(), "nope".into()]),
+            ..Node::default()
+        };
+        let parsed = featured_colors(&colors).expect("explicit list");
+        assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn sidebar_icon_collapsed_ignores_collapsed_when_collapsible_is_none() {
+        let expanded = Node {
+            title: Some("Project".into()),
+            ..Node::default()
+        };
+        assert!(!sidebar_icon_collapsed(&expanded));
+
+        let icon = Node {
+            collapsed: true,
+            collapsible: Some(json!("icon")),
+            title: Some("Project".into()),
+            ..Node::default()
+        };
+        assert!(sidebar_icon_collapsed(&icon));
+
+        let none = Node {
+            collapsed: true,
+            collapsible: Some(json!("none")),
+            title: Some("Project".into()),
+            ..Node::default()
+        };
+        assert!(!sidebar_icon_collapsed(&none));
+
+        let offcanvas = Node {
+            collapsed: true,
+            collapsible: Some(json!("offcanvas")),
+            title: Some("Project".into()),
+            ..Node::default()
+        };
+        assert!(!sidebar_icon_collapsed(&offcanvas));
+    }
+
+    #[test]
+    fn sidebar_size_range_parses_pair_and_object() {
+        let arr = Node {
+            sidebar_size_range: Some(json!([160, 360])),
+            ..Node::default()
+        };
+        let range = sidebar_size_range(&arr).expect("array range");
+        assert_eq!(range.start, px(160.0));
+        assert_eq!(range.end, px(360.0));
+
+        let obj = Node {
+            sidebar_size_range: Some(json!({"min": 140, "max": 280})),
+            ..Node::default()
+        };
+        let range = sidebar_size_range(&obj).expect("object range");
+        assert_eq!(range.start, px(140.0));
+        assert_eq!(range.end, px(280.0));
+
+        assert_eq!(sidebar_size_range(&Node::default()), None);
+    }
+
+    #[test]
     fn dialog_button_props_forward_named_variants_only() {
         let node = Node {
             ok_text: Some("Delete".into()),
@@ -2423,6 +2537,21 @@ mod tests {
         assert!(
             styled.style().size.width.is_none(),
             "Settings :sidebar-width is not the host wrapper :width"
+        );
+    }
+
+    #[test]
+    fn description_list_label_width_is_not_host_layout_width() {
+        let node = Node {
+            kind: "description-list".into(),
+            label_width: Some(160.0),
+            ..Node::default()
+        };
+        assert!(node.width.is_none());
+        let mut styled = apply_styled(div(), &node);
+        assert!(
+            styled.style().size.width.is_none(),
+            "DescriptionList :label-width is not the host wrapper :width"
         );
     }
 

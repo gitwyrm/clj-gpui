@@ -886,7 +886,7 @@
 
   `on-change` receives the new boolean. `:tooltip` is Kit
   `Toggle::tooltip` (not the generic wrapper). `:variant` is
-  `:ghost` (default) or `:outline`.
+  `:ghost` (default) or `:outline`. `:icon` is a kebab icon name.
 
   (ui/toggle bold? {:on-change #(swap! !state assoc :bold %) :text \"Bold\"})"
   ([checked]
@@ -1423,12 +1423,13 @@
 
   Keyword ids round-trip as keywords. Multiple open ids are a JSON
   array on the wire, not a comma-joined string. `:bordered` is Kit
-  `Accordion::bordered` (omit = Kit true).
+  `Accordion::bordered` (omit = Kit true). Item `:icon` and `:disabled`
+  are Kit `AccordionItem` chrome.
 
   (ui/accordion open-id
     {:on-change set-open!
-     :items [{:id :a :title \"One\" :content (ui/label \"…\")}
-             {:id :b :title \"Two\" :content (ui/label \"…\")}]})"
+     :items [{:id :a :title \"One\" :icon :check :content (ui/label \"…\")}
+             {:id :b :title \"Two\" :disabled true :content (ui/label \"…\")}]})"
   ([value]
    {:type :accordion :value (wire-id value) :items []})
   ([value opts]
@@ -1467,10 +1468,12 @@
   "Key/value description list. Defaults to a vertical stack (one pair per row).
 
   `:bordered` is Kit `DescriptionList::bordered` (omit = Kit true).
+  `:label-width` is Kit `label_width` in pixels (omit = 120; horizontal
+  layout only), not the host wrapper `:width`.
 
   (ui/description-list [{:label \"Name\" :value \"Ada\"}
                         {:label \"Lang\" :value \"Clojure\"}])
-  (ui/description-list items {:orientation :horizontal :columns 2})"
+  (ui/description-list items {:orientation :horizontal :columns 2 :label-width 160})"
   ([items]
    (description-list items nil))
   ([items opts]
@@ -2544,19 +2547,24 @@
                  opts)))
 
 (defn- featured-color-opts
-  "Keep `:featured-colors` as a hex list. Do not copy onto host `:color`."
+  "Keep `:featured-colors` as a hex list. Do not copy onto host `:color`.
+  `:anchor` becomes wire `:placement` (Kit `ColorPicker::anchor`)."
   [opts]
-  (let [opts (or opts {})
+  (let [opts (rewrite-anchor (or opts {}))
         colors (:featured-colors opts)]
     (cond-> opts
       (sequential? colors)
-      (assoc :featured-colors (mapv str colors)))))
+      (assoc :featured-colors (mapv str colors))
+      (keyword? (:icon opts)) (update :icon wire-id))))
 
 (defn color-picker
   "Hex color (`\"#3366ff\"`). `on-change` receives a hex string or `nil`.
 
-  `:featured-colors` is a hex list for Kit `featured_colors` (omit keeps
-  Kit's default swatches). Nested so it is not layout/host `:color`.
+  `:featured-colors` is a hex list for Kit `featured_colors`. Omitted
+  keeps Kit's default swatches; `[]` shows none. Nested so it is not
+  layout/host `:color`. `:icon`, `:accessibility-label`, and
+  `:placement` (or `:anchor`) are Kit `icon` / `accessibility_label` /
+  `anchor` (omit anchor = Kit `TopLeft`).
 
   (ui/color-picker \"#3366ff\" {:on-change set!
                                 :featured-colors [\"#3366ff\" \"#22c55e\"]})"
@@ -2578,11 +2586,13 @@
   `:number-of-months` is Kit calendar months (omit = 1).
   `:first-day-of-week` is `sun`…`sat` or 0–6 from Sunday (omit = Sunday;
   changing it recreates the picker). `:appearance` is Kit field chrome
-  (omit = true).
+  (omit = true). `:cleanable` is Kit's clear button (omit = false).
+  `:focus-ring` is Kit `FocusableExt` (omit = true).
 
   (ui/date-picker \"2026-09-02\" {:on-change set!})
   (ui/date-picker [\"2026-01-01\" \"2026-01-31\"] {:range true})
-  (ui/date-picker date {:number-of-months 2 :first-day-of-week :mon})"
+  (ui/date-picker date {:number-of-months 2 :first-day-of-week :mon})
+  (ui/date-picker date {:cleanable true})"
   ([value]
    {:type :date-picker :value value})
   ([value on-change-or-opts]
@@ -2773,7 +2783,9 @@
   "App sidebar of `{id, label, icon?}` rows. `:side` is `:left` (default)
   or `:right`. `:collapsed` shrinks chrome. `:collapsible` is Kit
   `SidebarCollapsible`: `true` / `:icon` (default), `false` / `:none`,
-  or `:offcanvas`. `:selected` / `on-change` restore original ids.
+  or `:offcanvas`. `:none` stays expanded and ignores `:collapsed`
+  (including the host title). Title text is hidden only for effective
+  icon-collapse. `:selected` / `on-change` restore original ids.
   `:title` is a header string.
   The sidebar owns its scrolling; use `:flex 1` to fill remaining height
   or `:height` for a fixed viewport. Do not wrap it in `ui/scroll`.
@@ -2805,9 +2817,12 @@
   `{:id field-id :value …}` with original field ids and dropdown
   option ids. `:sidebar-width` is Kit `Settings::sidebar_width` in
   pixels (omit = Kit 250), not the host wrapper `:width`.
+  `:sidebar-size-range` is Kit `sidebar_size_range` as `[min max]` or
+  `{:min :max}` pixels (omit = Kit `160..360`).
 
   (ui/settings pages {:on-change (fn [{:keys [id value]}])
-                      :sidebar-width 200})"
+                      :sidebar-width 200
+                      :sidebar-size-range [140 280]})"
   ([pages]
    (settings pages nil))
   ([pages opts]

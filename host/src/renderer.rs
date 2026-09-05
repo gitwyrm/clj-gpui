@@ -1752,6 +1752,9 @@ impl RootView {
     fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let mut el = Toggle::new(eid(key)).checked(checked);
+        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+            el = el.icon(icon);
+        }
         if let Some(text) = node.text.clone() {
             el = el.label(text);
         }
@@ -2716,12 +2719,23 @@ impl RootView {
             let id = item.id_or_label();
             let title = item.label_or_id();
             let is_open = open_ids.iter().any(|open| open == &id);
+            let icon = item.icon.as_deref().and_then(mapping::parse_icon);
+            let disabled = item.disabled;
             let content = if let Some(child) = item.content.as_ref() {
                 self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
             } else {
                 div().into_any_element()
             };
-            accordion = accordion.item(move |acc| acc.title(title).open(is_open).child(content));
+            accordion = accordion.item(move |acc| {
+                let mut acc = acc.title(title).open(is_open).child(content);
+                if let Some(icon) = icon {
+                    acc = acc.icon(icon);
+                }
+                if disabled {
+                    acc = acc.disabled(true);
+                }
+                acc
+            });
         }
         if let Some(callback_id) = node.on_change.clone() {
             let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
@@ -2752,6 +2766,9 @@ impl RootView {
         list = list.columns(mapping::parse_columns(node.columns));
         if let Some(bordered) = node.bordered {
             list = list.bordered(bordered);
+        }
+        if let Some(width) = node.label_width.filter(|n| n.is_finite() && *n > 0.0) {
+            list = list.label_width(px(width));
         }
         for item in node.collection() {
             let label = item
@@ -4251,8 +4268,20 @@ impl RootView {
         if let Some(label) = node.text.clone().or(node.title.clone()) {
             picker = picker.label(label);
         }
-        let featured = mapping::featured_colors(node);
-        if !featured.is_empty() {
+        if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
+            picker = picker.icon(Icon::new(name));
+        }
+        if let Some(label) = node
+            .accessibility_label
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            picker = picker.accessibility_label(label.to_string());
+        }
+        if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+            picker = picker.anchor(anchor);
+        }
+        if let Some(featured) = mapping::featured_colors(node) {
             picker = picker.featured_colors(featured);
         }
         apply_style(
@@ -4326,7 +4355,10 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.date_slot(key, node, window, cx);
-        let mut picker = DatePicker::new(&state).cleanable(true);
+        let mut picker = DatePicker::new(&state);
+        if node.cleanable {
+            picker = picker.cleanable(true);
+        }
         if let Some(placeholder) = node.placeholder.clone() {
             picker = picker.placeholder(placeholder);
         }
@@ -4335,6 +4367,9 @@ impl RootView {
         }
         picker = picker.number_of_months(mapping::date_number_of_months(node));
         picker = picker.appearance(node.appearance.unwrap_or(true));
+        if let Some(enabled) = node.focus_ring {
+            picker = picker.focus_ring(enabled);
+        }
         apply_style(
             picker.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
@@ -6045,7 +6080,7 @@ fn sidebar_root(node: &Node, key: &str) -> Sidebar<SidebarMenu> {
 }
 
 fn sidebar_header_title(node: &Node) -> Option<String> {
-    if node.collapsed {
+    if mapping::sidebar_icon_collapsed(node) {
         None
     } else {
         node.title.clone()
@@ -7156,11 +7191,38 @@ mod select_control_tests {
         };
         assert_eq!(sidebar_header_title(&expanded).as_deref(), Some("Demo"));
 
-        let collapsed = Node {
+        let collapsed_icon = Node {
             collapsed: true,
+            collapsible: Some(serde_json::json!("icon")),
+            ..expanded.clone()
+        };
+        assert_eq!(sidebar_header_title(&collapsed_icon), None);
+
+        let collapsed_default = Node {
+            collapsed: true,
+            ..expanded.clone()
+        };
+        assert_eq!(sidebar_header_title(&collapsed_default), None);
+
+        let collapsed_none = Node {
+            collapsed: true,
+            collapsible: Some(serde_json::json!("none")),
+            ..expanded.clone()
+        };
+        assert_eq!(
+            sidebar_header_title(&collapsed_none).as_deref(),
+            Some("Demo")
+        );
+
+        let collapsed_offcanvas = Node {
+            collapsed: true,
+            collapsible: Some(serde_json::json!("offcanvas")),
             ..expanded
         };
-        assert_eq!(sidebar_header_title(&collapsed), None);
+        assert_eq!(
+            sidebar_header_title(&collapsed_offcanvas).as_deref(),
+            Some("Demo")
+        );
     }
 
     #[test]

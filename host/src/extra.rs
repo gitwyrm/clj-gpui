@@ -2757,6 +2757,9 @@ pub fn build_settings(node: &Node, key: &str, cmd_tx: &mpsc::Sender<Cmd>) -> Set
     if let Some(width) = node.sidebar_width.filter(|n| n.is_finite() && *n > 0.0) {
         settings = settings.sidebar_width(px(width));
     }
+    if let Some(range) = mapping::sidebar_size_range(node) {
+        settings = settings.sidebar_size_range(range);
+    }
     settings
 }
 

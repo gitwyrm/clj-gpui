@@ -1149,7 +1149,9 @@ pub struct Node {
     /// Command: Kit `filterable`. Omitted is Kit true.
     #[serde(default)]
     pub filterable: Option<bool>,
-    /// Select / Combobox: Kit `cleanable` (clear button when a value is selected).
+    /// Select / Combobox / DatePicker: Kit `cleanable` (clear button when
+    /// a value is selected). Omitted is Kit false. DatePicker used to
+    /// hardcode true; omit now matches Kit.
     #[serde(default)]
     pub cleanable: bool,
     /// Select: Kit `Select::title_prefix`.
@@ -1699,8 +1701,9 @@ pub struct Node {
     /// Sheet: Kit `Sheet::resizable`. Omitted is Kit true.
     #[serde(default)]
     pub resizable: Option<bool>,
-    /// ColorPicker: Kit `featured_colors` (hex list). Omitted keeps Kit
-    /// default swatches. Nested so it is not layout `:color`.
+    /// ColorPicker: Kit `featured_colors` (hex list). Omitted (`None`)
+    /// keeps Kit default swatches. Explicit `[]` is no featured swatches.
+    /// Nested so it is not layout `:color`.
     #[serde(default, rename = "featured-colors")]
     pub featured_colors: Option<Vec<String>>,
     /// DatePicker: Kit `number_of_months` (widget + calendar). Omitted is 1.
@@ -1725,6 +1728,14 @@ pub struct Node {
     /// Not the Settings host wrapper `:width`.
     #[serde(default, rename = "sidebar-width")]
     pub sidebar_width: Option<f32>,
+    /// Settings: Kit `sidebar_size_range`. `[min, max]` or `{min, max}`
+    /// pixels. Omitted is Kit `160..360`.
+    #[serde(default, rename = "sidebar-size-range")]
+    pub sidebar_size_range: Option<Value>,
+    /// DescriptionList: Kit `label_width` in pixels. Omitted is Kit 120.
+    /// Horizontal layout only. Not the host wrapper `:width`.
+    #[serde(default, rename = "label-width")]
+    pub label_width: Option<f32>,
     /// ToggleGroup: Kit `segmented()`. Omitted is Kit false.
     #[serde(default)]
     pub segmented: bool,
@@ -2714,12 +2725,16 @@ mod tests {
             "items": [{
                 "id": "audio",
                 "label": "Audio",
+                "icon": "check",
+                "disabled": true,
                 "content": {"type": "label", "text": "Speakers"}
             }]
         }))
         .unwrap();
         assert_eq!(node.string_value().as_deref(), Some("audio"));
         assert_eq!(node.collection()[0].id_or_label(), "audio");
+        assert_eq!(node.collection()[0].icon.as_deref(), Some("check"));
+        assert!(node.collection()[0].disabled);
         assert!(node.contains_text("Speakers"));
         assert_eq!(PROTOCOL_VERSION, 11);
     }
@@ -2761,6 +2776,7 @@ mod tests {
             "type": "description-list",
             "orientation": "horizontal",
             "columns": 2,
+            "label-width": 160,
             "items": [
                 {"label": "Host", "text": "GPUI", "span": 2},
                 {"label": "UI", "text": "clj-gpui"}
@@ -2769,6 +2785,7 @@ mod tests {
         .unwrap();
         assert_eq!(node.orientation.as_deref(), Some("horizontal"));
         assert_eq!(node.columns, Some(2));
+        assert_eq!(node.label_width, Some(160.0));
         assert_eq!(node.collection()[0].span, 2);
         assert_eq!(node.collection()[1].span, 0);
         let omitted: Node = serde_json::from_value(json!({
@@ -2969,7 +2986,8 @@ mod tests {
             "type": "date-picker",
             "number-of-months": 2,
             "first-day-of-week": "mon",
-            "appearance": false
+            "appearance": false,
+            "cleanable": true
         }))
         .unwrap();
         assert_eq!(picker.number_of_months, Some(2.0));
@@ -2978,6 +2996,7 @@ mod tests {
             Some("mon")
         );
         assert_eq!(picker.appearance, Some(false));
+        assert!(picker.cleanable);
 
         let colors: Node = serde_json::from_value(json!({
             "type": "color-picker",
@@ -2988,6 +3007,27 @@ mod tests {
             colors.featured_colors.as_deref(),
             Some(&["#3366ff".to_string(), "#22c55e".to_string()][..])
         );
+        let empty_featured: Node = serde_json::from_value(json!({
+            "type": "color-picker",
+            "featured-colors": []
+        }))
+        .unwrap();
+        assert_eq!(empty_featured.featured_colors.as_deref(), Some(&[][..]));
+        let omitted_featured: Node = serde_json::from_value(json!({
+            "type": "color-picker"
+        }))
+        .unwrap();
+        assert_eq!(omitted_featured.featured_colors, None);
+        let picker_chrome: Node = serde_json::from_value(json!({
+            "type": "color-picker",
+            "icon": "palette",
+            "accessibility-label": "Accent",
+            "placement": "bottom-right"
+        }))
+        .unwrap();
+        assert_eq!(picker_chrome.icon.as_deref(), Some("palette"));
+        assert_eq!(picker_chrome.accessibility_label.as_deref(), Some("Accent"));
+        assert_eq!(picker_chrome.placement.as_deref(), Some("bottom-right"));
 
         let tabs: Node = serde_json::from_value(json!({
             "type": "tabs",
@@ -3023,10 +3063,12 @@ mod tests {
 
         let settings: Node = serde_json::from_value(json!({
             "type": "settings",
-            "sidebar-width": 200
+            "sidebar-width": 200,
+            "sidebar-size-range": [140, 280]
         }))
         .unwrap();
         assert_eq!(settings.sidebar_width, Some(200.0));
+        assert_eq!(settings.sidebar_size_range, Some(json!([140, 280])));
 
         let md: Node = serde_json::from_value(json!({
             "type": "markdown",

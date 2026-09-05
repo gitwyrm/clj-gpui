@@ -307,6 +307,11 @@
       (is (true? (:menu n)))
       (is (= 120 (:max-width n)))
       (is (nil? (:width n)) "tabs :max-width is not layout :width")))
+  (testing "toggle icon is Kit Toggle::icon"
+    (let [n (ui/toggle true {:text "Bold" :icon :check :tooltip "Toggle bold"})]
+      (is (= :toggle (:type n)))
+      (is (= :check (:icon n)))
+      (is (= "Bold" (:text n)))))
   (testing "toggle-group restores original ids"
     (let [got (atom nil)
           n (ui/toggle-group [:bold]
@@ -445,10 +450,12 @@
     (is (= :label (get-in (ui/hover-card {:trigger "Hover"} (ui/label "Hi"))
                           [:trigger :type]))))
   (testing "accordion content stays a node"
-    (let [n (ui/accordion :a {:items [{:id :a :title "One" :content (ui/label "hi")}
-                                      {:id :b :title "Two" :content (ui/label "there")}]})]
+    (let [n (ui/accordion :a {:items [{:id :a :title "One" :icon :check :content (ui/label "hi")}
+                                      {:id :b :title "Two" :disabled true :content (ui/label "there")}]})]
       (is (= "a" (:value n)))
       (is (= "One" (get-in n [:items 0 :label])))
+      (is (= "check" (get-in n [:items 0 :icon])))
+      (is (true? (get-in n [:items 1 :disabled])))
       (is (= :label (get-in n [:items 0 :content :type])))
       (is (false? (:bordered (ui/accordion :a {:bordered false
                                                :items [{:id :a :title "One"
@@ -478,10 +485,13 @@
       (is (= ["Host" "UI"] (mapv :label (:items n))))
       (is (= ["GPUI" "clj-gpui"] (mapv :text (:items n)))))
     (let [h (ui/description-list [{:label "A" :value "1" :span 2}]
-                                 {:orientation :horizontal :columns 3 :bordered false})]
+                                 {:orientation :horizontal :columns 3 :bordered false
+                                  :label-width 160})]
       (is (= :horizontal (:orientation h)))
       (is (= 3 (:columns h)))
       (is (false? (:bordered h)))
+      (is (= 160 (:label-width h)))
+      (is (nil? (:width h)) "description-list :label-width is not layout :width")
       (is (= 2 (get-in h [:items 0 :span]))))))
 
 (deftest export-new-widget-callbacks
@@ -1320,15 +1330,29 @@
                                         :color "#eeeeee"})]
       (is (= ["#3366ff" "#22c55e"] (:featured-colors n)))
       (is (= "#eeeeee" (:color n)) "featured-colors must not steal host :color"))
+    (let [empty (ui/color-picker "#3366ff" {:featured-colors []})]
+      (is (= [] (:featured-colors empty))))
+    (is (nil? (:featured-colors (ui/color-picker "#3366ff"))))
+    (let [n (ui/color-picker "#3366ff" {:icon :palette
+                                        :accessibility-label "Accent"
+                                        :anchor :bottom-right})]
+      (is (= "palette" (:icon n)))
+      (is (= "Accent" (:accessibility-label n)))
+      (is (= "bottom-right" (:placement n)))
+      (is (nil? (:anchor n))))
     (let [n (ui/date-picker ["2026-01-01" "2026-01-31"] {:range true
                                                          :number-of-months 2
                                                          :first-day-of-week :mon
-                                                         :appearance false})]
+                                                         :appearance false
+                                                         :cleanable true})]
       (is (= :date-picker (:type n)))
       (is (true? (:range n)))
       (is (= 2 (:number-of-months n)))
       (is (= :mon (:first-day-of-week n)))
-      (is (false? (:appearance n))))
+      (is (false? (:appearance n)))
+      (is (true? (:cleanable n))))
+    (is (nil? (:cleanable (ui/date-picker "2026-01-01"))))
+    (is (false? (:focus-ring (ui/date-picker "2026-01-01" {:focus-ring false}))))
     (is (= "rust" (:language (ui/editor "fn" {:language "rust"})))))
   (testing "virtual-list chart markdown chrome"
     (let [n (ui/virtual-list [{:id :a :label "A" :height 40}] {:selected :a :height 200})]
@@ -1449,9 +1473,11 @@
       (is (= :offcanvas (:collapsible n))))
     (let [n (ui/settings [{:id :general :label "General"
                            :items [{:id :notify :label "N" :checked true :variant :switch}]}]
-                         {:on-change (fn [_]) :sidebar-width 200})]
+                         {:on-change (fn [_]) :sidebar-width 200
+                          :sidebar-size-range [140 280]})]
       (is (= :settings (:type n)))
       (is (= 200 (:sidebar-width n)))
+      (is (= [140 280] (:sidebar-size-range n)))
       (is (nil? (:width n)) "settings :sidebar-width is not layout :width")
       (is (true? (get-in n [:items 0 :items 0 :checked])))
       (is (= "switch" (get-in n [:items 0 :items 0 :variant]))))
