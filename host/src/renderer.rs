@@ -106,6 +106,7 @@ struct InputSlot {
 
 struct TextControlSlot<S> {
     state: Entity<S>,
+    language: Option<String>,
     on_change: Option<String>,
     on_submit: Option<String>,
     on_blur: Option<String>,
@@ -4207,8 +4208,14 @@ impl RootView {
             if current != wanted && !focused {
                 state.update(cx, |input, cx| input.set_value(wanted, window, cx));
             }
-            let lang = language.clone();
-            state.update(cx, |input, cx| input.set_highlighter(lang, cx));
+            if slot.language.as_deref() != Some(language.as_str()) {
+                slot.language = Some(language.clone());
+                state.update(cx, |input, cx| {
+                    input.set_highlighter(language.clone(), cx);
+                    // Reparse the current text after changing the language.
+                    input.refresh(cx);
+                });
+            }
             if refresh {
                 Self::schedule_input_change_flush(key.to_string(), TextFlush::Editor, window, cx);
             }
@@ -4217,7 +4224,7 @@ impl RootView {
         let placeholder = node.placeholder.clone().unwrap_or_default();
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
-                .language(language)
+                .language(language.clone())
                 .placeholder(placeholder)
                 .default_value(wanted)
         });
@@ -4225,6 +4232,7 @@ impl RootView {
             key.to_string(),
             TextControlSlot {
                 state: state.clone(),
+                language: Some(language),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -4331,6 +4339,7 @@ impl RootView {
             key.to_string(),
             TextControlSlot {
                 state: state.clone(),
+                language: None,
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),

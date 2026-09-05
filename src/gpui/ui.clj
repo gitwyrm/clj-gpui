@@ -2247,9 +2247,8 @@
 (defn editor
   "Code editor wrapping Kit `Editor` / `EditorState`. Not an LSP
   editor. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
-  `\"markdown\"`; omitted is `\"text\"`). Kit's
-  `tree-sitter-languages` bundle is enabled; there is no Clojure
-  grammar, so `:language \"clojure\"` is plain text. `on-change`
+  `\"markdown\"`, `\"clojure\"`; omitted is `\"text\"`). Kit's
+  `tree-sitter-languages` bundle and a Clojure grammar are enabled. `on-change`
   receives the string.
 
   (ui/editor src {:language \"rust\" :height 200 :on-change set!})"

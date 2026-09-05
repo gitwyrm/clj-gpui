@@ -9,6 +9,7 @@ mod preview;
 mod protocol;
 mod renderer;
 mod rows;
+mod syntax;
 
 use anyhow::Result;
 use gpui_kit::application;
@@ -41,6 +42,7 @@ fn main() -> Result<()> {
         .with_http_client(Arc::new(http_client))
         .run(move |cx| {
             gpui_kit::init(cx);
+            syntax::init();
             renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
         });
 

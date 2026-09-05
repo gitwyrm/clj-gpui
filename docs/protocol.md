@@ -268,7 +268,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `limit` | number | `avatar-group`: max visible avatars (Kit default 3). Omitted leaves Kit's default. Forwarded unclamped |
 | `ellipsis` | bool | `avatar-group`: show a ⋯ overflow avatar when there are more than `limit` (Kit default false) |
 | `autohide` | bool | `notification` (default true) |
-| `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; there is no Clojure grammar |
+| `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; the host also registers a Clojure grammar |
 | `rows` | number | `textarea` visible height (default 3) |
 | `masked` | bool | `otp-input` |
 | `collapsed` | bool | `sidebar` |
