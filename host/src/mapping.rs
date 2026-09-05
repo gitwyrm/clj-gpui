@@ -40,6 +40,17 @@ pub fn parse_named_size(value: Option<&str>) -> Option<Size> {
         .map(|name| parse_scale(Some(name)))
 }
 
+/// DataTable row height. Pixel `:row-height` is Kit `Size::Size`
+/// (`table_row_height`). Named `:control-size` is Kit `Sizable`. Omitted
+/// is Kit Medium (32px), the same default `DataTable` already used.
+pub fn table_row_size(node: &Node) -> Size {
+    if let Some(height) = node.row_height.filter(|h| h.is_finite() && *h > 0.0) {
+        Size::Size(px(height))
+    } else {
+        parse_scale(node.control_size.as_deref())
+    }
+}
+
 pub fn parse_hsla(value: &str) -> Option<Hsla> {
     let value = value.trim();
     Hsla::parse_hex(value).ok().or_else(|| {
@@ -590,6 +601,28 @@ mod tests {
         assert_eq!(parse_named_size(Some("lg")), Some(Size::Large));
         assert_eq!(parse_named_size(Some("small")), Some(Size::Small));
         assert_ne!(parse_named_size(None), Some(parse_scale(None)));
+    }
+
+    #[test]
+    fn table_row_size_prefers_pixel_height() {
+        let pixel = Node {
+            row_height: Some(40.0),
+            control_size: Some("small".into()),
+            ..Node::default()
+        };
+        assert_eq!(table_row_size(&pixel), Size::Size(px(40.0)));
+        let named = Node {
+            control_size: Some("small".into()),
+            ..Node::default()
+        };
+        assert_eq!(table_row_size(&named), Size::Small);
+        assert_eq!(table_row_size(&Node::default()), Size::Medium);
+        let invalid = Node {
+            row_height: Some(0.0),
+            control_size: Some("large".into()),
+            ..Node::default()
+        };
+        assert_eq!(table_row_size(&invalid), Size::Large);
     }
 
     #[test]

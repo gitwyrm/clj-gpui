@@ -857,6 +857,41 @@
       (is (= "name" (get-in n [:options 0 :id])))
       (is (= 120 (get-in n [:options 0 :width])))
       (is (= ["Ada" "Clojure"] (get-in n [:items 0 :cells])))))
+  (testing "data-table extras wire header groups, cell selected, and export"
+    (let [n (ui/data-table {:columns [{:id :name :label "Name" :align :end :selectable false}
+                                      {:id :lang :label "Lang"}]
+                            :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                            :header-groups [[{:label "Identity" :span 2}]]
+                            :cell-selectable true
+                            :row-header false
+                            :row-height 40
+                            :export-generation :dump-1
+                            :selected {:row :ada :col :lang}})]
+      (is (= {:row "ada" :col "lang"} (:value n)))
+      (is (true? (:cell-selectable n)))
+      (is (false? (:row-header n)))
+      (is (= 40 (:row-height n)))
+      (is (= "dump-1" (:export-generation n)))
+      (is (= "Identity" (get-in n [:header-groups 0 0 :label])))
+      (is (= 2 (get-in n [:header-groups 0 0 :span])))
+      (is (= "end" (get-in n [:options 0 :align])))
+      (is (false? (get-in n [:options 0 :selectable]))))
+    (let [vec-sel (ui/data-table {:columns [{:id :name :label "Name"}
+                                            {:id :lang :label "Lang"}]
+                                  :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                                  :selected [:ada :lang]})]
+      (is (= ["ada" "lang"] (:value vec-sel))))
+    (let [named (ui/data-table {:columns [{:id :name :label "Name"}]
+                                :rows [{:id :ada :cells ["Ada"]}]
+                                :size :small
+                                :selected :ada})]
+      (is (= "small" (:control-size named)))
+      (is (nil? (:size named)))
+      (is (not (contains? named :header-groups))))
+    (let [padded (ui/data-table {:columns [{:id :user/name :label "Name"}]
+                                 :rows [{:id :user/ada :cells ["Ada"]}]
+                                 :selected {:row :user/ada :col :user/name}})]
+      (is (= {:row "user/ada" :col "user/name"} (:value padded)))))
   (testing "declarative table shorthand expands to Kit primitives"
     (let [n (ui/table {:columns [{:label "Name" :span 2}
                                  {:label "Amount" :align :end :width 80}]
@@ -1594,6 +1629,54 @@
     (is (= {:ok true :id (get-in children [8 :left 0 :on-click])}
            (runtime/invoke-callback! (get-in children [8 :left 0 :on-click]))))
     (is (= :left @got))))
+
+(deftest data-table-cell-and-export-callbacks
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/data-table
+                   {:columns [{:id :name :label "Name"} {:id :lang :label "Lang"}]
+                    :rows [{:id :ada :cells ["Ada" "Clojure"]}]
+                    :cell-selectable true
+                    :on-change #(reset! got %)
+                    :on-confirm #(reset! got [:confirm %])
+                    :on-export #(reset! got %)}))]
+    (is (string? (:on-change exported)))
+    (is (string? (:on-export exported)))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) {:row "ada" :col "lang"})))
+    (is (= {:row :ada :col :lang} @got))
+    (is (= {:ok true :id (:on-confirm exported)}
+           (runtime/invoke-callback! (:on-confirm exported) ["ada" "lang"])))
+    (is (= [:confirm {:row :ada :col :lang}] @got))
+    (is (= {:ok true :id (:on-export exported)}
+           (runtime/invoke-callback! (:on-export exported)
+                                     {:headers ["Name" "Lang"]
+                                      :rows [["Ada" "Clojure"]]})))
+    (is (= {:headers ["Name" "Lang"] :rows [["Ada" "Clojure"]]} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) "ada")))
+    (is (= :ada @got))))
+
+(deftest data-table-row-and-column-ids-are-separate-namespaces
+  (runtime/reset-callbacks!)
+  (let [got (atom nil)
+        exported (runtime/export-tree
+                  (ui/data-table
+                   {:columns [{:id "lang" :label "Lang"}]
+                    :rows [{:id :lang :cells ["Clojure"]}]
+                    :cell-selectable true
+                    :on-change #(reset! got %)}))]
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported)
+                                     {:row "lang" :col "lang"})))
+    (is (= {:row :lang :col "lang"} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) ["lang" "lang"])))
+    (is (= {:row :lang :col "lang"} @got))
+    (is (= {:ok true :id (:on-change exported)}
+           (runtime/invoke-callback! (:on-change exported) "lang")))
+    (is (= :lang @got))))
 
 (deftest product-widget-callbacks-sanitize-and-restore-ids
   (runtime/reset-callbacks!)

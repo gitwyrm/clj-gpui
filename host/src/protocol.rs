@@ -241,15 +241,30 @@ pub fn list_activation_calls(
     calls
 }
 
-/// Table double-click: `:on-change` then `:on-confirm`, same row id.
-/// Same payload shape as list activation; crate emits SelectRow then
-/// DoubleClickedRow from one `on_row_left_click`.
+/// Table double-click: `:on-change` then `:on-confirm`, same payload.
+/// Row id string, or a cell map `{"row","col"}` when `cell-selectable`.
 pub fn table_activation_calls(
     on_change: Option<String>,
     on_confirm: Option<String>,
-    row_id: impl Into<String>,
+    payload: impl Into<Value>,
 ) -> Vec<CallbackCall> {
-    list_activation_calls(on_change, on_confirm, row_id)
+    let payload = payload.into();
+    let mut calls = Vec::new();
+    if let Some(id) = on_change {
+        calls.push(CallbackCall::with_value(id, payload.clone()));
+    }
+    if let Some(id) = on_confirm {
+        calls.push(CallbackCall::with_value(id, payload));
+    }
+    calls
+}
+
+pub fn table_cell_payload(row_id: impl Into<String>, col_id: impl Into<String>) -> Value {
+    json!({"row": row_id.into(), "col": col_id.into()})
+}
+
+pub fn table_dump_payload(headers: Vec<String>, rows: Vec<Vec<String>>) -> Value {
+    json!({"headers": headers, "rows": rows})
 }
 
 /// Combobox pick / popover close: `:on-change` then `:on-confirm`, same
@@ -288,6 +303,7 @@ pub fn combobox_activation_calls(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TableClickCoalesce {
     pending_row: Option<usize>,
+    pending_cell: Option<(usize, usize)>,
     flush_scheduled: bool,
 }
 
@@ -297,9 +313,26 @@ impl TableClickCoalesce {
     pub fn on_select_row(&mut self, row_ix: usize, suppress: bool) -> bool {
         if suppress {
             self.pending_row = None;
+            self.pending_cell = None;
             return false;
         }
+        self.pending_cell = None;
         self.pending_row = Some(row_ix);
+        if self.flush_scheduled {
+            return false;
+        }
+        self.flush_scheduled = true;
+        true
+    }
+
+    pub fn on_select_cell(&mut self, row_ix: usize, col_ix: usize, suppress: bool) -> bool {
+        if suppress {
+            self.pending_row = None;
+            self.pending_cell = None;
+            return false;
+        }
+        self.pending_row = None;
+        self.pending_cell = Some((row_ix, col_ix));
         if self.flush_scheduled {
             return false;
         }
@@ -320,10 +353,32 @@ impl TableClickCoalesce {
         }
     }
 
-    pub fn take_pending_select(&mut self) -> Option<usize> {
-        self.flush_scheduled = false;
-        self.pending_row.take()
+    pub fn on_double_clicked_cell(&mut self, row_ix: usize, col_ix: usize) -> bool {
+        if self.pending_cell == Some((row_ix, col_ix)) {
+            self.pending_cell = None;
+            true
+        } else {
+            false
+        }
     }
+
+    /// Pending row or cell from this effect cycle. Prefer cell when both
+    /// were recorded (cell click clears the row).
+    pub fn take_pending(&mut self) -> Option<TablePendingSelect> {
+        self.flush_scheduled = false;
+        if let Some((row, col)) = self.pending_cell.take() {
+            self.pending_row = None;
+            Some(TablePendingSelect::Cell { row, col })
+        } else {
+            self.pending_row.take().map(TablePendingSelect::Row)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TablePendingSelect {
+    Row(usize),
+    Cell { row: usize, col: usize },
 }
 
 /// Coalesce Kit `ComboboxEvent::Change` + optional `ComboboxEvent::Confirm`
@@ -623,6 +678,9 @@ pub struct Item {
     /// Table column / cell text alignment (`start` / `center` / `end`).
     #[serde(default)]
     pub align: Option<String>,
+    /// DataTable column: Kit `Column::selectable`. Omitted is Kit true.
+    #[serde(default)]
+    pub selectable: Option<bool>,
     /// Menu item check mark; tree unused.
     #[serde(default)]
     pub checked: Option<bool>,
@@ -780,6 +838,9 @@ pub struct Node {
     pub on_close: Option<String>,
     #[serde(default, rename = "on-copied")]
     pub on_copied: Option<String>,
+    /// DataTable: Kit `TableState::dump` payload (`headers` + `rows`).
+    #[serde(default, rename = "on-export")]
+    pub on_export: Option<String>,
     /// Command: search-field text after it actually changes.
     #[serde(default, rename = "on-query")]
     pub on_query: Option<String>,
@@ -1291,6 +1352,27 @@ pub struct Node {
     /// applies the first distinct target.
     #[serde(default, rename = "scroll-generation")]
     pub scroll_generation: Option<Value>,
+    /// DataTable: Kit `TableDelegate::group_headers`. Each inner array
+    /// is one header row of `{label, span}` groups. Empty is no groups.
+    #[serde(default, rename = "header-groups")]
+    pub header_groups: Vec<Vec<Item>>,
+    /// DataTable: Kit `TableState::cell_selectable`. Omitted is Kit false.
+    #[serde(default, rename = "cell-selectable")]
+    pub cell_selectable: Option<bool>,
+    /// DataTable: Kit `TableState::row_header`. Only effective when
+    /// `cell-selectable` is true. Omitted is Kit true.
+    #[serde(default, rename = "row-header")]
+    pub row_header: Option<bool>,
+    /// DataTable: Kit `Size::Size` row height in pixels (`table_row_height`).
+    /// Named `:size` / `:control-size` still map to Kit `Sizable`. Viewport
+    /// `:height` is the outer wrapper, not the row.
+    #[serde(default, rename = "row-height")]
+    pub row_height: Option<f32>,
+    /// DataTable: replay token for `TableState::dump`. Same shape as
+    /// nav-stack `replace-generation`. A new token with `:on-export` dumps
+    /// the current native headers/rows (including moved columns).
+    #[serde(default, rename = "export-generation")]
+    pub export_generation: Option<Value>,
 }
 
 impl Node {
@@ -1984,21 +2066,21 @@ mod tests {
     fn table_click_coalesce_batches_double_click_not_single_or_suppress() {
         let mut c = TableClickCoalesce::default();
         assert!(c.on_select_row(1, false));
-        assert_eq!(c.take_pending_select(), Some(1));
-        assert!(c.take_pending_select().is_none());
+        assert_eq!(c.take_pending(), Some(TablePendingSelect::Row(1)));
+        assert!(c.take_pending().is_none());
 
         assert!(!c.on_select_row(2, true));
-        assert!(c.take_pending_select().is_none());
+        assert!(c.take_pending().is_none());
 
         assert!(c.on_select_row(0, false));
         assert!(c.on_double_clicked_row(0));
-        assert!(c.take_pending_select().is_none());
+        assert!(c.take_pending().is_none());
 
         assert!(c.on_select_row(1, false));
         assert!(!c.on_double_clicked_row(2));
         assert_eq!(
-            c.take_pending_select(),
-            Some(1),
+            c.take_pending(),
+            Some(TablePendingSelect::Row(1)),
             "mismatched DoubleClickedRow must not drop the pending select"
         );
 
@@ -2007,7 +2089,7 @@ mod tests {
         // queued behind the already-pushed DoubleClickedRow emit.
         let mut premature = TableClickCoalesce::default();
         assert!(premature.on_select_row(0, false));
-        assert_eq!(premature.take_pending_select(), Some(0));
+        assert_eq!(premature.take_pending(), Some(TablePendingSelect::Row(0)));
         assert!(
             !premature.on_double_clicked_row(0),
             "too-early flush leaves confirm as a second standalone callback"
@@ -2019,11 +2101,23 @@ mod tests {
             "second SelectRow before the deferred flush must not stack another callback"
         );
         assert!(scheduled.on_double_clicked_row(0));
-        assert!(scheduled.take_pending_select().is_none());
+        assert!(scheduled.take_pending().is_none());
         assert!(
             scheduled.on_select_row(1, false),
             "deferred flush must clear the schedule so a later click can fire"
         );
+
+        let mut cell = TableClickCoalesce::default();
+        assert!(cell.on_select_cell(0, 1, false));
+        assert!(cell.on_double_clicked_cell(0, 1));
+        assert!(cell.take_pending().is_none());
+        assert!(cell.on_select_cell(2, 0, false));
+        assert!(!cell.on_double_clicked_cell(2, 1));
+        assert_eq!(
+            cell.take_pending(),
+            Some(TablePendingSelect::Cell { row: 2, col: 0 })
+        );
+        assert!(!cell.on_select_cell(0, 0, true));
 
         let (tx, rx) = std::sync::mpsc::channel();
         send_callbacks(
@@ -2052,6 +2146,27 @@ mod tests {
         );
         match rx.recv().unwrap() {
             Cmd::Callback { id, .. } => assert_eq!(id, "cb-13"),
+            other => panic!("{other:?}"),
+        }
+        send_callbacks(
+            &tx,
+            table_activation_calls(
+                Some("cb-12".into()),
+                Some("cb-13".into()),
+                table_cell_payload("ada", "lang"),
+            ),
+        );
+        match rx.recv().unwrap() {
+            Cmd::CallbackBatch { callbacks, .. } => {
+                assert_eq!(
+                    callbacks[0].value,
+                    Some(json!({"row": "ada", "col": "lang"}))
+                );
+                assert_eq!(
+                    callbacks[1].value,
+                    Some(json!({"row": "ada", "col": "lang"}))
+                );
+            }
             other => panic!("{other:?}"),
         }
         send_callbacks(&tx, table_activation_calls(None, None, "grace"));
@@ -2283,6 +2398,43 @@ mod tests {
         // `columns` stays the description-list u32; table columns live in `options`.
         assert_eq!(table.columns, None);
         assert!(table.contains_text("Ada"));
+
+        let extras: Node = serde_json::from_value(json!({
+            "type": "data-table",
+            "value": {"row": "ada", "col": "lang"},
+            "cell-selectable": true,
+            "row-header": false,
+            "row-height": 40,
+            "export-generation": 2,
+            "on-export": "cb-9",
+            "header-groups": [[{"label": "Identity", "span": 2}]],
+            "options": [
+                {"id": "name", "label": "Name", "align": "end", "selectable": false},
+                {"id": "lang", "label": "Lang"}
+            ],
+            "items": [{"id": "ada", "cells": ["Ada", "Clojure"]}]
+        }))
+        .unwrap();
+        assert_eq!(extras.cell_selectable, Some(true));
+        assert_eq!(extras.row_header, Some(false));
+        assert_eq!(extras.row_height, Some(40.0));
+        assert_eq!(extras.export_generation, Some(json!(2)));
+        assert_eq!(extras.on_export.as_deref(), Some("cb-9"));
+        assert_eq!(extras.header_groups[0][0].span, 2);
+        assert_eq!(extras.options[0].align.as_deref(), Some("end"));
+        assert_eq!(extras.options[0].selectable, Some(false));
+        assert_eq!(extras.value, Some(json!({"row": "ada", "col": "lang"})));
+        assert_eq!(
+            table_cell_payload("ada", "lang"),
+            json!({"row": "ada", "col": "lang"})
+        );
+        assert_eq!(
+            table_dump_payload(
+                vec!["Name".into(), "Lang".into()],
+                vec![vec!["Ada".into(), "Clojure".into()]]
+            ),
+            json!({"headers": ["Name", "Lang"], "rows": [["Ada", "Clojure"]]})
+        );
 
         let tree: Node = serde_json::from_value(json!({
             "type": "tree",

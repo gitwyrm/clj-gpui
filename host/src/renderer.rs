@@ -6,7 +6,7 @@ use crate::mapping;
 use crate::overlay;
 use crate::preview;
 use crate::protocol::{self, Cmd, HostEvent, Item, Node};
-use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync};
+use crate::rows::{self, RowListDelegate, RowTableDelegate, SelectionSync, TableSelectionSync};
 use gpui::{
     AnyElement, App, Axis, Bounds, ClickEvent, Context, DismissEvent, Element, ElementId, Entity,
     EntityId, Focusable, GlobalElementId, InspectorElementId, Keystroke, LayoutId,
@@ -279,12 +279,22 @@ struct ListSlot {
 
 struct TableSlot {
     state: Entity<TableState<RowTableDelegate>>,
-    fingerprint: u64,
+    /// Clojure column ids/count/order. Unchanged across a header drag
+    /// and across label/width/align/selectable updates.
+    column_identity_fingerprint: u64,
+    /// Clojure column definitions (label/width/align/selectable).
+    /// A definition change `TableState::refresh`es so Clojure `:width` wins.
+    /// Native resize lives in Kit col_groups until then.
+    column_definition_fingerprint: u64,
+    row_fingerprint: u64,
+    groups_fingerprint: u64,
     on_change: Option<String>,
     on_confirm: Option<String>,
+    on_export: Option<String>,
+    last_export: Option<String>,
     suppress_select: bool,
-    /// SelectRow from this effect cycle, flushed by Defer unless
-    /// DoubleClickedRow consumes it for a same-click activation batch.
+    /// SelectRow / SelectCell from this effect cycle, flushed by Defer
+    /// unless DoubleClickedRow / DoubleClickedCell consumes it.
     coalesce: protocol::TableClickCoalesce,
 }
 
@@ -3152,7 +3162,12 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.table_slot(key, node, window, cx);
-        viewport_sized(DataTable::new(&state), node, 220.0, cx)
+        viewport_sized(
+            DataTable::new(&state).with_size(mapping::table_row_size(node)),
+            node,
+            220.0,
+            cx,
+        )
     }
 
     fn table_slot(
@@ -3164,33 +3179,83 @@ impl RootView {
     ) -> Entity<TableState<RowTableDelegate>> {
         self.used_tables.insert(key.to_string());
         let columns = rows::columns_from_items(&node.options);
-        let rows = rows::rows_from_items(&node.items);
-        let fingerprint = rows::table_fingerprint(&node.options, &node.items);
-        let selected = node.string_value();
+        let rows_data = rows::rows_from_items(&node.items);
+        let header_groups = rows::header_groups_from_items(&node.header_groups);
+        let column_identity_fingerprint = rows::column_identity_fingerprint(&node.options);
+        let column_definition_fingerprint = rows::column_definition_fingerprint(&node.options);
+        let row_fingerprint = rows::rows_fingerprint(&node.items);
+        let groups_fingerprint = rows::header_groups_fingerprint(&node.header_groups);
+        let cell_selectable = node.cell_selectable.unwrap_or(false);
+        let row_header = node.row_header.unwrap_or(true);
+        let wanted = rows::table_selection_for_mode(node.value.as_ref(), cell_selectable);
 
         if let Some(slot) = self.tables.get_mut(key) {
             slot.on_change = node.on_change.clone();
             slot.on_confirm = node.on_confirm.clone().or(node.on_double_click.clone());
+            slot.on_export = node.on_export.clone();
             let state = slot.state.clone();
-            if slot.fingerprint != fingerprint {
-                slot.fingerprint = fingerprint;
-                let columns = columns.clone();
-                let rows = rows.clone();
+            let identity_changed = slot.column_identity_fingerprint != column_identity_fingerprint;
+            let definition_changed =
+                slot.column_definition_fingerprint != column_definition_fingerprint;
+            let rows_changed = slot.row_fingerprint != row_fingerprint;
+            let groups_changed = slot.groups_fingerprint != groups_fingerprint;
+            if let Some(refresh) = rows::table_refresh_kind(
+                identity_changed,
+                definition_changed,
+                rows_changed,
+                groups_changed,
+            ) {
+                slot.column_identity_fingerprint = column_identity_fingerprint;
+                slot.column_definition_fingerprint = column_definition_fingerprint;
+                slot.row_fingerprint = row_fingerprint;
+                slot.groups_fingerprint = groups_fingerprint;
+                let apply_table = identity_changed || definition_changed || rows_changed;
+                let columns = apply_table.then(|| columns.clone());
+                let rows_data = apply_table.then(|| rows_data.clone());
+                let header_groups = groups_changed.then(|| header_groups.clone());
                 state.update(cx, |table, cx| {
-                    table.delegate_mut().columns = columns;
-                    table.delegate_mut().rows = rows;
-                    table.refresh(cx);
+                    if let (Some(columns), Some(rows_data)) = (columns, rows_data) {
+                        let (next_cols, next_rows) = rows::merge_table_data(
+                            &table.delegate().columns,
+                            columns,
+                            rows_data,
+                            identity_changed,
+                        );
+                        if identity_changed || definition_changed {
+                            table.delegate_mut().columns = next_cols;
+                        }
+                        table.delegate_mut().rows = next_rows;
+                    }
+                    if let Some(header_groups) = header_groups {
+                        table.delegate_mut().header_groups = header_groups;
+                    }
+                    match refresh {
+                        rows::TableRefreshKind::Refresh => table.refresh(cx),
+                        rows::TableRefreshKind::RefreshHeaderLayout => {
+                            table.refresh_header_layout(cx)
+                        }
+                        rows::TableRefreshKind::Notify => cx.notify(),
+                    }
                 });
             }
-            self.sync_table_selection(key, &state, selected.as_deref(), cx);
+            state.update(cx, |table, _| {
+                table.cell_selectable = cell_selectable;
+                table.row_header = row_header;
+            });
+            self.sync_table_selection(key, &state, &wanted, cx);
+            self.flush_table_export(key, node, &state, cx);
             return state;
         }
 
-        let delegate = RowTableDelegate::new(columns, rows);
-        let state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let delegate = RowTableDelegate::new(columns, rows_data).with_header_groups(header_groups);
+        let state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .cell_selectable(cell_selectable)
+                .row_header(row_header)
+        });
         // Subscribe after the first programmatic select so SelectRow from
         // `set_selected_row` has no listener yet. Reuse uses suppress_select.
-        self.sync_table_selection(key, &state, selected.as_deref(), cx);
+        self.sync_table_selection(key, &state, &wanted, cx);
         let key_owned = key.to_string();
         cx.subscribe_in(
             &state,
@@ -3208,8 +3273,23 @@ impl RootView {
                     if !schedule {
                         return;
                     }
-                    // End of this effect cycle: after already-queued
-                    // DoubleClickedRow, or as the lone count-1 :on-change.
+                    let key = key_owned.clone();
+                    cx.defer_in(window, move |this, _, cx| {
+                        this.flush_pending_table_select(&key, cx);
+                    });
+                }
+                TableEvent::SelectCell(row, col) => {
+                    let suppress = this
+                        .tables
+                        .get(&key_owned)
+                        .is_some_and(|s| s.suppress_select);
+                    let schedule = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|slot| slot.coalesce.on_select_cell(*row, *col, suppress));
+                    if !schedule {
+                        return;
+                    }
                     let key = key_owned.clone();
                     cx.defer_in(window, move |this, _, cx| {
                         this.flush_pending_table_select(&key, cx);
@@ -3220,7 +3300,19 @@ impl RootView {
                         .tables
                         .get_mut(&key_owned)
                         .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
-                    emit_table_activation(this, &key_owned, *ix, include_change, cx);
+                    emit_table_row_activation(this, &key_owned, *ix, include_change, cx);
+                }
+                TableEvent::DoubleClickedCell(row, col) => {
+                    let include_change = this
+                        .tables
+                        .get_mut(&key_owned)
+                        .is_some_and(|s| s.coalesce.on_double_clicked_cell(*row, *col));
+                    emit_table_cell_activation(this, &key_owned, *row, *col, include_change, cx);
+                }
+                TableEvent::ColumnWidthsChanged(_) => {
+                    // Native widths live in Kit col_groups. Row-only and
+                    // header-group trees must not TableState::refresh, or a
+                    // later Clojure update snaps them back to :width.
                 }
                 _ => {}
             },
@@ -3230,13 +3322,19 @@ impl RootView {
             key.to_string(),
             TableSlot {
                 state: state.clone(),
-                fingerprint,
+                column_identity_fingerprint,
+                column_definition_fingerprint,
+                row_fingerprint,
+                groups_fingerprint,
                 on_change: node.on_change.clone(),
                 on_confirm: node.on_confirm.clone().or(node.on_double_click.clone()),
+                on_export: node.on_export.clone(),
+                last_export: None,
                 suppress_select: false,
                 coalesce: protocol::TableClickCoalesce::default(),
             },
         );
+        self.flush_table_export(key, node, &state, cx);
         state
     }
 
@@ -3244,31 +3342,32 @@ impl RootView {
         &mut self,
         key: &str,
         state: &Entity<TableState<RowTableDelegate>>,
-        selected: Option<&str>,
+        wanted: &rows::TableSelectionWanted,
         cx: &mut Context<Self>,
     ) {
         let decision = {
             let table = state.read(cx);
-            rows::selection_sync(
-                selected,
+            rows::table_selection_sync(
+                wanted,
                 table.selected_row(),
+                table.selected_cell(),
                 |id| table.delegate().index_of(id),
+                |id| table.delegate().col_index_of(id),
                 |id| table.delegate().contains_id(id),
+                |id| table.delegate().contains_col(id),
             )
         };
-        if matches!(decision, SelectionSync::Keep) {
+        if matches!(decision, TableSelectionSync::Keep) {
             return;
         }
-        // `set_selected_row` only queues `Effect::Emit`. Clearing suppress
-        // here would let the subscriber treat programmatic select as a
-        // user click. Drop the flag at the end of this effect cycle.
         if let Some(slot) = self.tables.get_mut(key) {
             slot.suppress_select = true;
         }
         state.update(cx, |table, cx| match decision {
-            SelectionSync::Select(ix) => table.set_selected_row(ix, cx),
-            SelectionSync::Clear => table.clear_selection(cx),
-            SelectionSync::Keep => {}
+            TableSelectionSync::SelectRow(ix) => table.set_selected_row(ix, cx),
+            TableSelectionSync::SelectCell(row, col) => table.set_selected_cell(row, col, cx),
+            TableSelectionSync::Clear => table.clear_selection(cx),
+            TableSelectionSync::Keep => {}
         });
         let key = key.to_string();
         let entity = cx.entity();
@@ -3281,14 +3380,49 @@ impl RootView {
         });
     }
 
-    /// Lone `:on-change` after `SelectRow` when `DoubleClickedRow` does
-    /// not follow from the same `on_row_left_click`. Always consume the
-    /// pending row so a change-less table cannot leave a stuck flush.
+    fn flush_table_export(
+        &mut self,
+        key: &str,
+        node: &Node,
+        state: &Entity<TableState<RowTableDelegate>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(token) = rows::table_export_generation(node.export_generation.as_ref()) else {
+            return;
+        };
+        let callback = match self.tables.get(key) {
+            Some(slot)
+                if slot.last_export.as_deref() != Some(token.as_str())
+                    && slot.on_export.is_some() =>
+            {
+                slot.on_export.clone()
+            }
+            _ => return,
+        };
+        let Some(callback) = callback else {
+            return;
+        };
+        let (headers, dump_rows) = state.read(cx).dump(cx);
+        if let Some(slot) = self.tables.get_mut(key) {
+            slot.last_export = Some(token);
+        }
+        let payload = protocol::table_dump_payload(headers, dump_rows);
+        let entity = cx.entity();
+        cx.defer(move |app| {
+            let _ = entity.update(app, |this, _| {
+                this.emit_value(callback, payload);
+            });
+        });
+    }
+
+    /// Lone `:on-change` after SelectRow / SelectCell when a double-click
+    /// does not follow from the same Kit click. Always consume the pending
+    /// select so a change-less table cannot leave a stuck flush.
     fn flush_pending_table_select(&mut self, key: &str, cx: &App) {
         let Some(slot) = self.tables.get_mut(key) else {
             return;
         };
-        let Some(ix) = slot.coalesce.take_pending_select() else {
+        let Some(pending) = slot.coalesce.take_pending() else {
             return;
         };
         let callback = slot.on_change.clone();
@@ -3296,12 +3430,27 @@ impl RootView {
         let Some(callback) = callback else {
             return;
         };
-        let Some(row_id) = state.read(cx).delegate().id_at(ix) else {
-            return;
+        let payload = match pending {
+            protocol::TablePendingSelect::Row(ix) => {
+                let Some(row_id) = state.read(cx).delegate().id_at(ix) else {
+                    return;
+                };
+                json!(row_id)
+            }
+            protocol::TablePendingSelect::Cell { row, col } => {
+                let table = state.read(cx);
+                let Some(row_id) = table.delegate().id_at(row) else {
+                    return;
+                };
+                let Some(col_id) = table.delegate().col_id_at(col) else {
+                    return;
+                };
+                protocol::table_cell_payload(row_id, col_id)
+            }
         };
         protocol::send_callbacks(
             &self.cmd_tx,
-            protocol::table_activation_calls(Some(callback), None, row_id),
+            protocol::table_activation_calls(Some(callback), None, payload),
         );
     }
 
@@ -6027,7 +6176,13 @@ fn emit_combobox_confirm(this: &mut RootView, key: &str, values: &[SharedString]
     protocol::send_callbacks(&this.cmd_tx, calls);
 }
 
-fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: bool, cx: &App) {
+fn emit_table_row_activation(
+    this: &RootView,
+    key: &str,
+    ix: usize,
+    include_change: bool,
+    cx: &App,
+) {
     let Some(slot) = this.tables.get(key) else {
         return;
     };
@@ -6041,7 +6196,40 @@ fn emit_table_activation(this: &RootView, key: &str, ix: usize, include_change: 
     };
     protocol::send_callbacks(
         &this.cmd_tx,
-        protocol::table_activation_calls(on_change, slot.on_confirm.clone(), row_id),
+        protocol::table_activation_calls(on_change, slot.on_confirm.clone(), json!(row_id)),
+    );
+}
+
+fn emit_table_cell_activation(
+    this: &RootView,
+    key: &str,
+    row: usize,
+    col: usize,
+    include_change: bool,
+    cx: &App,
+) {
+    let Some(slot) = this.tables.get(key) else {
+        return;
+    };
+    let table = slot.state.read(cx);
+    let Some(row_id) = table.delegate().id_at(row) else {
+        return;
+    };
+    let Some(col_id) = table.delegate().col_id_at(col) else {
+        return;
+    };
+    let on_change = if include_change {
+        slot.on_change.clone()
+    } else {
+        None
+    };
+    protocol::send_callbacks(
+        &this.cmd_tx,
+        protocol::table_activation_calls(
+            on_change,
+            slot.on_confirm.clone(),
+            protocol::table_cell_payload(row_id, col_id),
+        ),
     );
 }
 

@@ -225,6 +225,65 @@
         (on-change (resolve-option-id id-map wire-value))))
     on-change))
 
+(defn- table-payload-id
+  [m k]
+  (or (get m k) (get m (name k))))
+
+(defn- wrap-table-callback
+  "Restore row and column ids from separate namespaces.
+
+  Rows and columns can share a wire string (`:lang` vs `\"lang\"`)
+  without colliding. Cell payloads are `{:row … :col …}`. Export
+  dumps are not wrapped — they are headers/rows text."
+  [on-change rows columns]
+  (if (fn? on-change)
+    (let [row-id-map (option-id-map rows)
+          col-id-map (option-id-map columns)]
+      (fn [wire-value]
+        (on-change
+         (cond
+           (map? wire-value)
+           (let [row (table-payload-id wire-value :row)
+                 col (table-payload-id wire-value :col)]
+             (if (some? col)
+               {:row (resolve-option-id row-id-map row)
+                :col (resolve-option-id col-id-map col)}
+               (resolve-option-id row-id-map
+                                  (or row (table-payload-id wire-value :id)))))
+           (and (sequential? wire-value)
+                (not (string? wire-value))
+                (= 2 (count wire-value)))
+           {:row (resolve-option-id row-id-map (first wire-value))
+            :col (resolve-option-id col-id-map (second wire-value))}
+           :else (resolve-option-id row-id-map wire-value)))))
+    on-change))
+
+(defn- with-table-callbacks
+  [opts rows columns ks]
+  (reduce (fn [m k]
+            (let [f (get m k)]
+              (cond-> m
+                (fn? f) (assoc k (wrap-table-callback f rows columns)))))
+          opts
+          ks))
+
+(defn- wire-table-selected
+  "Row id string, or a cell map / `[row col]`. Maps are not `str`d."
+  [value]
+  (cond
+    (nil? value) nil
+    (map? value)
+    (let [row (or (:row value) (:id value))
+          col (or (:col value) (:column value))]
+      (if (some? col)
+        {:row (wire-id row) :col (wire-id col)}
+        (wire-id row)))
+    (and (sequential? value) (not (string? value)))
+    (if (= 2 (count value))
+      [(wire-id (first value)) (wire-id (second value))]
+      (mapv wire-id value))
+    :else (wire-id value)))
+
 (defn- with-id-callbacks
   "Restore original Clojure ids for the given option callbacks."
   [opts xs ks]
@@ -1245,8 +1304,18 @@
     (cond-> n
       (and (map? x) (some? (:width x))) (assoc :width (:width x))
       (and (map? x) (some? (:span x))) (assoc :span (:span x))
+      (and (map? x) (some? (:selectable x))) (assoc :selectable (boolean (:selectable x)))
       (and (map? x) (some? (:align x)))
       (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x)))))))
+
+(defn- table-header-groups
+  [groups]
+  (into []
+        (keep (fn [row]
+                (when (sequential? row)
+                  (let [cells (into [] (keep table-column) row)]
+                    (when (seq cells) cells)))))
+        (or groups [])))
 
 (defn- data-table-row [x]
   (cond
@@ -1685,38 +1754,60 @@
   "Virtualized data table (Kit DataTable). `:columns` are `{id, label, width}`
   maps (not the description-list `:columns` count). `:rows` are
   `{id, cells [...]}`. `on-change` receives the selected row's original
-  id. `:on-confirm` (or `:on-double-click`) fires on double-click with
-  that same original id. Kit `on_row_left_click` always emits
-  `SelectRow`; when `click_count` is 2 it then emits `DoubleClickedRow`
-  from that same call. A count-1 click is only `:on-change` (deferred to
-  the end of the GPUI effect cycle). A count-2 click is `:on-change`
-  then `:on-confirm` as one batch against one callback generation, then
-  one tree fetch. Programmatic `:selected` does not emit `:on-change`.
+  id, or `{:row … :col …}` when `:cell-selectable` is on. `:on-confirm`
+  (or `:on-double-click`) fires on double-click with that same payload.
+  Kit `on_row_left_click` always emits `SelectRow`; when `click_count`
+  is 2 it then emits `DoubleClickedRow` from that same call. Cell mode
+  uses `SelectCell` / `DoubleClickedCell`. A count-1 click is only
+  `:on-change` (deferred to the end of the GPUI effect cycle). A
+  count-2 click is `:on-change` then `:on-confirm` as one batch against
+  one callback generation, then one tree fetch. Programmatic `:selected`
+  does not emit `:on-change`. String `:selected` is a row id; a map
+  `{:row :col}` or `[row col]` is Kit `set_selected_cell`.
+
+  `:header-groups` is Kit `group_headers` (rows of `{:label :span}`).
+  `:cell-selectable` is Kit `TableState::cell_selectable` (omit = false).
+  `:row-header` is the row-index column in cell mode (omit = Kit true).
+  Pixel `:row-height` is Kit `Size::Size` (`table_row_height`). Named
+  `:size` is control size. Viewport `:height` is the outer wrapper.
+  `:export-generation` plus `:on-export` dumps native `headers` / `rows`
+  (column order after a header drag). `:on-export` is dump text — it
+  does not restore option ids. Row and column ids are separate
+  namespaces: a row `:lang` and a column `\"lang\"` both wire to
+  `\"lang\"` and restore independently.
 
   `ui/table` is Kit's declarative (non-virtualized) Table.
 
   (ui/data-table {:columns [{:id :name :label \"Name\"} {:id :lang :label \"Lang\"}]
                   :rows [{:id :ada :cells [\"Ada\" \"Clojure\"]}]
-                  :selected :ada
-                  :on-change set-row!})"
+                  :header-groups [[{:label \"Identity\" :span 2}]]
+                  :cell-selectable true
+                  :selected {:row :ada :col :lang}
+                  :on-change set-sel!})"
   [opts]
   (let [opts (if (map? opts) opts {})
         columns (or (:columns opts) (:options opts) [])
         rows (or (:rows opts) (:items opts) [])
+        groups (:header-groups opts)
         opts (-> opts
-                 (dissoc :columns :rows :items :options)
+                 (dissoc :columns :rows :items :options :header-groups)
                  rewrite-selected
                  apply-control-size)
         selected (:value opts)
-        opts (with-id-callbacks
-               (dissoc opts :value)
+        opts (cond-> (dissoc opts :value)
+               (keyword? (:export-generation opts))
+               (update :export-generation name))
+        opts (with-table-callbacks
+               opts
                rows
+               columns
                [:on-change :on-confirm :on-double-click])]
-    (merge-widget {:type :data-table
-                   :value (wire-id selected)
-                   :options (into [] (keep table-column) columns)
-                   :items (into [] (keep data-table-row) rows)}
-                  opts)))
+    (cond-> (merge-widget {:type :data-table
+                           :value (wire-table-selected selected)
+                           :options (into [] (keep table-column) columns)
+                           :items (into [] (keep data-table-row) rows)}
+                          opts)
+      (seq groups) (assoc :header-groups (table-header-groups groups)))))
 
 (defn- table-type? [x expected]
   (and (ui-node? x) (= (name (:type x)) expected)))
