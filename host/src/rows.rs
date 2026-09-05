@@ -10,12 +10,13 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IndexPath, h_flex,
     list::{ListDelegate, ListItem, ListState},
-    table::{Column, ColumnGroup, ColumnSort, TableDelegate, TableState},
+    table::{Column, ColumnGroup, ColumnSort, TableDelegate, TableEvent, TableState},
     tree::TreeItem,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
@@ -216,6 +217,18 @@ pub fn table_selection_for_mode(
     }
 }
 
+/// Host-tracked logical table selection. Kit's `SelectionMode` is private
+/// and `selected_cell()` / `selected_row()` return stored fields even after
+/// the active mode has switched, so `is_some()` is not the active mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableSelectionMode {
+    #[default]
+    None,
+    Row,
+    Cell,
+    Column,
+}
+
 /// Native selection update for a controlled table `:value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableSelectionSync {
@@ -227,6 +240,7 @@ pub enum TableSelectionSync {
 
 pub fn table_selection_sync(
     wanted: &TableSelectionWanted,
+    mode: TableSelectionMode,
     selected_row: Option<usize>,
     selected_cell: Option<(usize, usize)>,
     row_index: impl Fn(&str) -> Option<usize>,
@@ -236,38 +250,38 @@ pub fn table_selection_sync(
 ) -> TableSelectionSync {
     match wanted {
         TableSelectionWanted::Clear => {
-            if selected_row.is_some() || selected_cell.is_some() {
-                TableSelectionSync::Clear
-            } else {
+            if matches!(mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
+            } else {
+                TableSelectionSync::Clear
             }
         }
         TableSelectionWanted::Row(id) => {
             if let Some(ix) = row_index(id) {
-                if selected_cell.is_none() && selected_row == Some(ix) {
+                if mode == TableSelectionMode::Row && selected_row == Some(ix) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectRow(ix)
                 }
             } else if row_exists(id) {
                 TableSelectionSync::Keep
-            } else if selected_row.is_some() || selected_cell.is_some() {
-                TableSelectionSync::Clear
-            } else {
+            } else if matches!(mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
+            } else {
+                TableSelectionSync::Clear
             }
         }
         TableSelectionWanted::Cell { row, col } => match (row_index(row), col_index(col)) {
             (Some(r), Some(c)) => {
-                if selected_cell == Some((r, c)) {
+                if mode == TableSelectionMode::Cell && selected_cell == Some((r, c)) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectCell(r, c)
                 }
             }
             _ if row_exists(row) && col_exists(col) => TableSelectionSync::Keep,
-            _ if selected_row.is_some() || selected_cell.is_some() => TableSelectionSync::Clear,
-            _ => TableSelectionSync::Keep,
+            _ if matches!(mode, TableSelectionMode::None) => TableSelectionSync::Keep,
+            _ => TableSelectionSync::Clear,
         },
     }
 }
@@ -457,30 +471,54 @@ pub fn remap_table_selection_after_sort(
 
 /// Kit index update after a native sort. Logical row/cell identity is
 /// unchanged; callers must suppress Clojure `:on-change`.
+///
+/// Kit `selected_cell()` returns the stored field even after
+/// `set_selected_row` (and `selected_row` survives `set_selected_cell`).
+/// Callers pass the host-tracked logical `mode` rather than inferring
+/// it from which slots are `Some`.
 pub fn table_sort_selection_sync(
     old_ids: &[String],
     new_ids: &[String],
+    mode: TableSelectionMode,
     selected_row: Option<usize>,
     selected_cell: Option<(usize, usize)>,
 ) -> TableSelectionSync {
     let (next_row, next_cell) =
         remap_table_selection_after_sort(old_ids, new_ids, selected_row, selected_cell);
-    if selected_cell.is_some() {
-        if selected_cell == next_cell {
-            TableSelectionSync::Keep
-        } else {
-            match next_cell {
-                Some((row, col)) => TableSelectionSync::SelectCell(row, col),
-                None => TableSelectionSync::Clear,
+    match mode {
+        TableSelectionMode::Cell => {
+            if selected_cell == next_cell {
+                TableSelectionSync::Keep
+            } else {
+                match next_cell {
+                    Some((row, col)) => TableSelectionSync::SelectCell(row, col),
+                    None => TableSelectionSync::Clear,
+                }
             }
         }
-    } else if selected_row == next_row {
-        TableSelectionSync::Keep
-    } else {
-        match next_row {
-            Some(row) => TableSelectionSync::SelectRow(row),
-            None => TableSelectionSync::Clear,
+        TableSelectionMode::Row => {
+            if selected_row == next_row {
+                TableSelectionSync::Keep
+            } else {
+                match next_row {
+                    Some(row) => TableSelectionSync::SelectRow(row),
+                    None => TableSelectionSync::Clear,
+                }
+            }
         }
+        TableSelectionMode::Column | TableSelectionMode::None => TableSelectionSync::Keep,
+    }
+}
+
+/// Kit `SelectionMode` is private. Public `TableEvent`s are the source
+/// of truth for the host-tracked logical mode.
+pub fn table_selection_mode_from_kit_event(event: &TableEvent) -> Option<TableSelectionMode> {
+    match event {
+        TableEvent::SelectRow(_) => Some(TableSelectionMode::Row),
+        TableEvent::SelectCell(_, _) => Some(TableSelectionMode::Cell),
+        TableEvent::SelectColumn(_) => Some(TableSelectionMode::Column),
+        TableEvent::ClearSelection => Some(TableSelectionMode::None),
+        _ => None,
     }
 }
 
@@ -902,6 +940,12 @@ pub struct RowTableDelegate {
     /// True while a native-sort index remap is applying Kit selection.
     /// `SelectRow` / `SelectCell` must not become Clojure `:on-change`.
     suppress_select: bool,
+    /// Logical Row/Cell/Column/None. Kit leaves the other selection
+    /// slots populated when the active mode switches, and `SelectionMode`
+    /// is private, so sort remap cannot trust `selected_cell().is_some()`.
+    /// Interior mutability so a `TableEvent` subscriber can record the
+    /// mode without a nested entity update.
+    selection_mode: Cell<TableSelectionMode>,
 }
 
 impl RowTableDelegate {
@@ -922,6 +966,7 @@ impl RowTableDelegate {
             on_sort: None,
             load_more_sent: false,
             suppress_select: false,
+            selection_mode: Cell::new(TableSelectionMode::None),
         };
         apply_active_column_sort(&this.columns, &mut this.rows, &this.source_order);
         this
@@ -989,6 +1034,14 @@ impl RowTableDelegate {
 
     pub fn suppress_select(&self) -> bool {
         self.suppress_select
+    }
+
+    pub fn selection_mode(&self) -> TableSelectionMode {
+        self.selection_mode.get()
+    }
+
+    pub fn set_selection_mode(&self, mode: TableSelectionMode) {
+        self.selection_mode.set(mode);
     }
 
     pub fn set_rows(&mut self, rows: Vec<Row>) {
@@ -1210,6 +1263,7 @@ impl TableDelegate for RowTableDelegate {
                 let action = table_sort_selection_sync(
                     &old_ids,
                     &new_ids,
+                    table.delegate().selection_mode(),
                     table.selected_row(),
                     table.selected_cell(),
                 );
@@ -1218,11 +1272,22 @@ impl TableDelegate for RowTableDelegate {
                 }
                 table.delegate_mut().suppress_select = true;
                 match action {
-                    TableSelectionSync::SelectRow(ix) => table.set_selected_row(ix, cx),
+                    TableSelectionSync::SelectRow(ix) => {
+                        table.delegate().set_selection_mode(TableSelectionMode::Row);
+                        table.set_selected_row(ix, cx)
+                    }
                     TableSelectionSync::SelectCell(row, col) => {
+                        table
+                            .delegate()
+                            .set_selection_mode(TableSelectionMode::Cell);
                         table.set_selected_cell(row, col, cx)
                     }
-                    TableSelectionSync::Clear => table.clear_selection(cx),
+                    TableSelectionSync::Clear => {
+                        table
+                            .delegate()
+                            .set_selection_mode(TableSelectionMode::None);
+                        table.clear_selection(cx)
+                    }
                     TableSelectionSync::Keep => {}
                 }
                 cx.defer_in(window, |table, _, _| {
@@ -1739,23 +1804,198 @@ mod tests {
         assert_eq!(new_ids[0], "a");
         assert_eq!(new_ids[1], "b");
 
-        let row_action = table_sort_selection_sync(&old_ids, &new_ids, Some(0), None);
+        let row_action =
+            table_sort_selection_sync(&old_ids, &new_ids, TableSelectionMode::Row, Some(0), None);
         assert_eq!(row_action, TableSelectionSync::SelectRow(1));
         assert!(table_sort_remap_suppresses_on_change(row_action));
         let mut coalesce = crate::protocol::TableClickCoalesce::default();
         assert!(!coalesce.on_select_row(1, table_sort_remap_suppresses_on_change(row_action)));
         assert!(coalesce.take_pending().is_none());
 
-        let cell_action = table_sort_selection_sync(&old_ids, &new_ids, Some(0), Some((0, 1)));
+        let cell_action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Cell,
+            Some(0),
+            Some((0, 1)),
+        );
         assert_eq!(cell_action, TableSelectionSync::SelectCell(1, 1));
         assert!(table_sort_remap_suppresses_on_change(cell_action));
         let mut coalesce = crate::protocol::TableClickCoalesce::default();
         assert!(!coalesce.on_select_cell(1, 1, table_sort_remap_suppresses_on_change(cell_action)));
         assert!(coalesce.take_pending().is_none());
 
-        let keep = table_sort_selection_sync(&old_ids, &old_ids, Some(0), None);
+        let keep =
+            table_sort_selection_sync(&old_ids, &old_ids, TableSelectionMode::Row, Some(0), None);
         assert_eq!(keep, TableSelectionSync::Keep);
         assert!(!table_sort_remap_suppresses_on_change(keep));
+    }
+
+    /// Kit `set_selected_row` does not clear `selected_cell`. After
+    /// select cell B then row A, sort must keep row A — not reactivate B.
+    #[test]
+    fn native_sort_remap_keeps_row_when_cell_slot_is_stale() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids, vec!["a".to_string(), "b".to_string()]);
+
+        // Active mode Row: selected_row 1 is a; selected_cell (0, 1) is stale b.
+        let action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Row,
+            Some(1),
+            Some((0, 1)),
+        );
+        assert_eq!(action, TableSelectionSync::SelectRow(0));
+        assert_ne!(action, TableSelectionSync::SelectCell(1, 1));
+    }
+
+    /// Kit `set_selected_cell` does not clear `selected_row`. After
+    /// select row B then cell A, sort must keep the cell — not row B.
+    #[test]
+    fn native_sort_remap_keeps_cell_when_row_slot_is_stale() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids, vec!["a".to_string(), "b".to_string()]);
+
+        // Active mode Cell: selected_cell (1, 1) is a; selected_row 0 is stale b.
+        let action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Cell,
+            Some(0),
+            Some((1, 1)),
+        );
+        assert_eq!(action, TableSelectionSync::SelectCell(0, 1));
+        assert_ne!(action, TableSelectionSync::SelectRow(1));
+    }
+
+    #[test]
+    fn native_sort_remap_keeps_column_and_empty_mode() {
+        let old_ids = vec!["b".into(), "a".into()];
+        let new_ids = vec!["a".into(), "b".into()];
+        assert_eq!(
+            table_sort_selection_sync(
+                &old_ids,
+                &new_ids,
+                TableSelectionMode::Column,
+                Some(1),
+                Some((0, 1)),
+            ),
+            TableSelectionSync::Keep
+        );
+        assert_eq!(
+            table_sort_selection_sync(
+                &old_ids,
+                &new_ids,
+                TableSelectionMode::None,
+                Some(1),
+                Some((0, 1)),
+            ),
+            TableSelectionSync::Keep
+        );
+    }
+
+    #[test]
+    fn table_selection_mode_follows_kit_events() {
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectRow(1)),
+            Some(TableSelectionMode::Row)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectCell(0, 1)),
+            Some(TableSelectionMode::Cell)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectColumn(2)),
+            Some(TableSelectionMode::Column)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::ClearSelection),
+            Some(TableSelectionMode::None)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::ColumnWidthsChanged(Vec::new())),
+            None
+        );
+    }
+
+    #[test]
+    fn table_selection_sync_uses_logical_mode_not_stale_slots() {
+        let row = |id: &str| match id {
+            "a" => Some(1),
+            "b" => Some(0),
+            _ => None,
+        };
+        let col = |id: &str| match id {
+            "lang" => Some(1),
+            _ => None,
+        };
+        let exists = |_: &str| true;
+
+        // Wanted row a (index 1) while Kit still holds stale cell b/col1.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Row("a".into()),
+                TableSelectionMode::Row,
+                Some(1),
+                Some((0, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::Keep
+        );
+
+        // Wanted cell a/col1 while Kit still holds stale row b.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Cell {
+                    row: "a".into(),
+                    col: "lang".into()
+                },
+                TableSelectionMode::Cell,
+                Some(0),
+                Some((1, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::Keep
+        );
+
+        // Stale matching cell must not Keep a cell restore while Row is active.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Cell {
+                    row: "b".into(),
+                    col: "lang".into()
+                },
+                TableSelectionMode::Row,
+                Some(1),
+                Some((0, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::SelectCell(0, 1)
+        );
     }
 
     #[test]
@@ -1992,6 +2232,7 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
+                TableSelectionMode::Row,
                 Some(0),
                 None,
                 |_| Some(0),
@@ -2007,6 +2248,7 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
+                TableSelectionMode::Cell,
                 None,
                 Some((0, 1)),
                 |_| Some(0),

@@ -3365,63 +3365,75 @@ impl RootView {
         cx.subscribe_in(
             &state,
             window,
-            move |this, table, event: &TableEvent, window, cx| match event {
-                TableEvent::SelectRow(ix) => {
-                    let suppress = this
-                        .tables
-                        .get(&key_owned)
-                        .is_some_and(|s| s.suppress_select)
-                        || table.read(cx).delegate().suppress_select();
-                    let schedule = this
-                        .tables
-                        .get_mut(&key_owned)
-                        .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
-                    if !schedule {
-                        return;
+            move |this, table, event: &TableEvent, window, cx| {
+                if let Some(mode) = rows::table_selection_mode_from_kit_event(event) {
+                    table.read(cx).delegate().set_selection_mode(mode);
+                }
+                match event {
+                    TableEvent::SelectRow(ix) => {
+                        let suppress = this
+                            .tables
+                            .get(&key_owned)
+                            .is_some_and(|s| s.suppress_select)
+                            || table.read(cx).delegate().suppress_select();
+                        let schedule = this
+                            .tables
+                            .get_mut(&key_owned)
+                            .is_some_and(|slot| slot.coalesce.on_select_row(*ix, suppress));
+                        if !schedule {
+                            return;
+                        }
+                        let key = key_owned.clone();
+                        cx.defer_in(window, move |this, _, cx| {
+                            this.flush_pending_table_select(&key, cx);
+                        });
                     }
-                    let key = key_owned.clone();
-                    cx.defer_in(window, move |this, _, cx| {
-                        this.flush_pending_table_select(&key, cx);
-                    });
-                }
-                TableEvent::SelectCell(row, col) => {
-                    let suppress = this
-                        .tables
-                        .get(&key_owned)
-                        .is_some_and(|s| s.suppress_select)
-                        || table.read(cx).delegate().suppress_select();
-                    let schedule = this
-                        .tables
-                        .get_mut(&key_owned)
-                        .is_some_and(|slot| slot.coalesce.on_select_cell(*row, *col, suppress));
-                    if !schedule {
-                        return;
+                    TableEvent::SelectCell(row, col) => {
+                        let suppress = this
+                            .tables
+                            .get(&key_owned)
+                            .is_some_and(|s| s.suppress_select)
+                            || table.read(cx).delegate().suppress_select();
+                        let schedule = this
+                            .tables
+                            .get_mut(&key_owned)
+                            .is_some_and(|slot| slot.coalesce.on_select_cell(*row, *col, suppress));
+                        if !schedule {
+                            return;
+                        }
+                        let key = key_owned.clone();
+                        cx.defer_in(window, move |this, _, cx| {
+                            this.flush_pending_table_select(&key, cx);
+                        });
                     }
-                    let key = key_owned.clone();
-                    cx.defer_in(window, move |this, _, cx| {
-                        this.flush_pending_table_select(&key, cx);
-                    });
+                    TableEvent::DoubleClickedRow(ix) => {
+                        let include_change = this
+                            .tables
+                            .get_mut(&key_owned)
+                            .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
+                        emit_table_row_activation(this, &key_owned, *ix, include_change, cx);
+                    }
+                    TableEvent::DoubleClickedCell(row, col) => {
+                        let include_change = this
+                            .tables
+                            .get_mut(&key_owned)
+                            .is_some_and(|s| s.coalesce.on_double_clicked_cell(*row, *col));
+                        emit_table_cell_activation(
+                            this,
+                            &key_owned,
+                            *row,
+                            *col,
+                            include_change,
+                            cx,
+                        );
+                    }
+                    TableEvent::ColumnWidthsChanged(_) => {
+                        // Native widths live in Kit col_groups. Row-only and
+                        // header-group trees must not TableState::refresh, or a
+                        // later Clojure update snaps them back to :width.
+                    }
+                    _ => {}
                 }
-                TableEvent::DoubleClickedRow(ix) => {
-                    let include_change = this
-                        .tables
-                        .get_mut(&key_owned)
-                        .is_some_and(|s| s.coalesce.on_double_clicked_row(*ix));
-                    emit_table_row_activation(this, &key_owned, *ix, include_change, cx);
-                }
-                TableEvent::DoubleClickedCell(row, col) => {
-                    let include_change = this
-                        .tables
-                        .get_mut(&key_owned)
-                        .is_some_and(|s| s.coalesce.on_double_clicked_cell(*row, *col));
-                    emit_table_cell_activation(this, &key_owned, *row, *col, include_change, cx);
-                }
-                TableEvent::ColumnWidthsChanged(_) => {
-                    // Native widths live in Kit col_groups. Row-only and
-                    // header-group trees must not TableState::refresh, or a
-                    // later Clojure update snaps them back to :width.
-                }
-                _ => {}
             },
         )
         .detach();
@@ -3456,6 +3468,7 @@ impl RootView {
             let table = state.read(cx);
             rows::table_selection_sync(
                 wanted,
+                table.delegate().selection_mode(),
                 table.selected_row(),
                 table.selected_cell(),
                 |id| table.delegate().index_of(id),
@@ -3471,9 +3484,24 @@ impl RootView {
             slot.suppress_select = true;
         }
         state.update(cx, |table, cx| match decision {
-            TableSelectionSync::SelectRow(ix) => table.set_selected_row(ix, cx),
-            TableSelectionSync::SelectCell(row, col) => table.set_selected_cell(row, col, cx),
-            TableSelectionSync::Clear => table.clear_selection(cx),
+            TableSelectionSync::SelectRow(ix) => {
+                table
+                    .delegate()
+                    .set_selection_mode(rows::TableSelectionMode::Row);
+                table.set_selected_row(ix, cx)
+            }
+            TableSelectionSync::SelectCell(row, col) => {
+                table
+                    .delegate()
+                    .set_selection_mode(rows::TableSelectionMode::Cell);
+                table.set_selected_cell(row, col, cx)
+            }
+            TableSelectionSync::Clear => {
+                table
+                    .delegate()
+                    .set_selection_mode(rows::TableSelectionMode::None);
+                table.clear_selection(cx)
+            }
             TableSelectionSync::Keep => {}
         });
         let key = key.to_string();

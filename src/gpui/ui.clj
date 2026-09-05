@@ -1959,8 +1959,9 @@
   header into sorting. An initial `:sort :asc` / `:desc` sorts the
   first paint, not only later header clicks. Header click cycles
   Default → Desc → Asc → Default, sorts in-memory by `cell_text`
-  (numeric when both parse), remaps native row/cell selection by row
-  id without emitting `:on-change`, and sends `:on-sort` `{:id :sort}`.
+  (numeric when both parse), remaps the active logical row or cell
+  selection by row id (Kit can leave the other slot populated) without
+  emitting `:on-change`, and sends `:on-sort` `{:id :sort}`.
   `Default` restores the last Clojure row order. A later row-only tree
   with the same fingerprint keeps native order. Column `:fixed` /
   `:fixed-left` (`true` or `:left`), `:resizable`, `:movable`,
