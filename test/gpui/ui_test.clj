@@ -123,7 +123,7 @@
   (is (= {:id "Rust" :label "Rust"} (ui/option-item "Rust")))
   (is (= {:id "clj" :label "Clojure"}
          (ui/option-item {:id :clj :label "Clojure"})))
-    (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
+  (is (= 10 (:value (ui/option-item {:id :a :label "A" :value 10}))))
   (is (= "#ff0000" (:stroke (ui/option-item {:id :desk :stroke "#ff0000"}))))
   (is (= "#aabbcc" (:fill (ui/option-item {:id :s :fill "#aabbcc"}))))
   (is (= "3 units" (:display (ui/option-item {:id :a :label "A" :value 3 :display "3 units"}))))
