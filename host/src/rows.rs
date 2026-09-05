@@ -1648,9 +1648,10 @@ mod tests {
         assert_eq!(row, Some(1));
         assert_eq!(cell, None);
 
-        // Default from sorted order remaps a at 0 back to 1.
-        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, row, cell);
+        // Default from sorted order: selected a at 0 → 1 in Clojure order.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, Some(0), None);
         assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
         assert_eq!(row, Some(1));
         assert_eq!(cell, None);
     }
