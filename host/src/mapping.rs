@@ -10,9 +10,11 @@ use gpui_component::{
     group_box::GroupBoxVariant,
     input::{Editor, Input, InputContentType, NumberInput, OtpInput, Textarea},
     label::{HighlightsMatch, Label},
+    list::{List, ListDelegate},
     shimmer::ShimmerStyle,
     slider::SliderScale,
     tab::TabVariant,
+    table::{DataTable, TableDelegate},
     tag::TagVariant,
 };
 use gpui_kit as gpui;
@@ -51,6 +53,70 @@ pub fn table_row_size(node: &Node) -> Size {
     } else {
         parse_scale(node.control_size.as_deref())
     }
+}
+
+/// Kit `TableState` flags. Omitted wires restore Kit defaults on every
+/// tree (`true`, except `cell_selectable` which is false).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableStateFlags {
+    pub cell_selectable: bool,
+    pub row_header: bool,
+    pub sortable: bool,
+    pub col_movable: bool,
+    pub col_resizable: bool,
+    pub col_fixed: bool,
+    pub loop_selection: bool,
+    pub row_selectable: bool,
+    pub col_selectable: bool,
+}
+
+/// Declarative TableState flags for one Clojure tree. Omitted is not
+/// "leave the retained value"; it is the Kit default.
+pub fn table_state_flags(node: &Node) -> TableStateFlags {
+    TableStateFlags {
+        cell_selectable: node.cell_selectable.unwrap_or(false),
+        row_header: node.row_header.unwrap_or(true),
+        sortable: node.sortable.unwrap_or(true),
+        col_movable: node.col_movable.unwrap_or(true),
+        col_resizable: node.col_resizable.unwrap_or(true),
+        col_fixed: node.col_fixed.unwrap_or(true),
+        loop_selection: node.loop_selection.unwrap_or(true),
+        row_selectable: node.row_selectable.unwrap_or(true),
+        col_selectable: node.col_selectable.unwrap_or(true),
+    }
+}
+
+/// Kit `DataTable` stripe / bordered / scrollbar. Omitted keeps Kit
+/// (stripe false, bordered true, both scrollbars true).
+pub fn apply_data_table_chrome<D: TableDelegate>(
+    mut table: DataTable<D>,
+    node: &Node,
+) -> DataTable<D> {
+    if let Some(stripe) = node.stripe {
+        table = table.stripe(stripe);
+    }
+    if let Some(bordered) = node.bordered {
+        table = table.bordered(bordered);
+    }
+    if let Some(visible) = node.scrollbar {
+        table = table.scrollbar_visible(visible, visible);
+    }
+    table
+}
+
+/// Kit `List` scrollbar, search placeholder, and `Sizable`. Selectable
+/// is on `ListState`.
+pub fn apply_list_chrome<D: ListDelegate + 'static>(mut list: List<D>, node: &Node) -> List<D> {
+    if let Some(visible) = node.scrollbar {
+        list = list.scrollbar_visible(visible);
+    }
+    if let Some(placeholder) = node.search_placeholder.as_deref().filter(|s| !s.is_empty()) {
+        list = list.search_placeholder(placeholder.to_string());
+    }
+    if node.control_size.is_some() {
+        list = list.with_size(parse_scale(node.control_size.as_deref()));
+    }
+    list
 }
 
 pub fn parse_hsla(value: &str) -> Option<Hsla> {
@@ -1031,6 +1097,43 @@ mod tests {
             ..Node::default()
         };
         assert_eq!(table_row_size(&invalid), Size::Large);
+    }
+
+    #[test]
+    fn omitted_table_state_flags_restore_kit_defaults() {
+        let disabled = Node {
+            sortable: Some(false),
+            col_movable: Some(false),
+            col_resizable: Some(false),
+            col_fixed: Some(false),
+            loop_selection: Some(false),
+            row_selectable: Some(false),
+            col_selectable: Some(false),
+            cell_selectable: Some(true),
+            row_header: Some(false),
+            ..Node::default()
+        };
+        let flags = table_state_flags(&disabled);
+        assert!(!flags.sortable);
+        assert!(!flags.col_movable);
+        assert!(!flags.col_resizable);
+        assert!(!flags.col_fixed);
+        assert!(!flags.loop_selection);
+        assert!(!flags.row_selectable);
+        assert!(!flags.col_selectable);
+        assert!(flags.cell_selectable);
+        assert!(!flags.row_header);
+
+        let restored = table_state_flags(&Node::default());
+        assert!(restored.sortable);
+        assert!(restored.col_movable);
+        assert!(restored.col_resizable);
+        assert!(restored.col_fixed);
+        assert!(restored.loop_selection);
+        assert!(restored.row_selectable);
+        assert!(restored.col_selectable);
+        assert!(!restored.cell_selectable);
+        assert!(restored.row_header);
     }
 
     #[test]

@@ -625,6 +625,7 @@
               (ui/list list-items
                        {:selected (when (not= list-sel :gone) list-sel)
                         :searchable true
+                        :search-placeholder "Filter…"
                         :height 160
                         :on-change (fn [id]
                                      (swap! !state assoc :list-sel id :batch-shift? true))
@@ -671,10 +672,12 @@
                [{:id :inspect :label "Inspect"}
                 {:id :delete :label "Delete"}]
                {:on-change (set-key :menu)}
-               (ui/data-table (cond-> {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)}
+               (ui/data-table (cond-> {:columns [{:id :name :label "Name" :width (if (pos? list-rev) 180 140)
+                                                  :sortable true :fixed :left}
                                                  {:id :lang :label "Lang" :width 100 :align :end}]
                                        :rows table-rows
                                        :header-groups [[{:label "Identity" :span 2}]]
+                                       :stripe true
                                        :row-height 40
                                        :selected (when (not= table-sel :gone) table-sel)
                                        :height 160

@@ -813,6 +813,25 @@ pub struct Item {
     /// DataTable column: Kit `Column::selectable`. Omitted is Kit true.
     #[serde(default)]
     pub selectable: Option<bool>,
+    /// DataTable column: Kit `Column::sort` (`default` / `asc` / `desc`).
+    /// Omitted is not sortable. `true` / `sortable` is `Default`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// DataTable column: Kit `Column::fixed`. `left` / `true` pins left.
+    #[serde(default)]
+    pub fixed: Option<String>,
+    /// DataTable column: Kit `Column::resizable`. Omitted is Kit true.
+    #[serde(default)]
+    pub resizable: Option<bool>,
+    /// DataTable column: Kit `Column::movable`. Omitted is Kit true.
+    #[serde(default)]
+    pub movable: Option<bool>,
+    /// DataTable column: Kit `Column::min_width` in pixels.
+    #[serde(default, rename = "min-width")]
+    pub min_width: Option<f32>,
+    /// DataTable column: Kit `Column::max_width` in pixels.
+    #[serde(default, rename = "max-width")]
+    pub max_width: Option<f32>,
     /// Menu item check mark; tree unused.
     #[serde(default)]
     pub checked: Option<bool>,
@@ -980,6 +999,14 @@ pub struct Node {
     /// DataTable: Kit `TableState::dump` payload (`headers` + `rows`).
     #[serde(default, rename = "on-export")]
     pub on_export: Option<String>,
+    /// DataTable: Kit `TableDelegate::perform_sort`. Payload
+    /// `{"id": column-id, "sort": "asc"|"desc"|"default"}`.
+    #[serde(default, rename = "on-sort")]
+    pub on_sort: Option<String>,
+    /// DataTable / List: Kit `load_more` when scrolled near the bottom.
+    /// 0-arg. Host latches until rows / `has-more` / `loading` change.
+    #[serde(default, rename = "on-load-more")]
+    pub on_load_more: Option<String>,
     /// Command: search-field text after it actually changes.
     #[serde(default, rename = "on-query")]
     pub on_query: Option<String>,
@@ -1134,6 +1161,7 @@ pub struct Node {
     #[serde(default, rename = "menu-max-h")]
     pub menu_max_h: Option<f32>,
     /// Command: Kit `Command::bordered`. Omitted is Kit true.
+    /// DataTable: Kit `DataTable::bordered`. Omitted is Kit true.
     #[serde(default)]
     pub bordered: Option<bool>,
     /// Command / Combobox: Kit search text (`CommandState` /
@@ -1143,16 +1171,16 @@ pub struct Node {
     /// Command `on_query`).
     #[serde(default)]
     pub query: Option<String>,
-    /// Select / Combobox: Kit `search_placeholder`.
+    /// Select / Combobox / List: Kit `search_placeholder`.
     #[serde(default, rename = "search-placeholder")]
     pub search_placeholder: Option<String>,
     /// Combobox: Kit `Combobox::check_icon` (selected-row mark). Select
     /// has no analogous builder.
     #[serde(default, rename = "check-icon")]
     pub check_icon: Option<String>,
-    /// Select / Combobox: string form of Kit `empty` when the list has no
-    /// rows. Kit accepts arbitrary `IntoElement`; custom empty widgets
-    /// are not wrapped yet.
+    /// Select / Combobox / Command / List / DataTable: string form of
+    /// Kit `empty` / `render_empty` when there are no rows. Kit accepts
+    /// arbitrary `IntoElement`; custom empty widgets are not wrapped yet.
     #[serde(default)]
     pub empty: Option<String>,
     /// Select / Combobox: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
@@ -1385,6 +1413,8 @@ pub struct Node {
     #[serde(default, rename = "visible-pages")]
     pub visible_pages: Option<f32>,
     /// ProgressCircle indeterminate animation. When true, Kit ignores `value`.
+    /// Marker: Kit `Marker::loading`. Command: `CommandState::set_loading`.
+    /// List / DataTable: Kit `ListDelegate` / `TableDelegate` `loading`.
     #[serde(default)]
     pub loading: bool,
     /// ShimmerText sweep duration in seconds. Kit default 2. Omitted leaves Kit's default.
@@ -1482,6 +1512,8 @@ pub struct Node {
     #[serde(default)]
     pub status: Option<String>,
     /// MessageScroller: Kit `scrollbar`. Omitted leaves Kit's true.
+    /// List: Kit `List::scrollbar_visible`. DataTable: both axes of
+    /// `DataTable::scrollbar_visible`. Omitted leaves Kit's true.
     #[serde(default)]
     pub scrollbar: Option<bool>,
     /// MessageScroller: Kit `jump_button`. Omitted leaves Kit's true.
@@ -1568,6 +1600,44 @@ pub struct Node {
     /// the current native headers/rows (including moved columns).
     #[serde(default, rename = "export-generation")]
     pub export_generation: Option<Value>,
+    /// DataTable: Kit `DataTable::stripe`. Omitted is Kit false.
+    #[serde(default)]
+    pub stripe: Option<bool>,
+    /// DataTable: Kit `TableState::sortable`. Omitted is Kit true on
+    /// every tree (not "leave the last retained value").
+    /// Column `:sort` still has to opt a header into sorting.
+    #[serde(default)]
+    pub sortable: Option<bool>,
+    /// DataTable: Kit `TableState::col_movable`. Omitted is Kit true.
+    #[serde(default, rename = "col-movable")]
+    pub col_movable: Option<bool>,
+    /// DataTable: Kit `TableState::col_resizable`. Omitted is Kit true.
+    #[serde(default, rename = "col-resizable")]
+    pub col_resizable: Option<bool>,
+    /// DataTable: Kit `TableState::col_fixed`. Omitted is Kit true.
+    #[serde(default, rename = "col-fixed")]
+    pub col_fixed: Option<bool>,
+    /// DataTable: Kit `TableState::loop_selection`. Omitted is Kit true.
+    #[serde(default, rename = "loop-selection")]
+    pub loop_selection: Option<bool>,
+    /// DataTable: Kit `TableState::row_selectable`. Omitted is Kit true.
+    /// List: Kit `ListState::selectable`. Omitted is Kit true.
+    #[serde(default, rename = "row-selectable")]
+    pub row_selectable: Option<bool>,
+    /// DataTable: Kit `TableState::col_selectable`. Omitted is Kit true.
+    #[serde(default, rename = "col-selectable")]
+    pub col_selectable: Option<bool>,
+    /// List: Kit `ListState::selectable`. Omitted is Kit true.
+    /// Prefer this over `row-selectable` for lists.
+    #[serde(default)]
+    pub selectable: Option<bool>,
+    /// DataTable / List: Kit `TableDelegate` / `ListDelegate` `has_more`.
+    #[serde(default, rename = "has-more")]
+    pub has_more: bool,
+    /// DataTable / List: remaining-rows threshold for `load_more`.
+    /// Omitted is Kit 20.
+    #[serde(default, rename = "load-more-threshold")]
+    pub load_more_threshold: Option<f32>,
 }
 
 impl Node {
@@ -2656,6 +2726,11 @@ mod tests {
             "type": "list",
             "value": "alpha",
             "searchable": true,
+            "search-placeholder": "Filter…",
+            "selectable": false,
+            "empty": "No rows",
+            "has-more": true,
+            "on-load-more": "cb-more",
             "on-change": "cb-5",
             "on-confirm": "cb-6",
             "items": [{"id": "alpha", "label": "Alpha"}, {"id": "beta", "label": "Beta"}]
@@ -2663,6 +2738,11 @@ mod tests {
         .unwrap();
         assert_eq!(list.string_value().as_deref(), Some("alpha"));
         assert!(list.searchable);
+        assert_eq!(list.search_placeholder.as_deref(), Some("Filter…"));
+        assert_eq!(list.selectable, Some(false));
+        assert_eq!(list.empty.as_deref(), Some("No rows"));
+        assert!(list.has_more);
+        assert_eq!(list.on_load_more.as_deref(), Some("cb-more"));
         assert_eq!(list.on_confirm.as_deref(), Some("cb-6"));
 
         let table: Node = serde_json::from_value(json!({
@@ -2689,10 +2769,23 @@ mod tests {
             "row-height": 40,
             "export-generation": 2,
             "on-export": "cb-9",
+            "stripe": true,
+            "bordered": false,
+            "scrollbar": false,
+            "sortable": false,
+            "col-movable": false,
+            "col-resizable": false,
+            "col-fixed": false,
+            "loop-selection": false,
+            "has-more": true,
+            "load-more-threshold": 8,
+            "on-sort": "cb-sort",
+            "on-load-more": "cb-more",
+            "empty": "No rows",
             "header-groups": [[{"label": "Identity", "span": 2}]],
             "options": [
-                {"id": "name", "label": "Name", "align": "end", "selectable": false},
-                {"id": "lang", "label": "Lang"}
+                {"id": "name", "label": "Name", "align": "end", "selectable": false, "sort": "asc", "fixed": "left", "min-width": 40},
+                {"id": "lang", "label": "Lang", "resizable": false}
             ],
             "items": [{"id": "ada", "cells": ["Ada", "Clojure"]}]
         }))
@@ -2702,9 +2795,26 @@ mod tests {
         assert_eq!(extras.row_height, Some(40.0));
         assert_eq!(extras.export_generation, Some(json!(2)));
         assert_eq!(extras.on_export.as_deref(), Some("cb-9"));
+        assert_eq!(extras.stripe, Some(true));
+        assert_eq!(extras.bordered, Some(false));
+        assert_eq!(extras.scrollbar, Some(false));
+        assert_eq!(extras.sortable, Some(false));
+        assert_eq!(extras.col_movable, Some(false));
+        assert_eq!(extras.col_resizable, Some(false));
+        assert_eq!(extras.col_fixed, Some(false));
+        assert_eq!(extras.loop_selection, Some(false));
+        assert!(extras.has_more);
+        assert_eq!(extras.load_more_threshold, Some(8.0));
+        assert_eq!(extras.on_sort.as_deref(), Some("cb-sort"));
+        assert_eq!(extras.on_load_more.as_deref(), Some("cb-more"));
+        assert_eq!(extras.empty.as_deref(), Some("No rows"));
         assert_eq!(extras.header_groups[0][0].span, 2);
         assert_eq!(extras.options[0].align.as_deref(), Some("end"));
         assert_eq!(extras.options[0].selectable, Some(false));
+        assert_eq!(extras.options[0].sort.as_deref(), Some("asc"));
+        assert_eq!(extras.options[0].fixed.as_deref(), Some("left"));
+        assert_eq!(extras.options[0].min_width, Some(40.0));
+        assert_eq!(extras.options[1].resizable, Some(false));
         assert_eq!(extras.value, Some(json!({"row": "ada", "col": "lang"})));
         assert_eq!(
             table_cell_payload("ada", "lang"),

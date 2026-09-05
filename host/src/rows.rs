@@ -8,14 +8,15 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    IndexPath, h_flex,
+    ActiveTheme as _, Icon, IconName, IndexPath, h_flex,
     list::{ListDelegate, ListItem, ListState},
-    table::{Column, ColumnGroup, TableDelegate, TableState},
+    table::{Column, ColumnGroup, ColumnSort, TableDelegate, TableEvent, TableState},
     tree::TreeItem,
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
@@ -68,6 +69,12 @@ fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
         item.span.hash(hasher);
         item.align.hash(hasher);
         item.selectable.hash(hasher);
+        item.sort.hash(hasher);
+        item.fixed.hash(hasher);
+        item.resizable.hash(hasher);
+        item.movable.hash(hasher);
+        item.min_width.map(f32::to_bits).hash(hasher);
+        item.max_width.map(f32::to_bits).hash(hasher);
         item.checked.hash(hasher);
         item.icon.hash(hasher);
         item.separator.hash(hasher);
@@ -87,7 +94,7 @@ pub fn column_identity_fingerprint(items: &[Item]) -> u64 {
     hasher.finish()
 }
 
-/// Column label/width/align/selectable (full Item hash).
+/// Column label/width/align/selectable/sort/fixed/resize (full Item hash).
 pub fn column_definition_fingerprint(items: &[Item]) -> u64 {
     rows_fingerprint(items)
 }
@@ -210,6 +217,18 @@ pub fn table_selection_for_mode(
     }
 }
 
+/// Host-tracked logical table selection. Kit's `SelectionMode` is private
+/// and `selected_cell()` / `selected_row()` return stored fields even after
+/// the active mode has switched, so `is_some()` is not the active mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableSelectionMode {
+    #[default]
+    None,
+    Row,
+    Cell,
+    Column,
+}
+
 /// Native selection update for a controlled table `:value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableSelectionSync {
@@ -221,6 +240,7 @@ pub enum TableSelectionSync {
 
 pub fn table_selection_sync(
     wanted: &TableSelectionWanted,
+    mode: TableSelectionMode,
     selected_row: Option<usize>,
     selected_cell: Option<(usize, usize)>,
     row_index: impl Fn(&str) -> Option<usize>,
@@ -230,38 +250,38 @@ pub fn table_selection_sync(
 ) -> TableSelectionSync {
     match wanted {
         TableSelectionWanted::Clear => {
-            if selected_row.is_some() || selected_cell.is_some() {
-                TableSelectionSync::Clear
-            } else {
+            if matches!(mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
+            } else {
+                TableSelectionSync::Clear
             }
         }
         TableSelectionWanted::Row(id) => {
             if let Some(ix) = row_index(id) {
-                if selected_cell.is_none() && selected_row == Some(ix) {
+                if mode == TableSelectionMode::Row && selected_row == Some(ix) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectRow(ix)
                 }
             } else if row_exists(id) {
                 TableSelectionSync::Keep
-            } else if selected_row.is_some() || selected_cell.is_some() {
-                TableSelectionSync::Clear
-            } else {
+            } else if matches!(mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
+            } else {
+                TableSelectionSync::Clear
             }
         }
         TableSelectionWanted::Cell { row, col } => match (row_index(row), col_index(col)) {
             (Some(r), Some(c)) => {
-                if selected_cell == Some((r, c)) {
+                if mode == TableSelectionMode::Cell && selected_cell == Some((r, c)) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectCell(r, c)
                 }
             }
             _ if row_exists(row) && col_exists(col) => TableSelectionSync::Keep,
-            _ if selected_row.is_some() || selected_cell.is_some() => TableSelectionSync::Clear,
-            _ => TableSelectionSync::Keep,
+            _ if matches!(mode, TableSelectionMode::None) => TableSelectionSync::Keep,
+            _ => TableSelectionSync::Clear,
         },
     }
 }
@@ -345,9 +365,212 @@ pub fn columns_from_items(items: &[Item]) -> Vec<Column> {
             if let Some(selectable) = item.selectable {
                 col = col.selectable(selectable);
             }
+            if let Some(sort) = column_sort(item.sort.as_deref()) {
+                col = col.sort(sort);
+            }
+            if column_fixed(item.fixed.as_deref()) {
+                col = col.fixed_left();
+            }
+            if let Some(resizable) = item.resizable {
+                col = col.resizable(resizable);
+            }
+            if let Some(movable) = item.movable {
+                col = col.movable(movable);
+            }
+            if let Some(min_width) = item.min_width.filter(|w| w.is_finite() && *w > 0.0) {
+                col = col.min_width(px(min_width));
+            }
+            if let Some(max_width) = item.max_width.filter(|w| w.is_finite() && *w > 0.0) {
+                col = col.max_width(px(max_width));
+            }
             col
         })
         .collect()
+}
+
+fn column_sort(value: Option<&str>) -> Option<ColumnSort> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "asc" | "ascending" => Some(ColumnSort::Ascending),
+        "desc" | "descending" => Some(ColumnSort::Descending),
+        "default" | "true" | "sortable" => Some(ColumnSort::Default),
+        "false" | "none" | "" => None,
+        _ => Some(ColumnSort::Default),
+    }
+}
+
+fn column_fixed(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|s| s.trim().to_ascii_lowercase()),
+        Some(name) if name == "left" || name == "true" || name == "1"
+    )
+}
+
+fn cell_sort_key(row: &Row, col_ix: usize) -> String {
+    row.cells
+        .get(col_ix)
+        .map(TableCell::export_text)
+        .unwrap_or_default()
+}
+
+fn cmp_cell(a: &Row, b: &Row, col_ix: usize) -> std::cmp::Ordering {
+    let sa = cell_sort_key(a, col_ix);
+    let sb = cell_sort_key(b, col_ix);
+    match (sa.parse::<f64>(), sb.parse::<f64>()) {
+        (Ok(na), Ok(nb)) => na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal),
+        _ => sa.to_lowercase().cmp(&sb.to_lowercase()),
+    }
+}
+
+/// Sort displayed rows. `Default` restores `source_order` (last Clojure tree).
+pub fn sort_table_rows(rows: &mut [Row], col_ix: usize, sort: ColumnSort, source_order: &[String]) {
+    match sort {
+        ColumnSort::Default => rows.sort_by_key(|row| {
+            source_order
+                .iter()
+                .position(|id| id == &row.id)
+                .unwrap_or(usize::MAX)
+        }),
+        ColumnSort::Ascending => rows.sort_by(|a, b| cmp_cell(a, b, col_ix)),
+        ColumnSort::Descending => rows.sort_by(|a, b| cmp_cell(b, a, col_ix)),
+    }
+}
+
+/// After a Clojure column merge, re-apply an active Asc/Desc so row order
+/// matches header chrome. Default / no-sort restores `source_order`.
+pub fn apply_active_column_sort(columns: &[Column], rows: &mut Vec<Row>, source_order: &[String]) {
+    if let Some((ix, sort)) = columns.iter().enumerate().find_map(|(ix, col)| {
+        col.sort
+            .filter(|sort| !matches!(sort, ColumnSort::Default))
+            .map(|sort| (ix, sort))
+    }) {
+        sort_table_rows(rows, ix, sort, source_order);
+    } else {
+        sort_table_rows(rows, 0, ColumnSort::Default, source_order);
+    }
+}
+
+/// Kit stores `selected_row` / `selected_cell` as indices. Native sort
+/// reorders displayed rows; remap those indices by stable row id so the
+/// same Clojure row (and cell) stays selected.
+pub fn remap_table_selection_after_sort(
+    old_ids: &[String],
+    new_ids: &[String],
+    selected_row: Option<usize>,
+    selected_cell: Option<(usize, usize)>,
+) -> (Option<usize>, Option<(usize, usize)>) {
+    let map_row = |ix: usize| -> Option<usize> {
+        old_ids
+            .get(ix)
+            .and_then(|id| new_ids.iter().position(|next| next == id))
+    };
+    (
+        selected_row.and_then(map_row),
+        selected_cell.and_then(|(row, col)| map_row(row).map(|row| (row, col))),
+    )
+}
+
+/// Kit index update after a native sort. Logical row/cell identity is
+/// unchanged; callers must suppress Clojure `:on-change`.
+///
+/// Kit `selected_cell()` returns the stored field even after
+/// `set_selected_row` (and `selected_row` survives `set_selected_cell`).
+/// Callers pass the host-tracked logical `mode` rather than inferring
+/// it from which slots are `Some`.
+pub fn table_sort_selection_sync(
+    old_ids: &[String],
+    new_ids: &[String],
+    mode: TableSelectionMode,
+    selected_row: Option<usize>,
+    selected_cell: Option<(usize, usize)>,
+) -> TableSelectionSync {
+    let (next_row, next_cell) =
+        remap_table_selection_after_sort(old_ids, new_ids, selected_row, selected_cell);
+    match mode {
+        TableSelectionMode::Cell => {
+            if selected_cell == next_cell {
+                TableSelectionSync::Keep
+            } else {
+                match next_cell {
+                    Some((row, col)) => TableSelectionSync::SelectCell(row, col),
+                    None => TableSelectionSync::Clear,
+                }
+            }
+        }
+        TableSelectionMode::Row => {
+            if selected_row == next_row {
+                TableSelectionSync::Keep
+            } else {
+                match next_row {
+                    Some(row) => TableSelectionSync::SelectRow(row),
+                    None => TableSelectionSync::Clear,
+                }
+            }
+        }
+        TableSelectionMode::Column | TableSelectionMode::None => TableSelectionSync::Keep,
+    }
+}
+
+/// Kit `SelectionMode` is private. Public `TableEvent`s are the source
+/// of truth for the host-tracked logical mode.
+pub fn table_selection_mode_from_kit_event(event: &TableEvent) -> Option<TableSelectionMode> {
+    match event {
+        TableEvent::SelectRow(_) => Some(TableSelectionMode::Row),
+        TableEvent::SelectCell(_, _) => Some(TableSelectionMode::Cell),
+        TableEvent::SelectColumn(_) => Some(TableSelectionMode::Column),
+        TableEvent::ClearSelection => Some(TableSelectionMode::None),
+        _ => None,
+    }
+}
+
+/// Native sort remaps indices only. Any Kit select/clear from that remap
+/// is internal bookkeeping, not an application selection change.
+pub fn table_sort_remap_suppresses_on_change(action: TableSelectionSync) -> bool {
+    !matches!(action, TableSelectionSync::Keep)
+}
+
+/// Reset the load-more latch when the collection or flags change, or when
+/// a callback appears (`None` → `Some`). A present `cb-N` becoming
+/// `cb-N+1` is Clojure sanitizer churn, not a new handler.
+fn load_more_latch_resets(
+    collection_changed: bool,
+    has_more: bool,
+    loading: bool,
+    had_callback: bool,
+    has_callback: bool,
+) -> bool {
+    collection_changed || !has_more || loading || (!had_callback && has_callback)
+}
+
+fn send_load_more_if_ready(
+    has_more: bool,
+    loading: bool,
+    load_more_sent: &mut bool,
+    cmd_tx: &Option<mpsc::Sender<Cmd>>,
+    on_load_more: &Option<String>,
+) {
+    if !has_more || loading || *load_more_sent {
+        return;
+    }
+    let Some(tx) = cmd_tx else {
+        return;
+    };
+    let Some(id) = on_load_more.clone() else {
+        return;
+    };
+    *load_more_sent = true;
+    let _ = tx.send(Cmd::Callback {
+        id,
+        value: None,
+        seq: None,
+    });
+}
+
+fn column_sort_name(sort: ColumnSort) -> &'static str {
+    match sort {
+        ColumnSort::Ascending => "asc",
+        ColumnSort::Descending => "desc",
+        ColumnSort::Default => "default",
+    }
 }
 
 /// Kit `TableDelegate::move_column`: reorder columns and matching cells
@@ -496,6 +719,13 @@ pub struct RowListDelegate {
     pub visible: Vec<usize>,
     pub selected: Option<IndexPath>,
     query: String,
+    loading: bool,
+    has_more: bool,
+    load_more_threshold: usize,
+    empty: Option<String>,
+    on_load_more: Option<String>,
+    load_more_sent: bool,
+    cmd_tx: Option<std::sync::mpsc::Sender<Cmd>>,
 }
 
 impl RowListDelegate {
@@ -506,7 +736,66 @@ impl RowListDelegate {
             visible,
             selected: None,
             query: String::new(),
+            loading: false,
+            has_more: false,
+            load_more_threshold: 20,
+            empty: None,
+            on_load_more: None,
+            load_more_sent: false,
+            cmd_tx: None,
         }
+    }
+
+    pub fn with_host(mut self, cmd_tx: std::sync::mpsc::Sender<Cmd>) -> Self {
+        self.cmd_tx = Some(cmd_tx);
+        self
+    }
+
+    pub fn sync_chrome(
+        &mut self,
+        loading: bool,
+        has_more: bool,
+        load_more_threshold: usize,
+        empty: Option<String>,
+        on_load_more: Option<String>,
+        collection_changed: bool,
+    ) {
+        let reset = load_more_latch_resets(
+            collection_changed,
+            has_more,
+            loading,
+            self.on_load_more.is_some(),
+            on_load_more.is_some(),
+        );
+        self.loading = loading;
+        self.has_more = has_more;
+        self.load_more_threshold = load_more_threshold;
+        self.empty = empty;
+        self.on_load_more = on_load_more;
+        if reset {
+            self.load_more_sent = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn load_more_sent(&self) -> bool {
+        self.load_more_sent
+    }
+
+    #[cfg(test)]
+    pub fn mark_load_more_sent(&mut self) {
+        self.load_more_sent = true;
+    }
+
+    #[cfg(test)]
+    pub fn fire_load_more(&mut self) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
     }
 
     pub fn set_items(&mut self, items: Vec<Row>) {
@@ -591,26 +880,96 @@ impl ListDelegate for RowListDelegate {
     ) {
         self.selected = ix;
     }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        let el = h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(cx.theme().muted_foreground.opacity(0.6));
+        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
+            el.child(text.to_string()).into_any_element()
+        } else {
+            el.child(Icon::new(IconName::Inbox).size_12())
+                .into_any_element()
+        }
+    }
+
+    fn loading(&self, _: &App) -> bool {
+        self.loading
+    }
+
+    fn has_more(&self, _: &App) -> bool {
+        self.has_more
+    }
+
+    fn load_more_threshold(&self) -> usize {
+        self.load_more_threshold
+    }
+
+    fn load_more(&mut self, _: &mut Window, _: &mut Context<ListState<Self>>) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
+    }
 }
 
 pub struct RowTableDelegate {
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
     pub header_groups: Vec<Vec<ColumnGroup>>,
+    /// Last Clojure row-id order; `ColumnSort::Default` restores this.
+    source_order: Vec<String>,
     /// Table slot key; prefixes `render_td` element ids.
     path: String,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
+    loading: bool,
+    has_more: bool,
+    load_more_threshold: usize,
+    empty: Option<String>,
+    on_load_more: Option<String>,
+    on_sort: Option<String>,
+    load_more_sent: bool,
+    /// True while a native-sort index remap is applying Kit selection.
+    /// `SelectRow` / `SelectCell` must not become Clojure `:on-change`.
+    suppress_select: bool,
+    /// Logical Row/Cell/Column/None. Kit leaves the other selection
+    /// slots populated when the active mode switches, and `SelectionMode`
+    /// is private, so sort remap cannot trust `selected_cell().is_some()`.
+    /// Interior mutability so a `TableEvent` subscriber can record the
+    /// mode without a nested entity update.
+    selection_mode: Cell<TableSelectionMode>,
 }
 
 impl RowTableDelegate {
     pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
-        Self {
+        let source_order: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let mut this = Self {
             columns,
             rows,
             header_groups: Vec::new(),
+            source_order,
             path: String::new(),
             cmd_tx: None,
-        }
+            loading: false,
+            has_more: false,
+            load_more_threshold: 20,
+            empty: None,
+            on_load_more: None,
+            on_sort: None,
+            load_more_sent: false,
+            suppress_select: false,
+            selection_mode: Cell::new(TableSelectionMode::None),
+        };
+        apply_active_column_sort(&this.columns, &mut this.rows, &this.source_order);
+        this
     }
 
     pub fn with_header_groups(mut self, groups: Vec<Vec<ColumnGroup>>) -> Self {
@@ -622,6 +981,73 @@ impl RowTableDelegate {
         self.path = path.into();
         self.cmd_tx = Some(cmd_tx);
         self
+    }
+
+    pub fn sync_chrome(
+        &mut self,
+        loading: bool,
+        has_more: bool,
+        load_more_threshold: usize,
+        empty: Option<String>,
+        on_load_more: Option<String>,
+        on_sort: Option<String>,
+        collection_changed: bool,
+    ) {
+        let reset = load_more_latch_resets(
+            collection_changed,
+            has_more,
+            loading,
+            self.on_load_more.is_some(),
+            on_load_more.is_some(),
+        );
+        self.loading = loading;
+        self.has_more = has_more;
+        self.load_more_threshold = load_more_threshold;
+        self.empty = empty;
+        self.on_load_more = on_load_more;
+        self.on_sort = on_sort;
+        if reset {
+            self.load_more_sent = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn load_more_sent(&self) -> bool {
+        self.load_more_sent
+    }
+
+    #[cfg(test)]
+    pub fn fire_load_more(&mut self) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
+    }
+
+    #[cfg(test)]
+    pub fn source_ids(&self) -> &[String] {
+        &self.source_order
+    }
+
+    pub fn suppress_select(&self) -> bool {
+        self.suppress_select
+    }
+
+    pub fn selection_mode(&self) -> TableSelectionMode {
+        self.selection_mode.get()
+    }
+
+    pub fn set_selection_mode(&self, mode: TableSelectionMode) {
+        self.selection_mode.set(mode);
+    }
+
+    pub fn set_rows(&mut self, rows: Vec<Row>) {
+        self.source_order = rows.iter().map(|row| row.id.clone()).collect();
+        self.rows = rows;
+        apply_active_column_sort(&self.columns, &mut self.rows, &self.source_order);
     }
 
     pub fn col_id_at(&self, col: usize) -> Option<String> {
@@ -812,11 +1238,121 @@ impl TableDelegate for RowTableDelegate {
     ) {
         move_table_column(&mut self.columns, &mut self.rows, col_ix, to_ix);
     }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        for (ix, col) in self.columns.iter_mut().enumerate() {
+            if col.sort.is_some() {
+                col.sort = Some(if ix == col_ix {
+                    sort
+                } else {
+                    ColumnSort::Default
+                });
+            }
+        }
+        let old_ids: Vec<String> = self.rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut self.rows, col_ix, sort, &self.source_order);
+        let new_ids: Vec<String> = self.rows.iter().map(|row| row.id.clone()).collect();
+        if old_ids != new_ids {
+            cx.defer_in(window, move |table, window, cx| {
+                let action = table_sort_selection_sync(
+                    &old_ids,
+                    &new_ids,
+                    table.delegate().selection_mode(),
+                    table.selected_row(),
+                    table.selected_cell(),
+                );
+                if matches!(action, TableSelectionSync::Keep) {
+                    return;
+                }
+                table.delegate_mut().suppress_select = true;
+                match action {
+                    TableSelectionSync::SelectRow(ix) => {
+                        table.delegate().set_selection_mode(TableSelectionMode::Row);
+                        table.set_selected_row(ix, cx)
+                    }
+                    TableSelectionSync::SelectCell(row, col) => {
+                        table
+                            .delegate()
+                            .set_selection_mode(TableSelectionMode::Cell);
+                        table.set_selected_cell(row, col, cx)
+                    }
+                    TableSelectionSync::Clear => {
+                        table
+                            .delegate()
+                            .set_selection_mode(TableSelectionMode::None);
+                        table.clear_selection(cx)
+                    }
+                    TableSelectionSync::Keep => {}
+                }
+                cx.defer_in(window, |table, _, _| {
+                    table.delegate_mut().suppress_select = false;
+                });
+            });
+        }
+        if let (Some(tx), Some(callback), Some(col)) =
+            (&self.cmd_tx, self.on_sort.clone(), self.columns.get(col_ix))
+        {
+            let _ = tx.send(Cmd::Callback {
+                id: callback,
+                value: Some(json!({
+                    "id": col.key.to_string(),
+                    "sort": column_sort_name(sort)
+                })),
+                seq: None,
+            });
+        }
+    }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let el = h_flex()
+            .size_full()
+            .justify_center()
+            .text_color(cx.theme().muted_foreground.opacity(0.6));
+        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
+            el.child(text.to_string()).into_any_element()
+        } else {
+            el.child(Icon::new(IconName::Inbox).size_12())
+                .into_any_element()
+        }
+    }
+
+    fn loading(&self, _: &App) -> bool {
+        self.loading
+    }
+
+    fn has_more(&self, _: &App) -> bool {
+        self.has_more
+    }
+
+    fn load_more_threshold(&self) -> usize {
+        self.load_more_threshold
+    }
+
+    fn load_more(&mut self, _: &mut Window, _: &mut Context<TableState<Self>>) {
+        send_load_more_if_ready(
+            self.has_more,
+            self.loading,
+            &mut self.load_more_sent,
+            &self.cmd_tx,
+            &self.on_load_more,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::component::table::ColumnFixed;
     use serde_json::{Value, json};
 
     fn items(value: serde_json::Value) -> Vec<Item> {
@@ -1113,6 +1649,448 @@ mod tests {
             column_definition_fingerprint(&base),
             column_definition_fingerprint(&unselectable)
         );
+        let sorted = items(json!([
+            {"id": "name", "label": "Name", "width": 80, "align": "start", "sort": "asc"},
+            {"id": "lang", "label": "Lang"}
+        ]));
+        assert_eq!(
+            column_identity_fingerprint(&base),
+            column_identity_fingerprint(&sorted)
+        );
+        assert_ne!(
+            column_definition_fingerprint(&base),
+            column_definition_fingerprint(&sorted)
+        );
+    }
+
+    #[test]
+    fn column_sort_fixed_and_row_reorder() {
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "asc", "fixed": "left",
+             "min-width": 40, "max-width": 200, "resizable": false, "movable": false},
+            {"id": "n", "label": "N", "sort": "desc"}
+        ])));
+        assert_eq!(columns[0].sort, Some(ColumnSort::Ascending));
+        assert!(matches!(columns[0].fixed, Some(ColumnFixed::Left)));
+        assert!(!columns[0].resizable);
+        assert!(!columns[0].movable);
+        assert_eq!(columns[1].sort, Some(ColumnSort::Descending));
+
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "2"]},
+            {"id": "a", "cells": ["A", "10"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        assert_eq!(rows[0].id, "a");
+        sort_table_rows(&mut rows, 1, ColumnSort::Descending, &source);
+        assert_eq!(rows[0].id, "a");
+        sort_table_rows(&mut rows, 0, ColumnSort::Default, &source);
+        assert_eq!(rows[0].id, "b");
+        apply_active_column_sort(&columns, &mut rows, &source);
+        assert_eq!(rows[0].id, "a");
+
+        let default_cols = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "default"}
+        ])));
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        assert_eq!(rows[0].id, "a");
+        apply_active_column_sort(&default_cols, &mut rows, &source);
+        assert_eq!(rows[0].id, "b");
+    }
+
+    #[test]
+    fn table_delegate_new_applies_initial_column_sort() {
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "asc"}
+        ])));
+        let rows = rows_from_items(&items(json!([
+            {"id": "z", "cells": ["Z"]},
+            {"id": "a", "cells": ["A"]}
+        ])));
+        let delegate = RowTableDelegate::new(columns, rows);
+        assert_eq!(delegate.id_at(0).as_deref(), Some("a"));
+        assert_eq!(delegate.id_at(1).as_deref(), Some("z"));
+        assert_eq!(delegate.source_ids(), &["z".to_string(), "a".to_string()]);
+
+        let columns = columns_from_items(&items(json!([
+            {"id": "name", "label": "Name", "sort": "desc"}
+        ])));
+        let rows = rows_from_items(&items(json!([
+            {"id": "a", "cells": ["A"]},
+            {"id": "z", "cells": ["Z"]}
+        ])));
+        let delegate = RowTableDelegate::new(columns, rows);
+        assert_eq!(delegate.id_at(0).as_deref(), Some("z"));
+        assert_eq!(delegate.id_at(1).as_deref(), Some("a"));
+        assert_eq!(delegate.source_ids(), &["a".to_string(), "z".to_string()]);
+    }
+
+    fn sort_and_remap(
+        rows: &mut Vec<Row>,
+        col_ix: usize,
+        sort: ColumnSort,
+        source: &[String],
+        selected_row: Option<usize>,
+        selected_cell: Option<(usize, usize)>,
+    ) -> (Option<usize>, Option<(usize, usize)>) {
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(rows, col_ix, sort, source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        remap_table_selection_after_sort(&old_ids, &new_ids, selected_row, selected_cell)
+    }
+
+    #[test]
+    fn native_sort_remaps_selected_row_and_cell_by_id() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+
+        // Row b at index 0 stays b after Asc (now index 1).
+        let (row, cell) = sort_and_remap(
+            &mut rows,
+            0,
+            ColumnSort::Ascending,
+            &source,
+            Some(0),
+            Some((0, 1)),
+        );
+        assert_eq!(rows[0].id, "a");
+        assert_eq!(rows[1].id, "b");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, Some((1, 1)));
+
+        // Desc: a, b → b, a. Selected b (1) → 0; cell column stays 1.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Descending, &source, row, cell);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
+        assert_eq!(row, Some(0));
+        assert_eq!(cell, Some((0, 1)));
+
+        // Default restores Clojure order b, a. Selection already matches.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, row, cell);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
+        assert_eq!(row, Some(0));
+        assert_eq!(cell, Some((0, 1)));
+
+        // Asc from source order with only a row selected (no cell).
+        let (row, cell) =
+            sort_and_remap(&mut rows, 0, ColumnSort::Ascending, &source, Some(0), None);
+        assert_eq!(rows[0].id, "a");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, None);
+
+        // Default from sorted order: selected a at 0 → 1 in Clojure order.
+        let (row, cell) = sort_and_remap(&mut rows, 0, ColumnSort::Default, &source, Some(0), None);
+        assert_eq!(rows[0].id, "b");
+        assert_eq!(rows[1].id, "a");
+        assert_eq!(row, Some(1));
+        assert_eq!(cell, None);
+    }
+
+    #[test]
+    fn native_sort_remap_does_not_emit_on_change() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids[0], "a");
+        assert_eq!(new_ids[1], "b");
+
+        let row_action =
+            table_sort_selection_sync(&old_ids, &new_ids, TableSelectionMode::Row, Some(0), None);
+        assert_eq!(row_action, TableSelectionSync::SelectRow(1));
+        assert!(table_sort_remap_suppresses_on_change(row_action));
+        let mut coalesce = crate::protocol::TableClickCoalesce::default();
+        assert!(!coalesce.on_select_row(1, table_sort_remap_suppresses_on_change(row_action)));
+        assert!(coalesce.take_pending().is_none());
+
+        let cell_action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Cell,
+            Some(0),
+            Some((0, 1)),
+        );
+        assert_eq!(cell_action, TableSelectionSync::SelectCell(1, 1));
+        assert!(table_sort_remap_suppresses_on_change(cell_action));
+        let mut coalesce = crate::protocol::TableClickCoalesce::default();
+        assert!(!coalesce.on_select_cell(1, 1, table_sort_remap_suppresses_on_change(cell_action)));
+        assert!(coalesce.take_pending().is_none());
+
+        let keep =
+            table_sort_selection_sync(&old_ids, &old_ids, TableSelectionMode::Row, Some(0), None);
+        assert_eq!(keep, TableSelectionSync::Keep);
+        assert!(!table_sort_remap_suppresses_on_change(keep));
+    }
+
+    /// Kit `set_selected_row` does not clear `selected_cell`. After
+    /// select cell B then row A, sort must keep row A — not reactivate B.
+    #[test]
+    fn native_sort_remap_keeps_row_when_cell_slot_is_stale() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids, vec!["a".to_string(), "b".to_string()]);
+
+        // Active mode Row: selected_row 1 is a; selected_cell (0, 1) is stale b.
+        let action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Row,
+            Some(1),
+            Some((0, 1)),
+        );
+        assert_eq!(action, TableSelectionSync::SelectRow(0));
+        assert_ne!(action, TableSelectionSync::SelectCell(1, 1));
+    }
+
+    /// Kit `set_selected_cell` does not clear `selected_row`. After
+    /// select row B then cell A, sort must keep the cell — not row B.
+    #[test]
+    fn native_sort_remap_keeps_cell_when_row_slot_is_stale() {
+        let mut rows = rows_from_items(&items(json!([
+            {"id": "b", "cells": ["B", "x"]},
+            {"id": "a", "cells": ["A", "y"]}
+        ])));
+        let source: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let old_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        sort_table_rows(&mut rows, 0, ColumnSort::Ascending, &source);
+        let new_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        assert_eq!(new_ids, vec!["a".to_string(), "b".to_string()]);
+
+        // Active mode Cell: selected_cell (1, 1) is a; selected_row 0 is stale b.
+        let action = table_sort_selection_sync(
+            &old_ids,
+            &new_ids,
+            TableSelectionMode::Cell,
+            Some(0),
+            Some((1, 1)),
+        );
+        assert_eq!(action, TableSelectionSync::SelectCell(0, 1));
+        assert_ne!(action, TableSelectionSync::SelectRow(1));
+    }
+
+    #[test]
+    fn native_sort_remap_keeps_column_and_empty_mode() {
+        let old_ids = vec!["b".into(), "a".into()];
+        let new_ids = vec!["a".into(), "b".into()];
+        assert_eq!(
+            table_sort_selection_sync(
+                &old_ids,
+                &new_ids,
+                TableSelectionMode::Column,
+                Some(1),
+                Some((0, 1)),
+            ),
+            TableSelectionSync::Keep
+        );
+        assert_eq!(
+            table_sort_selection_sync(
+                &old_ids,
+                &new_ids,
+                TableSelectionMode::None,
+                Some(1),
+                Some((0, 1)),
+            ),
+            TableSelectionSync::Keep
+        );
+    }
+
+    #[test]
+    fn table_selection_mode_follows_kit_events() {
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectRow(1)),
+            Some(TableSelectionMode::Row)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectCell(0, 1)),
+            Some(TableSelectionMode::Cell)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::SelectColumn(2)),
+            Some(TableSelectionMode::Column)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::ClearSelection),
+            Some(TableSelectionMode::None)
+        );
+        assert_eq!(
+            table_selection_mode_from_kit_event(&TableEvent::ColumnWidthsChanged(Vec::new())),
+            None
+        );
+    }
+
+    #[test]
+    fn table_selection_sync_uses_logical_mode_not_stale_slots() {
+        let row = |id: &str| match id {
+            "a" => Some(1),
+            "b" => Some(0),
+            _ => None,
+        };
+        let col = |id: &str| match id {
+            "lang" => Some(1),
+            _ => None,
+        };
+        let exists = |_: &str| true;
+
+        // Wanted row a (index 1) while Kit still holds stale cell b/col1.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Row("a".into()),
+                TableSelectionMode::Row,
+                Some(1),
+                Some((0, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::Keep
+        );
+
+        // Wanted cell a/col1 while Kit still holds stale row b.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Cell {
+                    row: "a".into(),
+                    col: "lang".into()
+                },
+                TableSelectionMode::Cell,
+                Some(0),
+                Some((1, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::Keep
+        );
+
+        // Stale matching cell must not Keep a cell restore while Row is active.
+        assert_eq!(
+            table_selection_sync(
+                &TableSelectionWanted::Cell {
+                    row: "b".into(),
+                    col: "lang".into()
+                },
+                TableSelectionMode::Row,
+                Some(1),
+                Some((0, 1)),
+                row,
+                col,
+                exists,
+                exists,
+            ),
+            TableSelectionSync::SelectCell(0, 1)
+        );
+    }
+
+    #[test]
+    fn load_more_latch_resets_on_collection_or_flags() {
+        let mut delegate = RowListDelegate::new(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"}
+        ]))));
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), true);
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), false);
+        assert!(delegate.load_more_sent());
+        delegate.sync_chrome(false, true, 20, None, Some("cb-more".into()), true);
+        assert!(!delegate.load_more_sent());
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(false, false, 20, None, Some("cb-more".into()), false);
+        assert!(!delegate.load_more_sent());
+        delegate.mark_load_more_sent();
+        delegate.sync_chrome(true, true, 20, None, Some("cb-more".into()), false);
+        assert!(!delegate.load_more_sent());
+    }
+
+    #[test]
+    fn load_more_latch_resets_only_when_callback_appears() {
+        assert!(!load_more_latch_resets(false, true, false, true, true));
+        assert!(load_more_latch_resets(false, true, false, false, true));
+        assert!(!load_more_latch_resets(false, true, false, true, false));
+        assert!(!load_more_latch_resets(false, true, false, false, false));
+        assert!(load_more_latch_resets(true, true, false, true, true));
+        assert!(load_more_latch_resets(false, false, false, true, true));
+        assert!(load_more_latch_resets(false, true, true, true, true));
+    }
+
+    #[test]
+    fn load_more_latch_waits_for_callback() {
+        let (tx, rx) = mpsc::channel();
+        let mut list = RowListDelegate::new(rows_from_items(&items(json!([
+            {"id": "alpha", "label": "Alpha"}
+        ]))))
+        .with_host(tx);
+        list.sync_chrome(false, true, 20, None, None, true);
+        list.fire_load_more();
+        assert!(!list.load_more_sent());
+        assert!(rx.try_recv().is_err());
+
+        list.sync_chrome(false, true, 20, None, Some("cb-1".into()), false);
+        assert!(!list.load_more_sent());
+        list.fire_load_more();
+        assert!(list.load_more_sent());
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, value, seq }) => {
+                assert_eq!(id, "cb-1");
+                assert_eq!(value, None);
+                assert_eq!(seq, None);
+            }
+            other => panic!("expected load-more callback, got {other:?}"),
+        }
+        list.sync_chrome(false, true, 20, None, Some("cb-2".into()), false);
+        assert!(list.load_more_sent());
+        list.fire_load_more();
+        assert!(rx.try_recv().is_err());
+        list.sync_chrome(false, true, 20, None, None, false);
+        assert!(list.load_more_sent());
+        list.sync_chrome(false, true, 20, None, Some("cb-1".into()), false);
+        assert!(!list.load_more_sent());
+
+        let (tx, rx) = mpsc::channel();
+        let cols = columns_from_items(&items(json!([{"id": "name", "label": "Name"}])));
+        let rows = rows_from_items(&items(json!([{"id": "alpha", "cells": ["Alpha"]}])));
+        let mut table = RowTableDelegate::new(cols, rows).with_cell_host("tbl", tx);
+        table.sync_chrome(false, true, 20, None, None, None, true);
+        table.fire_load_more();
+        assert!(!table.load_more_sent());
+        assert!(rx.try_recv().is_err());
+
+        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
+        assert!(!table.load_more_sent());
+        table.fire_load_more();
+        assert!(table.load_more_sent());
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
+            other => panic!("expected table load-more callback, got {other:?}"),
+        }
+        table.sync_chrome(false, true, 20, None, Some("cb-2".into()), None, false);
+        assert!(table.load_more_sent());
+        table.fire_load_more();
+        assert!(rx.try_recv().is_err());
+        table.sync_chrome(false, true, 20, None, None, None, false);
+        assert!(table.load_more_sent());
+        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
+        assert!(!table.load_more_sent());
+        table.fire_load_more();
+        match rx.try_recv() {
+            Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
+            other => panic!("expected table load-more after callback appeared, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1254,6 +2232,7 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
+                TableSelectionMode::Row,
                 Some(0),
                 None,
                 |_| Some(0),
@@ -1269,6 +2248,7 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
+                TableSelectionMode::Cell,
                 None,
                 Some((0, 1)),
                 |_| Some(0),
